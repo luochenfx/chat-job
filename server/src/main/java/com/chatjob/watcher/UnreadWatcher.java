@@ -45,11 +45,14 @@ public class UnreadWatcher {
     private final ReplyStore replyStore;
     private final UnreadTaskStore taskStore;
     private final ConfigStore configStore;
+    private final AiReplier aiReplier;
 
-    public UnreadWatcher(ReplyStore replyStore, UnreadTaskStore taskStore, ConfigStore configStore) {
+    public UnreadWatcher(ReplyStore replyStore, UnreadTaskStore taskStore, ConfigStore configStore,
+                         AiReplier aiReplier) {
         this.replyStore = replyStore;
         this.taskStore = taskStore;
         this.configStore = configStore;
+        this.aiReplier = aiReplier;
     }
 
     /**
@@ -65,6 +68,34 @@ public class UnreadWatcher {
     /** 单个任务的收尾结论，只用于本轮计数与日志 */
     private enum Outcome {
         REPLIED, SKIPPED, SENSITIVE, FAILED, ABANDONED
+    }
+
+    /**
+     * 单轮 AI 调用预算。
+     *
+     * <p>存在理由：列表里有 40 个会话时，未命中的会话可能连着来好几条，全调一遍既慢又是
+     * 一笔真金白银。超预算的任务不是失败，只是「下一轮再说」——用失败去表示，会让它
+     * 在 3 轮之后被 GAVE_UP，而它一次错都没犯。
+     */
+    private static final class AiBudget {
+        private final int max;
+        private int used;
+
+        AiBudget(int max) {
+            this.max = Math.max(1, max);
+        }
+
+        boolean tryUse() {
+            if (used >= max) {
+                return false;
+            }
+            used++;
+            return true;
+        }
+
+        int max() {
+            return max;
+        }
     }
 
     /**
@@ -111,6 +142,11 @@ public class UnreadWatcher {
      *       靠任务重试兜回来）。演练建了任务却永不收尾，反而会毒化真实运行。</li>
      * </ul>
      *
+     * <p><b>演练会真的调 AI</b>（花 token、计入真实成本），这是有意的：P3 之后它成了
+     * 唯一能安全看到「AI 到底会回什么」的地方 —— 真实运行看到的是已经发出去的消息。
+     * 调用次数受 {@code ai_reply_max_per_sweep} 约束，日志里逐条给出结论
+     * （会回复 / AI 主动跳过 / 被四检拦下 / AI 失败降级模板）。
+     *
      * <p><b>代价</b>：{@code readMessages} 必须点开会话，红点因此消失，演练过后真实运行时
      * 这条未读不会再出现在列表里。接受这个代价，是因为不验证 {@code openThread} 与消息区
      * 选择器就上线，代价更大 —— 这两个地方才是历史故障高发区。
@@ -125,6 +161,9 @@ public class UnreadWatcher {
             List<UnreadThread> list = adapter.listUnreadThreads();
             threads = list.size();
             ReplyRuleEngine engine = replyStore.engine();
+            ReplyGuard.GuardOptions guard = new ReplyGuard.GuardOptions(
+                    configStore.toneTerms(), configStore.toneCheckEnabled(), engine.sensitiveWords());
+            AiBudget budget = new AiBudget(configStore.aiReplyMaxPerSweep());
             for (UnreadThread thread : list) {
                 if (thread.unread() < 0) {
                     unreadUnreadable++;
@@ -143,16 +182,47 @@ public class UnreadWatcher {
                     // duplicate / throttled 一律传 false：见方法注释，它们读的是真实痕迹
                     ReplyRuleEngine.Decision decision =
                             engine.decide(last.text(), last.fromSelf(), false, false);
-                    if (decision.shouldReply()) {
-                        wouldReply++;
-                        log.info("演练模式：本会回复「{}」→ 规则 {}「{}」：{}",
-                                thread.title(), decision.ruleId(), decision.matchedKeyword(),
-                                decision.replyText());
-                    } else if (decision.action() == ReplyRuleEngine.Action.UNMATCHED) {
-                        unmatched++;
-                    } else if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
+                    if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
                         sensitive++;
+                        continue;
                     }
+                    if (decision.action() == ReplyRuleEngine.Action.UNMATCHED) {
+                        unmatched++;
+                    }
+                    // 演练也过一遍 AI：不然「AI 到底会回什么」只能等真实运行，而真实运行会发出去。
+                    // 这是 P3 之后演练的主要价值 —— 它是唯一能安全看到 AI 输出的地方。
+                    String ruleText = decision.shouldReply() ? decision.replyText() : null;
+                    if (!budget.tryUse()) {
+                        log.info("演练：AI 调用已达本轮上限 {} 次，其余会话不预演", budget.max());
+                        break;
+                    }
+                    AiReplier.Reply preview = aiReplier.reply(new AiReplier.Input(
+                            thread.title(), configStore.aiIntroduce(), configStore.aiReplyStyle(),
+                            messages, ruleNameOf(engine, decision.ruleId()), ruleText,
+                            engine.sensitiveWords()));
+                    if (preview.isFailure()) {
+                        if (ruleText != null && !ruleText.isBlank()) {
+                            wouldReply++;
+                            log.info("演练模式：本会回复「{}」→ AI 失败，降级用模板「{}」",
+                                    thread.title(), ruleText);
+                        } else {
+                            log.info("演练模式：本不会回复「{}」→ AI 失败且无模板可降级", thread.title());
+                        }
+                        continue;
+                    }
+                    if (preview.skip()) {
+                        log.info("演练模式：本不会回复「{}」→ AI 主动跳过（{}）：{}",
+                                thread.title(), preview.skipReason(), preview.note());
+                        continue;
+                    }
+                    ReplyGuard.Verdict verdict = ReplyGuard.check(preview.text(), last.text(), guard);
+                    if (verdict.blocked()) {
+                        log.info("演练模式：本不会回复「{}」→ AI 草稿被出站校验拦下（{}）：{}",
+                                thread.title(), verdict.rejection(), verdict.detail());
+                        continue;
+                    }
+                    wouldReply++;
+                    log.info("演练模式：本会回复「{}」→ AI「{}」", thread.title(), verdict.text());
                 } catch (ThreadTargetUnsafeException e) {
                     // 演练要把这类问题暴露出来 —— 会话定位不安全正是「半夜验证」最该验到的部分
                     log.warn("演练：会话「{}」定位不安全（{}）：{}",
@@ -276,12 +346,16 @@ public class UnreadWatcher {
         int failed = 0;
         try {
             ReplyRuleEngine engine = replyStore.engine();
+            // 出站四检的入参在一轮内不变，构造一次即可
+            ReplyGuard.GuardOptions guard = new ReplyGuard.GuardOptions(
+                    configStore.toneTerms(), configStore.toneCheckEnabled(), engine.sensitiveWords());
+            AiBudget budget = new AiBudget(configStore.aiReplyMaxPerSweep());
 
             for (UnreadTaskEntity task : taskStore.dueForRetry(MAX_RETRY_PER_SWEEP)) {
                 retried++;
                 UnreadThread thread = UnreadThread.retry(
                         task.getPlatformConversationId(), task.getLastMessageDigest());
-                Outcome outcome = process(adapter, engine, thread, task, collectMetrics);
+                Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget);
                 switch (outcome) {
                     case REPLIED -> replied++;
                     case SENSITIVE -> sensitive++;
@@ -313,7 +387,7 @@ public class UnreadWatcher {
                         // 还在退避窗口里：它已经排好下次重试时间，现在处理等于把退避废掉
                         continue;
                     }
-                    Outcome outcome = process(adapter, engine, thread, task, collectMetrics);
+                    Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget);
                     switch (outcome) {
                         case REPLIED -> replied++;
                         case SENSITIVE -> sensitive++;
@@ -345,9 +419,14 @@ public class UnreadWatcher {
      * <p>判定顺序与关闭态<b>只有一处结构性差异</b>：冷却检查前移到 AI 之前（spec 3.6 第 3 步）。
      * 关闭态里冷却只在「命中规则」之后才生效，未命中的消息照走 UNMATCHED；
      * 打开态如果照旧，会是「先花钱问 AI，再发现 3 分钟内已经回过」。
+     *
+     * <p><b>命中规则在打开态不再直接发模板</b>，而是把模板当「参考素材」交给 AI（spec 3.6 第 5 步）。
+     * 不这么做的话，命中「简历」「薪资」的那些会话回的全是同一句 —— 那正是本 spec 要解决的问题。
+     * 模板只在 AI 技术性失败时兜底：它是人工审核过的，比「不回」安全。
      */
     private Outcome process(PlatformAdapter adapter, ReplyRuleEngine engine, UnreadThread thread,
-                            UnreadTaskEntity task, boolean collectMetrics) {
+                            UnreadTaskEntity task, boolean collectMetrics,
+                            ReplyGuard.GuardOptions guard, AiBudget budget) {
         Long conversationId = task.getConversationId();
         ConversationEntity conversation = replyStore.findById(conversationId);
         taskStore.claim(task);
@@ -394,35 +473,127 @@ public class UnreadWatcher {
         ReplyRuleEngine.Decision decision = engine.decide(last.text(), false, false, false);
 
         if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
+            // 敏感话题连 AI 都不问：问了也没用，还白白把薪资这类内容送进模型
             logAction(conversationId, last, decision.action().name(), null, decision.sensitive(), null);
             taskStore.markDone(task, last.id(), decision.action().name(), null, decision.reason());
             return Outcome.SENSITIVE;
         }
 
-        if (decision.shouldReply()) {
-            boolean sent = adapter.sendText(thread, decision.replyText());
-            if (sent) {
-                if (conversation != null) {
-                    replyStore.markOwnReply(conversation);
-                }
-                logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(),
-                        decision.ruleId(), null, decision.replyText());
-                taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, null);
-                return Outcome.REPLIED;
-            }
-            return fail(task, UnreadTaskStore.Action.SEND_FAILED, null,
-                    "发送未确认送达（规则 " + decision.ruleId() + "）");
+        // 命中与未命中都走 AI，差别只在「带不带参考素材」
+        String ruleText = decision.shouldReply() ? decision.replyText() : null;
+        String ruleName = ruleNameOf(engine, decision.ruleId());
+
+        if (!budget.tryUse()) {
+            taskStore.release(task, "本轮 AI 调用已达上限 " + budget.max() + " 次，留到下一轮");
+            return Outcome.SKIPPED;
         }
 
-        // 未命中：这正是本 spec 要打开的口子。
-        //
-        // P1 阶段 AI 还没接入。这里刻意<b>按 AI_FAILED 落库</b>而不是记一条 UNMATCHED 完事：
-        // 「点开即清红点」意味着没有重试就等于丢消息，必须让失败进入重试链。
-        // 顺带地，这也让 P1 的验证（失败 → 1 分钟重试 → 3 次后 GAVE_UP）在 P3 之前
-        // 就能用真实链路跑通，而不必等到填错 baseUrl 那天。
-        // P3 接入 AiReplier 后，这个分支替换为「生成 → 四检 → 发送 / AI_SKIPPED」。
-        return fail(task, UnreadTaskStore.Action.AI_FAILED, null,
-                "AI 回复尚未接入（P1 占位），未命中会话暂不回复");
+        AiReplier.Reply draft = aiReplier.reply(new AiReplier.Input(
+                thread.title(), configStore.aiIntroduce(), configStore.aiReplyStyle(),
+                messages, ruleName, ruleText, engine.sensitiveWords()));
+
+        if (draft.isFailure()) {
+            return degradeToTemplate(adapter, thread, task, last, conversation, conversationId,
+                    decision, ruleText, draft.error());
+        }
+
+        if (draft.skip()) {
+            // AI 主动不回：这是安全阀，不是故障。记枚举原因，别让它混进失败统计
+            logAction(conversationId, last, UnreadTaskStore.Action.AI_SKIPPED, decision.ruleId(),
+                    null, null, ReplyLogEntity.SOURCE_AI, draft.skipReason(), draft.note());
+            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.AI_SKIPPED,
+                    draft.skipReason(), draft.note());
+            return Outcome.SKIPPED;
+        }
+
+        ReplyGuard.Verdict verdict = ReplyGuard.check(draft.text(), last.text(), guard);
+        if (verdict.rejection() == ReplyGuard.Rejection.EMPTY) {
+            return fail(task, UnreadTaskStore.Action.AI_FAILED, null, "AI 给出空回复");
+        }
+        if (verdict.blocked()) {
+            String action = blockedAction(verdict.rejection());
+            logAction(conversationId, last, action, decision.ruleId(), null, null,
+                    ReplyLogEntity.SOURCE_AI, null, verdict.detail());
+            // 不重试：同一 prompt 再问一次大概率给同样的东西，四检又是确定性规则，
+            // 重试只会多花一次调用、把同样的结果再拦一次
+            taskStore.markDone(task, last.id(), action, null, verdict.detail());
+            log.warn("AI 回复被出站校验拦下（整条不发）| 会话={} | {} | {}",
+                    thread.title(), verdict.rejection(), verdict.detail());
+            return Outcome.SKIPPED;
+        }
+
+        boolean sent = adapter.sendText(thread, verdict.text());
+        if (sent) {
+            if (conversation != null) {
+                replyStore.markOwnReply(conversation);
+            }
+            logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(),
+                    decision.ruleId(), null, verdict.text(), ReplyLogEntity.SOURCE_AI, null, null);
+            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, null);
+            return Outcome.REPLIED;
+        }
+        return fail(task, UnreadTaskStore.Action.SEND_FAILED, null, "发送未确认送达（AI 回复）");
+    }
+
+    /**
+     * AI 技术性失败时的降级。
+     *
+     * <p>命中规则 → 发模板：人工审核过的文案，确定性可用，比「这条不回」安全得多。
+     * 未命中 → 记 {@code AI_FAILED} 进重试链：没有模板兜底时，重试是唯一不丢消息的路。
+     *
+     * <p>注意这里<b>不能</b>按 spec 3.6 那句「未命中 → 记 AI_SKIPPED」落地 ——
+     * 与 3.6.2「技术性失败不算 skip，走 AI_FAILED」直接冲突。按 3.6.2 走：
+     * 「模型在躲」和「接口在坏」混成一个数字，统计面板就废了。
+     */
+    private Outcome degradeToTemplate(PlatformAdapter adapter, UnreadThread thread, UnreadTaskEntity task,
+                                      ChatMessage last, ConversationEntity conversation, Long conversationId,
+                                      ReplyRuleEngine.Decision decision, String ruleText, String error) {
+        if (ruleText == null || ruleText.isBlank()) {
+            return fail(task, UnreadTaskStore.Action.AI_FAILED, null, error);
+        }
+        boolean sent = adapter.sendText(thread, ruleText);
+        if (!sent) {
+            return fail(task, UnreadTaskStore.Action.SEND_FAILED, null,
+                    "AI 失败（" + error + "）后降级模板也发送失败");
+        }
+        if (conversation != null) {
+            replyStore.markOwnReply(conversation);
+        }
+        logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(), decision.ruleId(),
+                null, ruleText, ReplyLogEntity.SOURCE_TEMPLATE, null, "AI 失败，降级用模板");
+        taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, "AI 失败，降级用模板");
+        log.info("AI 失败，已降级用模板文案 | 会话={} | {}", thread.title(), error);
+        return Outcome.REPLIED;
+    }
+
+    /**
+     * 四检拦截 → 落库动作。
+     *
+     * <p>{@code BLOCKED_TOO_LONG} 是 P2 遗留的待裁决项（当时没有写入点，不发明枚举）。
+     * 现在有了：长度超限确实要整条不发，而把它塞进 {@code BLOCKED_TONE} 会让「AI 味」这个
+     * 指标被长度问题污染 —— 一眼看不出到底是套话还是话太多。
+     */
+    private static String blockedAction(ReplyGuard.Rejection rejection) {
+        return switch (rejection) {
+            case CONTACT -> "BLOCKED_CONTACT";
+            case SENSITIVE -> "BLOCKED_SENSITIVE";
+            case TONE -> "BLOCKED_TONE";
+            case TOO_LONG -> "BLOCKED_TOO_LONG";
+            // EMPTY 已在调用处单独处理（要重试，不是终态）；NONE 不该走到这里
+            case EMPTY, NONE -> UnreadTaskStore.Action.AI_FAILED;
+        };
+    }
+
+    private static String ruleNameOf(ReplyRuleEngine engine, Long ruleId) {
+        if (ruleId == null) {
+            return null;
+        }
+        for (ReplyRuleEngine.Rule rule : engine.rules()) {
+            if (ruleId.equals(rule.id())) {
+                return rule.name();
+            }
+        }
+        return null;
     }
 
     private Outcome fail(UnreadTaskEntity task, String action, String reasonCode, String error) {
@@ -449,6 +620,13 @@ public class UnreadWatcher {
 
     private void logAction(Long conversationId, ChatMessage message, String action,
                            Long ruleId, String sensitive, String replyText) {
+        logAction(conversationId, message, action, ruleId, sensitive, replyText,
+                ReplyLogEntity.SOURCE_TEMPLATE, null, null);
+    }
+
+    private void logAction(Long conversationId, ChatMessage message, String action,
+                           Long ruleId, String sensitive, String replyText,
+                           String source, String reasonCode, String reasonNote) {
         ReplyLogEntity entity = new ReplyLogEntity();
         entity.setConversationId(conversationId);
         entity.setPlatformMessageId(message.id());
@@ -457,6 +635,9 @@ public class UnreadWatcher {
         entity.setMatchedRuleId(ruleId);
         entity.setMatchedSensitive(sensitive);
         entity.setReplyText(replyText);
+        entity.setReplySource(source);
+        entity.setReasonCode(reasonCode);
+        entity.setReasonNote(reasonNote);
         replyStore.log(entity);
     }
 }

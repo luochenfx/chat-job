@@ -9,6 +9,12 @@ import lombok.Data;
 @Data
 @TableName("reply_log")
 public class ReplyLogEntity {
+
+    /** 规则命中后直接发的（或 AI 失败降级用的）模板文案 */
+    public static final String SOURCE_TEMPLATE = "TEMPLATE";
+    /** 由 AI 生成后发出的 */
+    public static final String SOURCE_AI = "AI";
+
     @TableId(type = IdType.AUTO)
     private Long id;
     private Long conversationId;
@@ -19,5 +25,20 @@ public class ReplyLogEntity {
     private Long matchedRuleId;
     private String matchedSensitive;
     private String replyText;
+    /**
+     * AI 主动不回的原因，取值见 {@code AiReplier.SKIP_REASONS}。
+     *
+     * <p>可 {@code GROUP BY} 是这张表存在的意义：没有它，「模型在躲」只能靠翻日志数。
+     * 技术性失败（{@code AI_FAILED}）<b>不</b>写这里 —— 那是不算 skip 的另一类问题。
+     */
+    private String reasonCode;
+    /** 补充说明，≤200 字，禁止复述对方原话 */
+    private String reasonNote;
+    /**
+     * {@code TEMPLATE} | {@code AI}。历史行为 NULL，读时按 {@code TEMPLATE} 处理。
+     *
+     * <p>不能省：skip 占比告警的分母只算 AI，否则会被模板回复稀释成一个永远正常的数字。
+     */
+    private String replySource;
     private String createdAt;
 }

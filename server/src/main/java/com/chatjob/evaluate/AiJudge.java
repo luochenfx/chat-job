@@ -7,18 +7,8 @@ import com.chatjob.store.entity.AiConfigEntity;
 import com.chatjob.store.entity.ProviderEntity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
-import java.util.Iterator;
-import java.util.Map;
 
 /**
  * AI 投递判定：一次调用同时产出「投不投」与「招呼语」。
@@ -40,11 +30,13 @@ public class AiJudge {
     private final ConfigStore configStore;
     private final SecretCipher cipher;
     private final ObjectMapper json;
+    private final ChatClient chatClient;
 
-    public AiJudge(ConfigStore configStore, SecretCipher cipher, ObjectMapper json) {
+    public AiJudge(ConfigStore configStore, SecretCipher cipher, ObjectMapper json, ChatClient chatClient) {
         this.configStore = configStore;
         this.cipher = cipher;
         this.json = json;
+        this.chatClient = chatClient;
     }
 
     /**
@@ -81,7 +73,8 @@ public class AiJudge {
         int effective = Math.min(timeout, providerTimeout);
 
         try {
-            String body = callChat(provider, apiKey, prompt, effective);
+            String body = chatClient.complete(provider, apiKey,
+                    "你是一名求职顾问，只输出严格 JSON，不要任何额外文字。", prompt, effective, 0.3);
             return parse(body);
         } catch (Exception e) {
             log.warn("AI 判定失败（该岗位跳过）: {}", e.getMessage());
@@ -111,64 +104,6 @@ public class AiJudge {
                 .replace("{{jd}}", jd);
     }
 
-    private String callChat(ProviderEntity provider, String apiKey, String prompt, int timeoutSeconds)
-            throws Exception {
-        String endpoint = chatEndpoint(provider.getBaseUrl());
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(Math.min(10, timeoutSeconds)))
-                .build();
-
-        ObjectNode payload = json.createObjectNode();
-        payload.put("model", provider.getModel());
-        payload.put("temperature", 0.3);
-        ObjectNode responseFormat = payload.putObject("response_format");
-        responseFormat.put("type", "json_object");
-        ArrayNode messages = payload.putArray("messages");
-        messages.addObject().put("role", "system")
-                .put("content", "你是一名求职顾问，只输出严格 JSON，不要任何额外文字。");
-        messages.addObject().put("role", "user").put("content", prompt);
-
-        HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint))
-                // 这个 timeout 同时覆盖连接后的读取阶段 —— 只设 connectTimeout 不够
-                .timeout(Duration.ofSeconds(timeoutSeconds))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
-                .header("Authorization", "Bearer " + apiKey)
-                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(payload)));
-        applyExtraHeaders(builder, provider.getExtraHeaders());
-
-        HttpResponse<String> response = client.send(builder.build(),
-                HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new IllegalStateException("HTTP " + response.statusCode() + ": " + truncate(response.body()));
-        }
-        JsonNode root = json.readTree(response.body());
-        String content = root.path("choices").path(0).path("message").path("content").asText("");
-        if (content.isBlank()) {
-            throw new IllegalStateException("模型返回内容为空: " + truncate(response.body()));
-        }
-        return content;
-    }
-
-    private void applyExtraHeaders(HttpRequest.Builder builder, String extraHeadersJson) {
-        if (extraHeadersJson == null || extraHeadersJson.isBlank()) {
-            return;
-        }
-        try {
-            JsonNode node = json.readTree(extraHeadersJson);
-            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
-            while (fields.hasNext()) {
-                Map.Entry<String, JsonNode> entry = fields.next();
-                if (entry.getKey() != null && !entry.getKey().isBlank()) {
-                    builder.header(entry.getKey(), entry.getValue().asText());
-                }
-            }
-        } catch (Exception e) {
-            log.warn("自定义请求头解析失败，已忽略: {}", e.getMessage());
-        }
-    }
-
     Verdict parse(String rawContent) {
         String content = extractJson(rawContent);
         try {
@@ -188,29 +123,15 @@ public class AiJudge {
 
     /** 模型偶尔会用 ```json 包裹，或前后带一句话 */
     private static String extractJson(String content) {
-        if (content == null) {
-            return "";
-        }
-        int start = content.indexOf('{');
-        int end = content.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return content.substring(start, end + 1);
-        }
-        return content.trim();
+        return ChatClient.extractJson(content);
     }
 
+    /**
+     * 保留这个入口只为「端点拼接」保持可单测：实现已经搬到 {@link ChatClient}，
+     * 这里不再复制一份逻辑（两份迟早会分叉，而分叉的表现是 HTTP 404）。
+     */
     static String chatEndpoint(String baseUrl) {
-        String normalized = baseUrl == null ? "" : baseUrl.trim();
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        if (normalized.endsWith("/chat/completions")) {
-            return normalized;
-        }
-        if (normalized.contains("/v1")) {
-            return normalized + "/chat/completions";
-        }
-        return normalized + "/v1/chat/completions";
+        return ChatClient.chatEndpoint(baseUrl);
     }
 
     private static String nullToEmpty(String s) {
@@ -218,9 +139,6 @@ public class AiJudge {
     }
 
     private static String truncate(String s) {
-        if (s == null) {
-            return "";
-        }
-        return s.length() > 300 ? s.substring(0, 300) + "..." : s;
+        return ChatClient.truncate(s);
     }
 }

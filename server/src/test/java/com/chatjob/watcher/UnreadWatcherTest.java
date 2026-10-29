@@ -74,36 +74,126 @@ class UnreadWatcherTest {
     }
 
     @Test
-    void 未命中走AI占位失败并排入重试() {
+    void 未命中时由AI生成并发送() {
         Fixture f = new Fixture(true);
+        f.replier.reply = AiReplier.Reply.ok("还招的，您这边主要看哪块？");
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        assertThat(f.adapter.sendCalls).containsExactly("send:张三:还招的，您这边主要看哪块？");
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(task.getLastAction()).isEqualTo(UnreadTaskStore.Action.REPLIED);
+        assertThat(r.replied()).isEqualTo(1);
+        // 未命中时不该带参考素材
+        assertThat(f.replier.inputs).hasSize(1);
+        assertThat(f.replier.inputs.get(0).ruleText()).isNull();
+        assertThat(f.replyStore.logs.get(0).getReplySource()).isEqualTo(ReplyLogEntity.SOURCE_AI);
+    }
+
+    @Test
+    void 命中规则时模板降级为参考素材而不是直接发() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = engineWith("简历", "方便发一份简历给您");
+        f.replier.reply = AiReplier.Reply.ok("可以的，我整理下就发您");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        // 打开态的关键差异：命中规则也不能直接甩模板，否则 40 个会话回的全是同一句
+        assertThat(f.adapter.sendCalls).containsExactly("send:李四:可以的，我整理下就发您");
+        assertThat(f.replier.inputs.get(0).ruleText()).isEqualTo("方便发一份简历给您");
+        assertThat(f.replier.inputs.get(0).ruleName()).isNotNull();
+    }
+
+    @Test
+    void AI主动不回时记枚举原因并收尾为DONE() {
+        Fixture f = new Fixture(true);
+        f.replier.reply = AiReplier.Reply.skip("NO_SUBSTANCE", "只有表情");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "[图片]", false, true));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "[图片]", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(task.getLastAction()).isEqualTo(UnreadTaskStore.Action.AI_SKIPPED);
+        assertThat(task.getLastReasonCode()).isEqualTo("NO_SUBSTANCE");
+        // skip 是终态：不发送、不重试
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.replier.inputs).hasSize(1);
+        assertThat(f.replyStore.logs.get(0).getAction()).isEqualTo(UnreadTaskStore.Action.AI_SKIPPED);
+        assertThat(f.replyStore.logs.get(0).getReasonCode()).isEqualTo("NO_SUBSTANCE");
+        assertThat(r.replied()).isZero();
+    }
+
+    @Test
+    void AI技术失败且未命中时进重试链() {
+        Fixture f = new Fixture(true);
+        f.replier.reply = AiReplier.Reply.fail("ReadTimeoutException: request timed out");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
         UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
-        assertThat(task.getAttemptCount()).isEqualTo(1);
-        assertThat(task.getNextRetryAt()).isNotNull();
         assertThat(task.getLastAction()).isEqualTo(UnreadTaskStore.Action.AI_FAILED);
-        assertThat(r.failed()).isEqualTo(1);
-        // P1 阶段未命中不得发送任何消息
+        assertThat(task.getNextRetryAt()).isNotNull();
         assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(r.failed()).isEqualTo(1);
     }
 
     @Test
-    void 命中规则时发送并收尾为DONE() {
+    void AI技术失败但命中规则时降级用模板() {
         Fixture f = new Fixture(true);
         f.replyStore.engine = engineWith("简历", "方便发一份简历给您");
-        // 判定读的是消息区最后一条，不是列表预览 —— 两者不一致时以消息区为准
+        f.replier.reply = AiReplier.Reply.fail("HTTP 500");
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
         UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
 
+        // 模板是人工审核过的，AI 挂了也不能比改造前更差
         assertThat(f.adapter.sendCalls).containsExactly("send:李四:方便发一份简历给您");
         assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
-        assertThat(f.mapper.rows.get(0).getLastAction()).isEqualTo(UnreadTaskStore.Action.REPLIED);
+        assertThat(f.replyStore.logs.get(0).getReplySource()).isEqualTo(ReplyLogEntity.SOURCE_TEMPLATE);
         assertThat(r.replied()).isEqualTo(1);
+    }
+
+    @Test
+    void 出站校验拦截时整条不发且不重试() {
+        Fixture f = new Fixture(true);
+        f.replier.reply = AiReplier.Reply.ok("可以加我微信 13800138000 详聊");
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "方便聊聊吗", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        assertThat(f.adapter.sendCalls).isEmpty();
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(task.getLastAction()).isEqualTo("BLOCKED_CONTACT");
+        // 四检是确定性规则，重试只会再拦一次 —— 不能消耗重试预算
+        assertThat(task.getAttemptCount()).isZero();
+    }
+
+    @Test
+    void 单轮AI调用次数用完后退回待办而不是判失败() {
+        Fixture f = new Fixture(true);
+        f.config.maxPerSweep = 1;
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "第一个问题", 1));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "第二个问题", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        assertThat(f.replier.inputs).hasSize(1);
+        UnreadTaskEntity second = f.mapper.rows.stream()
+                .filter(t -> "李四".equals(t.getPlatformConversationId()))
+                .findFirst().orElseThrow();
+        // 超预算是「下一轮再说」，不是「这条失败了」：用 FAILED 表示会让它 3 轮后被 GAVE_UP
+        assertThat(second.getStatus()).isEqualTo(UnreadTaskStore.Status.PENDING.name());
+        assertThat(second.getAttemptCount()).isZero();
     }
 
     @Test
@@ -142,6 +232,8 @@ class UnreadWatcherTest {
     @Test
     void 退避窗口内的任务本轮不再点开() {
         Fixture f = new Fixture(true);
+        // 先让它失败一次，才有「退避窗口」可谈
+        f.replier.reply = AiReplier.Reply.fail("HTTP 500");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
         f.watcher.sweep(f.adapter, PLATFORM, false, false);   // 第一次：落任务 → 失败 → 排重试
@@ -282,6 +374,9 @@ class UnreadWatcherTest {
     @Test
     void 演练模式未命中只计数不排重试() {
         Fixture f = new Fixture(true);
+        // P3 起演练也会问 AI（这是唯一能安全看到 AI 输出的地方），所以这里给一个
+        // 「AI 主动不回」的结果，验证它同样不计数、不发消息
+        f.replier.reply = AiReplier.Reply.skip("NO_SUBSTANCE", "只是寒暄");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
         UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
@@ -291,6 +386,7 @@ class UnreadWatcherTest {
         assertThat(f.mapper.rows).isEmpty();
         assertThat(r.unmatched()).isEqualTo(1);
         assertThat(r.wouldReply()).isZero();
+        assertThat(f.adapter.sendCalls).isEmpty();
     }
 
     @Test
@@ -331,6 +427,7 @@ class UnreadWatcherTest {
         final FakeAdapter adapter = new FakeAdapter();
         final FakeReplyStore replyStore = new FakeReplyStore(adapter);
         final FakeConfig config;
+        final FakeReplier replier = new FakeReplier();
         final UnreadTaskStore taskStore;
         final UnreadWatcher watcher;
 
@@ -338,7 +435,7 @@ class UnreadWatcherTest {
             this.config = new FakeConfig(aiReplyEnabled);
             this.mapper.events = adapter.events;
             this.taskStore = new UnreadTaskStore(mapper);
-            this.watcher = new UnreadWatcher(replyStore, taskStore, config);
+            this.watcher = new UnreadWatcher(replyStore, taskStore, config, replier);
         }
     }
 
@@ -347,6 +444,10 @@ class UnreadWatcherTest {
     /** 只覆盖 UnreadWatcher 用到的那几个方法；mapper 传 null 不影响（不会走到）。 */
     private static class FakeConfig extends ConfigStore {
         private final boolean enabled;
+        int maxPerSweep = 5;
+        String style = "";
+        List<String> toneTerms = List.of();
+        boolean toneCheck = true;
 
         FakeConfig(boolean enabled) {
             super(null, null, null, null, new ObjectMapper());
@@ -356,6 +457,50 @@ class UnreadWatcherTest {
         @Override
         public boolean aiReplyEnabled() {
             return enabled;
+        }
+
+        @Override
+        public String aiIntroduce() {
+            return "";
+        }
+
+        @Override
+        public String aiReplyStyle() {
+            return style;
+        }
+
+        @Override
+        public int aiReplyMaxPerSweep() {
+            return maxPerSweep;
+        }
+
+        @Override
+        public List<String> toneTerms() {
+            return toneTerms;
+        }
+
+        @Override
+        public boolean toneCheckEnabled() {
+            return toneCheck;
+        }
+    }
+
+    /**
+     * AI 生成器的 fake。真实 {@code AiReplier} 要打网络，单测只关心
+     * 「拿到什么输入」和「怎么处理它给出的三类结果」。
+     */
+    private static class FakeReplier extends AiReplier {
+        AiReplier.Reply reply = AiReplier.Reply.ok("方便发个简历给您看看吗");
+        final List<AiReplier.Input> inputs = new ArrayList<>();
+
+        FakeReplier() {
+            super(null, null, null, new ObjectMapper());
+        }
+
+        @Override
+        public Reply reply(Input input) {
+            inputs.add(input);
+            return reply;
         }
     }
 

@@ -42,6 +42,20 @@ public class ConfigStore {
      */
     public static final int MAX_UNREAD_SCAN_LIMIT = 500;
 
+    /** AI 回复单次超时默认值，与 V8 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_AI_REPLY_TIMEOUT_SECONDS = 8;
+
+    /**
+     * 单轮最多调几次 AI。默认 5：单条最坏 8s，5 条就是 40s，已经接近一次值守的间隔。
+     *
+     * <p>这个上限不是成本控制（那是日评估上限的事），而是<b>节奏保护</b>：列表里有 40 个会话时，
+     * 全调一遍会把扫描主链饿死。
+     */
+    public static final int DEFAULT_AI_REPLY_MAX_PER_SWEEP = 5;
+
+    /** 上限的合理区间。配成 100 等于关掉这道保护，所以留个天花板 */
+    public static final int MAX_AI_REPLY_MAX_PER_SWEEP = 20;
+
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private static final List<String> DEFAULT_REPEAT_MESSAGES = List.of(
@@ -188,6 +202,9 @@ public class ConfigStore {
         created.setAiReplyEnabled(0);
         created.setAiReplyToneCheckEnabled(1);
         created.setAiReplyToneTerms("");
+        created.setAiReplyStyle("");
+        created.setAiReplyTimeoutSeconds(DEFAULT_AI_REPLY_TIMEOUT_SECONDS);
+        created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
         created.setUpdatedAt(now());
         aiConfigMapper.insert(created);
         log.info("已创建 AI 配置默认值");
@@ -259,6 +276,53 @@ public class ConfigStore {
             }
         }
         return new ArrayList<>(seen);
+    }
+
+    // ------------------------------------------------------------ AI 回复（P3）
+
+    /**
+     * 事实素材（<b>说什么</b>：年限、技能、项目）。与风格是两件事 ——
+     * 它天然是简历腔，直接当人设喂模型，产出必是「本人具备 X 年经验」这类一眼假的句子。
+     */
+    public String aiIntroduce() {
+        String v = aiConfig().getIntroduce();
+        return v == null ? "" : v;
+    }
+
+    /**
+     * 表达风格。返回空串表示「没配」，由 {@code AiReplier} 换成默认风格 ——
+     * 这里不兜默认值，默认值只有一份，放在用到它的那一侧。
+     */
+    public String aiReplyStyle() {
+        String style = aiConfig().getAiReplyStyle();
+        return style == null ? "" : style;
+    }
+
+    /** 单次生成超时。合法区间 [1, 120]：小于 1 秒必然全超时，大于 120 秒等于把扫描冻住 */
+    public int aiReplyTimeoutSeconds() {
+        return clampAiReplyTimeoutSeconds(aiConfig().getAiReplyTimeoutSeconds());
+    }
+
+    public static int clampAiReplyTimeoutSeconds(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_AI_REPLY_TIMEOUT_SECONDS;
+        }
+        return Math.min(configured, 120);
+    }
+
+    /**
+     * 单轮 AI 调用上限。{@code null} / 小于 1 按默认值处理，而不是按 0 ——
+     * 「0 次调用」等于值守 AI 永久空转，正是这类配置项最该避免的失败模式。
+     */
+    public int aiReplyMaxPerSweep() {
+        return clampAiReplyMaxPerSweep(aiConfig().getAiReplyMaxPerSweep());
+    }
+
+    public static int clampAiReplyMaxPerSweep(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_AI_REPLY_MAX_PER_SWEEP;
+        }
+        return Math.min(configured, MAX_AI_REPLY_MAX_PER_SWEEP);
     }
 
     // ------------------------------------------------------------ 提供商

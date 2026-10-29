@@ -178,7 +178,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_unread_task_open
 - 超时：`min(ai_reply_timeout_seconds=8, provider.timeout_seconds)`。
 - 失败：记 `AI_FAILED`，若命中规则则降级用模板文案，否则不回。
 
-**降级策略**：AI 失败或风控拦截时，若命中规则 → 用模板文案（人工审核过，安全）；未命中 → 记 `AI_SKIPPED`。这样「AI 挂了」不会比现在更差。
+**降级策略**：AI 技术性失败时，若命中规则 → 用模板文案（人工审核过，安全）；未命中 → 记 `AI_FAILED` 进重试链。这样「AI 挂了」不会比现在更差。
+
+> **与原稿的偏差（P3 实施时裁决）**：本节原写「未命中 → 记 `AI_SKIPPED`」，与 §3.6.2「技术性失败（超时/非 200/JSON 非法/reply 为空）**不算 skip**，走 `AI_FAILED`」直接冲突。按 §3.6.2 执行：`AI_SKIPPED` 是终态，`AI_FAILED` 要重试，混用会让「模型在躲」以「任务在重试」的形式出现，skip 占比告警的分母随之失真。
 
 #### 3.6.1 人设与表达风格为什么不是同一个字段
 
@@ -223,7 +225,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_unread_task_open
 
 | 检查 | 规则 | 命中处理 |
 |---|---|---|
-| 长度 | > 60 字 | 截到最后一个句号/问号/感叹号；仍超则整条不发 |
+| 长度 | > 60 字 | 截到最后一个句号/问号/感叹号；仍超则整条不发，记 `BLOCKED_TOO_LONG` |
 | 联系方式 | 手机号 `1[3-9]\d{9}`、`微信/weixin/vx/qq/邮箱`、连续 6 位以上数字 | 整条不发，记 `BLOCKED_CONTACT` |
 | 薪资与承诺 | 敏感词表 + `薪资\|工资\|月薪\|年薪\|k/月\|到岗\|保证\|一定` | 整条不发，记 `BLOCKED_SENSITIVE` |
 | **AI 味** | 见下方词表与结构规则 | 整条不发，记 `BLOCKED_TONE`；命中规则时降级用模板 |
@@ -520,12 +522,33 @@ P5 单独列出来的原因：前置条件自检时「真发送」没有验证�
 
 单测 `ReplyGuardTest` 共 53 个用例：常规 6 类 + AI 味三组（31 条默认词参数化逐条命中、自定义词表整体替换、`tone_check_enabled=0` 放行且不影响前三检）+ 结构规则 5 条 + 3 条口语反例 + 词表解析。
 
+**P3 实施记录（2026-10-29，已完成）**
+
+| 项 | 落地 |
+|---|---|
+| 迁移 | `V8__ai_reply_p3.sql`：`ai_config` 加 `ai_reply_style` / `ai_reply_timeout_seconds` / `ai_reply_max_per_sweep`；`reply_log` 加 `reason_code` / `reason_note` / `reply_source` + 2 索引 |
+| 生成器 | 新增 `watcher/AiReplier.java`：`DEFAULT_STYLE`、`SKIP_REASONS` 五枚举、`render`/`parse`/`normalizeSkipReason`/`tail` |
+| 共用 HTTP | 新增 `evaluate/ChatClient.java`，把端点拼接、双超时、strict JSON、`extractJson` 从 `AiJudge` 抽出来只留一份；`AiJudge` 改为委托，`chatEndpoint` 保留同名入口以免端点拼接失去可测性 |
+| 编排 | `UnreadWatcher.process`：命中与未命中**都**交 AI（模板只做参考素材），AI 技术失败降级发模板，四检拦截记 `BLOCKED_*`，单轮 AI 调用预算 |
+| 预算 | `UnreadTaskStore.release()`：超预算退回 `PENDING`，不消耗重试预算 |
+| 接口 | `GET/PUT /api/config/ai` 增加上述 3 个字段 + 只读 `aiReplyStyleDefault`（前端填 placeholder 用，不硬编码第二份默认值） |
+| 控制台 | P3 不动，留给 P4 |
+
+四处实施结论：
+
+1. **打开态「命中规则」不再直接发模板。** P1 的实现是命中即发模板；照旧的话，40 个会话里命中「简历」「薪资」的回的全是同一句 —— 这正是本 spec 要解决的问题。现在模板降级为**参考素材**交给 AI，只在 AI 技术性失败时兜底发送（它是人工审核过的，比「不回」安全）。
+2. **`BLOCKED_TOO_LONG` 补进 §3.7。** 这是 P2 遗留的待裁决项（当时没有写入点）。现在有了：超长确实要整条不发，而塞进 `BLOCKED_TONE` 会让「AI 味」这个指标被「话太多」污染 —— 一眼看不出到底是套话还是超长。
+3. **四检拦截不重试，记 `DONE` 且 `attempt_count` 保持 0。** 同一 prompt 再问一次大概率给同样输出，四检又是确定性规则，重试只会多花一次调用再把同样的东西拦一次。用重试预算去表示「确定性的拒绝」，会让真正需要重试的任务更早 `GAVE_UP`。
+4. **单轮 AI 预算用 `release` 而不是 `markFailed`。** 默认 5 次（`ai_reply_max_per_sweep`）。列表有 40 个会话时未命中可能连着来几条，全调一遍会把扫描主链饿死；而「这轮没轮到你」不是失败 —— 记 `FAILED` 会让一条一次错都没犯的消息在 3 轮后被 `GAVE_UP`。
+
+单测 **158 个**（P2 时 142，+16）：新增 `AiReplierTest` 11 个（解析三类结果、枚举归一、上下文裁剪、prompt 里必须带风格与参考素材）；`UnreadWatcherTest` 16 → 21（AI 生成发送、命中也走 AI、AI 主动 skip、技术失败进重试、命中时降级模板、四检拦截、超预算退回待办）。
+
 ### 4.3 测试
 - `ReplyRuleEngine` 现有单测必须全绿且**不改判定顺序**。
 - `ReplyGuard`：表驱动覆盖常规 6 类（正常、超长、手机号、微信、薪资、空串）+ AI 味三组 —— ① `DEFAULT_TONE_TERMS` 每条至少一个命中用例（31 条都要有，参数化生成，防止加词不测）；② 自定义词表整体替换默认（旧默认词不再命中）；③ `tone_check_enabled=0` 时套话直接放行。另加 3 条正常口语反例（含 `感谢`、`您好`、`我把简历发您看看`）必须通过，否则说明词表过宽。
 
   > 「我将简历发您」原本也列在这三条反例里，但它与 §3.7 默认词表中的 `我将` 直接冲突 —— 两者不可能同时成立。P2 实施时的裁决：**保留词表、把这句话记为已知误杀**（§3.7 已说明 `我将` 是留着观察的边界项），并单独一条用例断言它会被拦，等真实的 `BLOCKED_TONE` 样本决定删不删词。删词是安全的单向操作。
-- `AiReplier`：用 hand-written fake 的 `HttpClient`（不引入 mock 框架），覆盖 200 正常、非 200、超时、非法 JSON、`skip=true` 五种；另加两例 —— `skipReason` 给枚举外的值时必须归一化为 `LOW_CONFIDENCE`，`ai_reply_style` 为空串时 prompt 里必须出现 `DEFAULT_STYLE` 文案。
+- `AiReplier`：拆两半测 —— 纯逻辑（`parse` / `normalizeSkipReason` / `tail` / `render`）直接测；编排侧用 `UnreadWatcherTest` 里的 hand-written `FakeReplier` 覆盖「生成成功 / 主动 skip / 技术失败」三类结果。**没有**为 `HttpClient` 造 fake：网络层已收敛到 `ChatClient` 一处，再包一层 fake 只会测到 fake 自己。
 - `UnreadTaskStore`：覆盖「同会话重复落任务不堆积」「第 4 次失败不再重试」「DONE 后可再建新任务」「手动重试把 `attempt_count` 归零并回到 PENDING」「非 `GAVE_UP` 的重试被拒绝」。
 - `WatcherStatsTest`：四档状态的边界 —— 阈值 0 → `DISABLED`；总数 < min_sample → `INSUFFICIENT`（**不能是 `OK`**）；占比等于阈值 → `OK`（用 `>` 而非 `>=`）；占比超阈值 → `ALERT`。另测分母只计入 `reply_source='AI'`，混入 `TEMPLATE` 后占比不变。
 - `ConfigController`：风格超 500 字截断保存而不报错；词表去掉空行/重复/首尾空白后入库，超 200 条截断；阈值 >100 存 100、<0 存 0（配置类接口不该因为一个越界数字把整个表单打回）。

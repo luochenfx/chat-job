@@ -18,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AiJudgeTest {
 
     private static AiJudge judge() {
-        // 这两个依赖在纯逻辑路径上不会被用到
-        return new AiJudge((ConfigStore) null, new SecretCipher(), new ObjectMapper());
+        // 这几个依赖在纯逻辑路径上不会被用到
+        ObjectMapper json = new ObjectMapper();
+        return new AiJudge((ConfigStore) null, new SecretCipher(), json, new ChatClient(json));
     }
 
     private static JobDetail job(String description) {

@@ -7,6 +7,7 @@ import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.AiConfigEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.ProviderEntity;
+import com.chatjob.watcher.AiReplier;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -112,7 +113,9 @@ public class ConfigController {
     public record AiConfigBody(Long providerId, String introduce, String promptTemplate,
                                String greetingPrompt, Boolean qualityGateEnabled,
                                String templateGreeting, Integer jdMaxChars, Integer aiTimeoutSeconds,
-                               Boolean collectEffectMetrics, Boolean aiReplyEnabled) {
+                               Boolean collectEffectMetrics, Boolean aiReplyEnabled,
+                               String aiReplyStyle, Integer aiReplyTimeoutSeconds,
+                               Integer aiReplyMaxPerSweep) {
     }
 
     @GetMapping("/ai")
@@ -131,6 +134,11 @@ public class ConfigController {
         out.put("collectEffectMetrics", entity.getCollectEffectMetrics() != null
                 && entity.getCollectEffectMetrics() == 1);
         out.put("aiReplyEnabled", entity.getAiReplyEnabled() != null && entity.getAiReplyEnabled() == 1);
+        out.put("aiReplyStyle", entity.getAiReplyStyle());
+        // 只读默认值：控制台用它填 placeholder，不必在前端硬编码一份 —— 两份迟早分叉
+        out.put("aiReplyStyleDefault", AiReplier.DEFAULT_STYLE);
+        out.put("aiReplyTimeoutSeconds", ConfigStore.clampAiReplyTimeoutSeconds(entity.getAiReplyTimeoutSeconds()));
+        out.put("aiReplyMaxPerSweep", ConfigStore.clampAiReplyMaxPerSweep(entity.getAiReplyMaxPerSweep()));
         return out;
     }
 
@@ -150,6 +158,17 @@ public class ConfigController {
         // 若按「null 当 false」处理，保存任何一个无关配置都会静默把值守关掉。
         if (body.aiReplyEnabled() != null) {
             entity.setAiReplyEnabled(body.aiReplyEnabled() ? 1 : 0);
+        }
+        // 同样「未传则保持原值」：清空风格是合法的（回落到 DEFAULT_STYLE），
+        // 但「没提交这个字段」不等于「清空」—— 两者必须能区分，否则保存任何无关配置都会抹掉风格
+        if (body.aiReplyStyle() != null) {
+            entity.setAiReplyStyle(body.aiReplyStyle().strip());
+        }
+        if (body.aiReplyTimeoutSeconds() != null) {
+            entity.setAiReplyTimeoutSeconds(ConfigStore.clampAiReplyTimeoutSeconds(body.aiReplyTimeoutSeconds()));
+        }
+        if (body.aiReplyMaxPerSweep() != null) {
+            entity.setAiReplyMaxPerSweep(ConfigStore.clampAiReplyMaxPerSweep(body.aiReplyMaxPerSweep()));
         }
         configStore.saveAiConfig(entity);
         return Map.of("ok", true);

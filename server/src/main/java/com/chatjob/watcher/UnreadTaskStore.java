@@ -43,6 +43,11 @@ public class UnreadTaskStore {
         public static final String SEND_FAILED = "SEND_FAILED";
         public static final String READ_FAILED = "READ_FAILED";
         public static final String AI_FAILED = "AI_FAILED";
+        /**
+         * AI 主动不回。与 {@link #AI_FAILED} 必须分开：一个进重试链，一个是终态；
+         * 混在一起的话，「模型在躲」会以「任务在重试」的形式出现。
+         */
+        public static final String AI_SKIPPED = "AI_SKIPPED";
         public static final String LOCATE_FAILED = "LOCATE_FAILED";
         public static final String MANUAL_RETRY = "MANUAL_RETRY";
 
@@ -152,9 +157,27 @@ public class UnreadTaskStore {
         return task;
     }
 
+    /**
+     * 本轮不处理，退回 {@code PENDING} 等下一轮。
+     *
+     * <p>与 {@link #markFailed} 的区别是<b>不消耗重试预算、不排退避时间</b>。它用于
+     * 「本轮 AI 调用次数已经用完」这类与消息本身无关的原因：拿失败去表示，会让一条
+     * 本来下一轮就能回的消息在 3 轮之后被 GAVE_UP，而它一次错都没犯。
+     *
+     * <p>不留 {@code PROCESSING}：那个状态在下一轮会被 {@code openOrTouch} 当成
+     * 「进程中断」并告警，制造一条假故障。
+     */
+    public void release(UnreadTaskEntity task, String note) {
+        task.setStatus(Status.PENDING.name());
+        task.setNextRetryAt(null);
+        task.setLastError(note);
+        task.setUpdatedAt(ConfigStore.now());
+        mapper.update(task);
+        log.info("未读任务本轮不处理，退回待办 | 会话={} | {}", task.getPlatformConversationId(), note);
+    }
+
     public void markDone(UnreadTaskEntity task, String platformMessageId, String action,
-                         String reasonCode, String note) {
-        task.setPlatformMessageId(platformMessageId);
+                         String reasonCode, String note) {        task.setPlatformMessageId(platformMessageId);
         task.setStatus(Status.DONE.name());
         task.setLastAction(action);
         task.setLastReasonCode(reasonCode);
