@@ -67,6 +67,18 @@ public interface PlatformAdapter {
     /** 发送一条文本；返回是否确认送达 */
     boolean sendText(UnreadThread thread, String text);
 
+    /**
+     * 向对方发送一份简历（点工具栏「发简历」→ 确认气泡点「确定」→ 等绿色简历卡片出现）。
+     *
+     * <p>与 {@link #sendText} 分成两个方法而不是加个 flag：它们的成功判据完全不同。
+     * 文字靠「己方消息条数 +1」，简历靠「出现简历卡片」—— 简历发出去不会增加
+     * {@code item-myself} 消息条数，用文字的判据去等会一直超时。
+     *
+     * <p>按钮灰掉时返回 {@link Models.ResumeResult.Status#UNAVAILABLE}，上层应降级成文字，
+     * 不要把这种情况当成发送失败去重试（灰按钮重试多少次都是灰的）。
+     */
+    Models.ResumeResult sendResume(UnreadThread thread);
+
     /** 关闭值守期间打开的会话页，回到列表页 */
     void closeThread();
 }

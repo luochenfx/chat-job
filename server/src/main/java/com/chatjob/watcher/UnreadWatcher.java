@@ -2,6 +2,7 @@ package com.chatjob.watcher;
 
 import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
+import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
@@ -173,6 +174,8 @@ public class UnreadWatcher {
                     continue;
                 }
                 try {
+                    log.info("演练：进入会话 | 会话={} | 未读={} | 摘要=「{}」",
+                            thread.title(), thread.unread(), clipLog(thread.lastMessage()));
                     List<ChatMessage> messages = adapter.readMessages(thread);
                     if (messages.isEmpty()) {
                         log.warn("演练：会话「{}」消息区读不到任何消息", thread.title());
@@ -182,8 +185,19 @@ public class UnreadWatcher {
                     // duplicate / throttled 一律传 false：见方法注释，它们读的是真实痕迹
                     ReplyRuleEngine.Decision decision =
                             engine.decide(last.text(), last.fromSelf(), false, false);
+                    log.info("演练判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
+                            thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
+                            nvl(decision.matchedKeyword()), decision.reason());
                     if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
                         sensitive++;
+                        continue;
+                    }
+                    // 演练也要把「本来会发简历」说出来，否则演练结果和真实结果对不上：
+                    // 真实路径会点按钮发卡片，演练路径却只报「未命中」。
+                    if (decision.action() == ReplyRuleEngine.Action.SEND_RESUME) {
+                        wouldReply++;
+                        log.info("演练模式：本会发简历（不发文字）| 会话={} | 理由={}",
+                                thread.title(), decision.reason());
                         continue;
                     }
                     if (decision.action() == ReplyRuleEngine.Action.UNMATCHED) {
@@ -279,6 +293,12 @@ public class UnreadWatcher {
                     ReplyRuleEngine.Decision decision = engine.decide(
                             last.text(), last.fromSelf(), duplicate, throttled);
 
+                    log.info("进入回复流程 | 会话={} | 未读={} | 摘要=「{}」",
+                            thread.title(), thread.unread(), clipLog(thread.lastMessage()));
+                    log.info("判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
+                            thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
+                            nvl(decision.matchedKeyword()), decision.reason());
+
                     if (decision.action() == ReplyRuleEngine.Action.SKIP_DUPLICATE) {
                         continue;
                     }
@@ -287,11 +307,50 @@ public class UnreadWatcher {
                     }
 
                     boolean sent = false;
+                    String reason = decision.reason();
+                    if (decision.action() == ReplyRuleEngine.Action.SEND_RESUME) {
+                        // 关闭 AI 也要能发简历：这是「动作」不是「回复风格」，
+                        // 没道理跟着 AI 开关一起消失。
+                        ResumeResult resume = adapter.sendResume(thread);
+                        if (resume.status() == ResumeResult.Status.SENT) {
+                            replyStore.markOwnReply(conversation);
+                            replied++;
+                            logAction(conversation.getId(), last, ReplyLogEntity.ACTION_REPLY_RESUME,
+                                    decision.ruleId(), null, null, ReplyLogEntity.SOURCE_RESUME, null, reason);
+                            log.info("已发出简历（未补文字）| 会话={} | 理由={}", thread.title(), reason);
+                            continue;
+                        }
+                        if (resume.status() == ResumeResult.Status.UNAVAILABLE
+                                && decision.replyText() != null && !decision.replyText().isBlank()) {
+                            // 按钮灰了才说话；能发的时候一句话都不加
+                            reason = reason + "；按钮不可用（" + resume.detail() + "），改发兜底文案";
+                            sent = adapter.sendText(thread, decision.replyText());
+                            if (sent) {
+                                replyStore.markOwnReply(conversation);
+                                replied++;
+                                log.info("已发送（简历不可用降级）| 会话={} | 内容=「{}」",
+                                        thread.title(), decision.replyText());
+                            }
+                        } else {
+                            log.warn("发简历失败 | 会话={} | {} | {}", thread.title(),
+                                    resume.status(), resume.detail());
+                        }
+                        logAction(conversation.getId(), last, sent
+                                        ? ReplyRuleEngine.Action.REPLY.name()
+                                        : UnreadTaskStore.Action.SEND_FAILED,
+                                decision.ruleId(), null, sent ? decision.replyText() : null,
+                                sent ? ReplyLogEntity.SOURCE_TEMPLATE : ReplyLogEntity.SOURCE_RESUME,
+                                "RESUME_UNAVAILABLE", reason);
+                        continue;
+                    }
+
                     if (decision.shouldReply()) {
                         sent = adapter.sendText(thread, decision.replyText());
                         if (sent) {
                             replyStore.markOwnReply(conversation);
                             replied++;
+                            log.info("已发送 | 会话={} | 来源=模板 | 规则={} | 内容=「{}」",
+                                    thread.title(), ruleNameOf(engine, decision.ruleId()), decision.replyText());
                         } else {
                             log.warn("值守回复发送失败 | 会话={} | 规则={}", thread.title(), decision.ruleId());
                         }
@@ -304,8 +363,9 @@ public class UnreadWatcher {
                     String action = decision.shouldReply() && !sent
                             ? ReplyRuleEngine.Action.UNMATCHED.name()
                             : decision.action().name();
-                    logAction(conversation.getId(), last, action,
-                            decision.ruleId(), decision.sensitive(), decision.replyText());
+                    logAction(conversation.getId(), last, action, decision.ruleId(),
+                            decision.sensitive(), decision.replyText(),
+                            ReplyLogEntity.SOURCE_TEMPLATE, null, reason);
                 } catch (Exception e) {
                     log.warn("处理会话 {} 失败: {}", thread.title(), e.getMessage());
                 }
@@ -431,6 +491,11 @@ public class UnreadWatcher {
         ConversationEntity conversation = replyStore.findById(conversationId);
         taskStore.claim(task);
 
+        // 每个会话一条入口日志。改造前这里一条都不打，成功路径全程静默 ——
+        // 真发了消息的人在日志里找不到任何痕迹，只能靠「轮末那行汇总里 replied=1」反推。
+        log.info("进入回复流程 | 会话={} | 未读={} | 摘要=「{}」",
+                thread.title(), thread.unread(), clipLog(thread.lastMessage()));
+
         List<ChatMessage> messages;
         try {
             messages = adapter.readMessages(thread);
@@ -452,17 +517,24 @@ public class UnreadWatcher {
         if (last.fromSelf()) {
             // 最后一条是我方：可能是上一轮发送其实成功了（送达判据没确认住），
             // 这里靠消息归属自然收敛，不会重复发。
-            taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_SELF.name(), null, null);
+            taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_SELF.name(), null,
+                    "最后一条是我方消息「" + clipLog(last.text()) + "」，等对方先回");
+            log.info("跳过（最后一条是我方消息）| 会话={}", thread.title());
             return Outcome.SKIPPED;
         }
         if (replyStore.wasProcessed(conversationId, last.id())) {
-            taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_DUPLICATE.name(), null, null);
+            taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_DUPLICATE.name(), null,
+                    "消息 " + last.id() + " 上一轮已处理过");
+            log.info("跳过（这条消息已处理过）| 会话={} | mid={}", thread.title(), last.id());
             return Outcome.SKIPPED;
         }
         if (conversation != null && replyStore.inCooldown(conversation)) {
-            logAction(conversationId, last, ReplyRuleEngine.Action.SKIP_THROTTLED.name(), null, null, null);
+            logAction(conversationId, last, ReplyRuleEngine.Action.SKIP_THROTTLED.name(), null, null, null,
+                    ReplyLogEntity.SOURCE_TEMPLATE, null,
+                    "同会话 " + ReplyStore.REPLY_COOLDOWN_MINUTES + " 分钟冷却期内");
             taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_THROTTLED.name(),
                     null, "同会话 " + ReplyStore.REPLY_COOLDOWN_MINUTES + " 分钟冷却期内");
+            log.info("跳过（{} 分钟冷却期内）| 会话={}", ReplyStore.REPLY_COOLDOWN_MINUTES, thread.title());
             return Outcome.SKIPPED;
         }
         if (collectMetrics && conversation != null) {
@@ -472,11 +544,23 @@ public class UnreadWatcher {
         // 自己发的 / 重复 / 冷却 已在上面判完，这里只让引擎回答「敏不敏感、命中哪条规则」
         ReplyRuleEngine.Decision decision = engine.decide(last.text(), false, false, false);
 
+        // 「为什么这么回」必须在日志里能直接读到，不能只落库：出事的时候人是先翻日志的。
+        log.info("判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
+                thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
+                nvl(decision.matchedKeyword()), decision.reason());
+
         if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
             // 敏感话题连 AI 都不问：问了也没用，还白白把薪资这类内容送进模型
-            logAction(conversationId, last, decision.action().name(), null, decision.sensitive(), null);
+            logAction(conversationId, last, decision.action().name(), null, decision.sensitive(), null,
+                    ReplyLogEntity.SOURCE_TEMPLATE, null, decision.reason());
             taskStore.markDone(task, last.id(), decision.action().name(), null, decision.reason());
             return Outcome.SENSITIVE;
+        }
+
+        // 命中「发简历」类规则：动作是发，不是回。这里不调 AI ——
+        // 一旦让模型决定「要不要发简历」，它就有能力把简历发给说「简历收到了吗」的人。
+        if (decision.action() == ReplyRuleEngine.Action.SEND_RESUME) {
+            return sendResumeOutcome(adapter, thread, task, last, conversation, conversationId, decision);
         }
 
         // 命中与未命中都走 AI，差别只在「带不带参考素材」
@@ -527,12 +611,102 @@ public class UnreadWatcher {
             if (conversation != null) {
                 replyStore.markOwnReply(conversation);
             }
+            String reason = aiReason(engine, decision, draft);
             logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(),
-                    decision.ruleId(), null, verdict.text(), ReplyLogEntity.SOURCE_AI, null, null);
-            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, null);
+                    decision.ruleId(), null, verdict.text(), ReplyLogEntity.SOURCE_AI, null, reason);
+            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, reason);
+            log.info("已发送 | 会话={} | 来源=AI | 内容=「{}」 | 理由={}",
+                    thread.title(), verdict.text(), reason);
             return Outcome.REPLIED;
         }
         return fail(task, UnreadTaskStore.Action.SEND_FAILED, null, "发送未确认送达（AI 回复）");
+    }
+
+    /**
+     * 命中「发简历」规则时的处置。
+     *
+     * <p>三条分支对应三种完全不同的现实，不能合并：
+     * <ul>
+     *   <li><b>发出去了</b> —— 什么都别补。用户明确要求发完简历不要再说话，
+     *       而且连发两条（卡片 + 一句话）在 HR 眼里很像机器人。</li>
+     *   <li><b>按钮是灰的</b> —— 平台要求「双方回复后可用」。这是业务状态不是故障，
+     *       重试没有意义，降级成说一句话，别把这个会话晾死。</li>
+     *   <li><b>点了没成功</b> —— 可能慢、可能改版，进重试链。</li>
+     * </ul>
+     */
+    private Outcome sendResumeOutcome(PlatformAdapter adapter, UnreadThread thread, UnreadTaskEntity task,
+                                      ChatMessage last, ConversationEntity conversation, Long conversationId,
+                                      ReplyRuleEngine.Decision decision) {
+        ResumeResult result = adapter.sendResume(thread);
+        String reason = decision.reason();
+
+        if (result.status() == ResumeResult.Status.SENT) {
+            if (conversation != null) {
+                replyStore.markOwnReply(conversation);
+            }
+            logAction(conversationId, last, ReplyLogEntity.ACTION_REPLY_RESUME, decision.ruleId(),
+                    null, null, ReplyLogEntity.SOURCE_RESUME, null, reason);
+            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, reason);
+            log.info("已发出简历（未补文字）| 会话={} | 理由={} | 凭据={}",
+                    thread.title(), reason, result.detail());
+            return Outcome.REPLIED;
+        }
+
+        if (result.status() == ResumeResult.Status.UNAVAILABLE) {
+            String fallback = decision.replyText();
+            log.warn("简历按钮不可用，降级成文字 | 会话={} | 平台原因={} | 兜底文案={}",
+                    thread.title(), result.detail(), fallback == null ? "（无）" : "「" + fallback + "」");
+            if (fallback == null || fallback.isBlank()) {
+                logAction(conversationId, last, UnreadTaskStore.Action.AI_SKIPPED, decision.ruleId(),
+                        null, null, ReplyLogEntity.SOURCE_RESUME, "RESUME_UNAVAILABLE",
+                        reason + "；按钮不可用且没有兜底文案");
+                taskStore.markDone(task, last.id(), UnreadTaskStore.Action.AI_SKIPPED,
+                        "RESUME_UNAVAILABLE", reason);
+                return Outcome.SKIPPED;
+            }
+            boolean sent = adapter.sendText(thread, fallback);
+            if (!sent) {
+                return fail(task, UnreadTaskStore.Action.SEND_FAILED, null,
+                        "简历按钮不可用，兜底文字也没发出去");
+            }
+            if (conversation != null) {
+                replyStore.markOwnReply(conversation);
+            }
+            String note = reason + "；按钮不可用（" + result.detail() + "），改发兜底文案";
+            logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(), decision.ruleId(),
+                    null, fallback, ReplyLogEntity.SOURCE_TEMPLATE, "RESUME_UNAVAILABLE", note);
+            taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, note);
+            log.info("已发送（简历不可用降级）| 会话={} | 内容=「{}」 | 理由={}",
+                    thread.title(), fallback, note);
+            return Outcome.REPLIED;
+        }
+
+        log.warn("发简历失败 | 会话={} | 理由={} | {}", thread.title(), reason, result.detail());
+        return fail(task, UnreadTaskStore.Action.SEND_FAILED, null, "发简历失败：" + result.detail());
+    }
+
+    /** 把「为什么这么回」拼成一句话：规则命中与 AI 自主判断必须能一眼区分。 */
+    private String aiReason(ReplyRuleEngine engine, ReplyRuleEngine.Decision decision, AiReplier.Reply draft) {
+        String modelSaid = draft.note() == null ? "" : draft.note().strip();
+        if (decision.ruleId() != null) {
+            String base = "命中规则「" + nvl(ruleNameOf(engine, decision.ruleId())) + "」"
+                    + "（关键词「" + nvl(decision.matchedKeyword()) + "」），AI 据此改写";
+            return modelSaid.isEmpty() ? base : base + "：" + modelSaid;
+        }
+        return modelSaid.isEmpty() ? "未命中规则，AI 自主判断" : "未命中规则，AI 自主判断：" + modelSaid;
+    }
+
+    private static String nvl(String value) {
+        return value == null ? "" : value;
+    }
+
+    /** 日志里的摘要别把整段 HR 原话打出来，一行日志会被撑成十几行。 */
+    private static String clipLog(String text) {
+        if (text == null) {
+            return "";
+        }
+        String one = text.replaceAll("\\s+", " ").strip();
+        return one.length() <= 40 ? one : one.substring(0, 40) + "…";
     }
 
     /**

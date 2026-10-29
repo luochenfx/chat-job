@@ -86,4 +86,45 @@ class ReplyRuleEngineTest {
         assertThat(engine().decide("  ", false, false, false).action())
                 .isEqualTo(ReplyRuleEngine.Action.UNMATCHED);
     }
+
+    // ---------------------------------------------------------------- 发简历动作
+
+    private static ReplyRuleEngine resumeEngine(List<String> texts) {
+        return new ReplyRuleEngine(
+                List.of(new ReplyRuleEngine.Rule(9L, "简历索取", List.of("简历", "发一份"), texts, true,
+                        ReplyRuleEngine.RULE_ACTION_SEND_RESUME)),
+                List.of());
+    }
+
+    @Test
+    void 命中发简历规则时_动作是发简历而不是回文案() {
+        ReplyRuleEngine.Decision decision = resumeEngine(List.of("好的，我整理一份发您"))
+                .decide("简历可以发一份吗", false, false, false);
+
+        assertThat(decision.action()).isEqualTo(ReplyRuleEngine.Action.SEND_RESUME);
+        // 动作变了但文案不能丢：按钮灰掉（平台要求双方回复后可用）时还得靠它兜底
+        assertThat(decision.replyText()).isEqualTo("好的，我整理一份发您");
+        assertThat(decision.reason()).contains("发简历");
+    }
+
+    @Test
+    void 发简历规则没有配文案时仍然发简历() {
+        // 没文案的规则如果退化成 UNMATCHED，动作就静默消失了 ——
+        // 这种「配置漏填 → 功能失效」的失败模式最难查，所以必须钉住
+        ReplyRuleEngine.Decision decision = resumeEngine(List.of())
+                .decide("简历发我看看", false, false, false);
+
+        assertThat(decision.action()).isEqualTo(ReplyRuleEngine.Action.SEND_RESUME);
+        assertThat(decision.replyText()).isNull();
+    }
+
+    @Test
+    void 发简历规则的动作大小写和空格不影响判定() {
+        ReplyRuleEngine custom = new ReplyRuleEngine(
+                List.of(new ReplyRuleEngine.Rule(9L, "简历索取", List.of("简历"), List.of("兜底"), true,
+                        " send_resume ")),
+                List.of());
+        assertThat(custom.decide("简历发我", false, false, false).action())
+                .isEqualTo(ReplyRuleEngine.Action.SEND_RESUME);
+    }
 }

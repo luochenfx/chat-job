@@ -9,6 +9,7 @@ import com.chatjob.platform.Models.DeliveryOptions;
 import com.chatjob.platform.Models.DeliveryResult;
 import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
+import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
@@ -803,6 +804,132 @@ public class BossAdapter implements PlatformAdapter {
             }
             return waitForOwnMessage(page, before, 30_000);
         });
+    }
+
+    /**
+     * 发简历。四步，少一步都会「看起来发了、其实没发」：
+     *
+     * <pre>
+     * 1) 点工具栏「发简历」—— 按钮灰的时候点下去毫无反应，必须先判 unable 类
+     * 2) 等确认气泡 —— 平台不会直接发，只弹一个「确定向 Boss 发送简历吗？」
+     * 3) 点气泡里的「确定」
+     * 4) 等绿色简历卡片出现 —— 这是唯一的成功凭据
+     * </pre>
+     *
+     * <p>为什么不用「己方消息条数 +1」当判据（{@link #sendText} 用的那个）：实测简历发出去
+     * 新增的是 {@code item-system} 系统消息，不是 {@code item-myself}，用文字的判据等下去
+     * 只会稳定超时。判据必须跟着动作走。
+     */
+    @Override
+    public ResumeResult sendResume(UnreadThread thread) {
+        return executor.call(() -> {
+            Page page = ensureThreadPage();
+            if (!openThread(page, thread)) {
+                return ResumeResult.failed("会话打不开，没法发简历");
+            }
+
+            Locator button = resumeToolbarButton(page);
+            if (button == null) {
+                return ResumeResult.unavailable("工具栏上找不到「发简历」按钮（可能改版）");
+            }
+            if (hasClass(button, BossSelectors.TOOLBAR_UNABLE_CLASS)) {
+                // aria-label 里写着平台的原因（"求简历：双方回复后可用"），原样带回去给日志用
+                String why = attr(button, "aria-label");
+                return ResumeResult.unavailable(why.isBlank() ? "「发简历」按钮当前不可用" : why);
+            }
+
+            int cardsBefore = countResumeCards(page);
+            try {
+                button.click(new Locator.ClickOptions().setTimeout(8_000));
+            } catch (Exception e) {
+                return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
+            }
+            pause(800, 1_400);
+
+            Locator panel = page.locator(BossSelectors.RESUME_CONFIRM_PANEL).first();
+            if (!visibleWithin(panel, 6_000)) {
+                // 按钮判过不可用却没弹层：多半是点了没命中。不算业务不可用，算失败。
+                return ResumeResult.failed("点了「发简历」但没有出现确认气泡");
+            }
+
+            Locator confirm = panel
+                    .getByText(BossSelectors.RESUME_CONFIRM_TEXT,
+                            new Locator.GetByTextOptions().setExact(true))
+                    .first();
+            if (!visibleWithin(confirm, 3_000)) {
+                return ResumeResult.failed("确认气泡里找不到「确定」按钮");
+            }
+            try {
+                confirm.click(new Locator.ClickOptions().setTimeout(8_000));
+            } catch (Exception e) {
+                return ResumeResult.failed("点击「确定」失败: " + e.getMessage());
+            }
+
+            if (waitForResumeCard(page, cardsBefore, 20_000)) {
+                return ResumeResult.sent("简历卡片已出现");
+            }
+            return ResumeResult.failed("已点确定但 20 秒内没等到简历卡片");
+        });
+    }
+
+    /** 工具栏里文本含「简历」的那个按钮；找不到返回 null（改版信号）。 */
+    private Locator resumeToolbarButton(Page page) {
+        try {
+            Locator buttons = page.locator(BossSelectors.CHAT_CONTROLS)
+                    .locator(BossSelectors.TOOLBAR_BTN)
+                    .filter(new Locator.FilterOptions().setHasText("简历"));
+            return buttons.count() > 0 ? buttons.first() : null;
+        } catch (Exception e) {
+            log.debug("查找「发简历」按钮失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private int countResumeCards(Page page) {
+        try {
+            return page.locator(BossSelectors.RESUME_CARD).count();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 简历送达判据：绿色简历卡片数量增加。 */
+    private boolean waitForResumeCard(Page page, int before, long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (countResumeCards(page) > before) {
+                return true;
+            }
+            page.waitForTimeout(500);
+        }
+        return false;
+    }
+
+    private boolean visibleWithin(Locator locator, long timeoutMs) {
+        try {
+            return locator.isVisible(new Locator.IsVisibleOptions().setTimeout(timeoutMs));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean hasClass(Locator locator, String cls) {
+        String value = attr(locator, "class");
+        for (String token : value.split("\\s+")) {
+            if (token.equals(cls)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String attr(Locator locator, String name) {
+        try {
+            String value = locator.getAttribute(name);
+            return value == null ? "" : value.trim();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**

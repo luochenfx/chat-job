@@ -81,7 +81,7 @@ public class ReplyStore {
                     .filter(t -> t != null && !t.isBlank())
                     .toList();
             rules.add(new ReplyRuleEngine.Rule(rule.getId(), rule.getName(), keywords, texts,
-                    rule.getEnabled() != null && rule.getEnabled() == 1));
+                    rule.getEnabled() != null && rule.getEnabled() == 1, rule.getAction()));
         }
         return new ReplyRuleEngine(rules, sensitiveWords());
     }

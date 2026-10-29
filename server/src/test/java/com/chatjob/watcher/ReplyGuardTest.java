@@ -229,6 +229,46 @@ class ReplyGuardTest {
         assertThat(check("我将简历发您").rejection()).isEqualTo(ReplyGuard.Rejection.TONE);
     }
 
+    // ---------------------------------------------------------------- 虚假声明（第五检）
+
+    @ParameterizedTest(name = "声称已发出简历必须拦下：{0}")
+    @MethodSource("falseClaims")
+    void 声称已经发过简历的整条不发(String draft) {
+        ReplyGuard.Verdict verdict = check(draft);
+
+        assertThat(verdict.rejection()).isEqualTo(ReplyGuard.Rejection.FALSE_CLAIM);
+        assertThat(verdict.text()).isNull();
+        // 这里不校验 detail 是否含原文：命中的片段本身就是这句话，
+        // 「不得回显原文」的约束是针对联系方式（手机号/微信号）的，不是针对自述句
+        assertThat(verdict.detail()).isNotEmpty();
+    }
+
+    static Stream<String> falseClaims() {
+        return Stream.of(
+                // 真实事故原句：上一版模板对要简历的 HR 就是这么回的，而一次都没发过
+                "简历已在沟通里发过，如果您需要更详细的版本我可以再整理一份。",
+                "简历已发您了",
+                "已经发送附件简历给您",
+                "简历我已经投递了");
+    }
+
+    @ParameterizedTest(name = "承诺或中性表述必须放行：{0}")
+    @MethodSource("notClaims")
+    void 将来时和中性的说法不算撒谎(String draft) {
+        // 分界线：过去时是事实陈述（没做就是说谎），将来时是承诺（可能兑现、也可能失信，
+        // 但那是「说话不算数」，不是「编造已发生的事」）。把「发您」两个字当关键词拦，
+        // 正常回复会被杀光。
+        assertThat(check(draft).allowed()).isTrue();
+    }
+
+    static Stream<String> notClaims() {
+        return Stream.of(
+                "我整理好就发您",
+                "我把简历发您看看",
+                "简历已经准备好了，您看怎么方便",
+                "方便的话我发一份简历给您");
+    }
+
     // ---------------------------------------------------------------- 词表解析
 
     @Test

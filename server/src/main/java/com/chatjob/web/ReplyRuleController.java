@@ -9,6 +9,7 @@ import com.chatjob.store.entity.SensitiveWordEntity;
 import com.chatjob.store.mapper.ReplyRuleMapper;
 import com.chatjob.store.mapper.ReplyRuleTextMapper;
 import com.chatjob.store.mapper.SensitiveWordMapper;
+import com.chatjob.watcher.ReplyRuleEngine;
 import com.chatjob.watcher.ReplyStore;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -57,6 +58,9 @@ public class ReplyRuleController {
             item.put("keywords", splitKeywords(rule.getKeywords()));
             item.put("enabled", rule.getEnabled() != null && rule.getEnabled() == 1);
             item.put("sortOrder", rule.getSortOrder());
+            // 动作必须暴露给界面：同样是「命中规则」，一条是回话、另一条是去点平台的发简历按钮。
+            // 不显示的话，用户在控制台里看到两条一模一样的规则，却猜不出为什么行为不同。
+            item.put("action", resolveAction(rule.getAction()));
             item.put("texts", replyStore.textsOf(rule.getId()).stream()
                     .map(ReplyRuleTextEntity::getText).toList());
             out.add(item);
@@ -65,7 +69,19 @@ public class ReplyRuleController {
     }
 
     public record RuleBody(Long id, String name, List<String> keywords, List<String> texts,
-                           Boolean enabled, Integer sortOrder) {
+                           Boolean enabled, Integer sortOrder, String action) {
+    }
+
+    /**
+     * 动作归一化：只认两个值，其余一律按「回文案」处理。
+     *
+     * <p>不在这里报错而是静默归一 —— 规则名和动作是两套语义，用户改了名不该连带
+     * 把「发简历」这种有真实副作用的动作搞丢；反过来，未知值退化成最保守的 REPLY 也安全。
+     */
+    static String resolveAction(String raw) {
+        return ReplyRuleEngine.RULE_ACTION_SEND_RESUME.equalsIgnoreCase(raw == null ? "" : raw.trim())
+                ? ReplyRuleEngine.RULE_ACTION_SEND_RESUME
+                : ReplyRuleEngine.RULE_ACTION_REPLY;
     }
 
     @PostMapping("/rules")
@@ -99,6 +115,13 @@ public class ReplyRuleController {
         // 以前这里写死 0，导致"编辑一次，规则就跳到列表最前面"——编辑被误认为没生效。
         rule.setSortOrder(body.sortOrder() != null ? body.sortOrder()
                 : (created ? nextSortOrder() : rule.getSortOrder()));
+        // 前端没传动作时：编辑保留原值（改文案不该顺手把「发简历」改成「回话」），
+        // 新建按最保守的 REPLY。
+        if (body.action() != null) {
+            rule.setAction(resolveAction(body.action()));
+        } else if (created) {
+            rule.setAction(ReplyRuleEngine.RULE_ACTION_REPLY);
+        }
         rule.setUpdatedAt(ConfigStore.now());
         if (created) {
             ruleMapper.insert(rule);

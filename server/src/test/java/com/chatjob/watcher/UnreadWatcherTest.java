@@ -1,6 +1,7 @@
 package com.chatjob.watcher;
 
 import com.chatjob.platform.Models.ChatMessage;
+import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
@@ -10,7 +11,11 @@ import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.UnreadTaskMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.lang.Nullable;
 
@@ -76,7 +81,7 @@ class UnreadWatcherTest {
     @Test
     void 未命中时由AI生成并发送() {
         Fixture f = new Fixture(true);
-        f.replier.reply = AiReplier.Reply.ok("还招的，您这边主要看哪块？");
+        f.replier.reply = AiReplier.Reply.ok("还招的，您这边主要看哪块？", "");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
         UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
@@ -96,7 +101,7 @@ class UnreadWatcherTest {
     void 命中规则时模板降级为参考素材而不是直接发() {
         Fixture f = new Fixture(true);
         f.replyStore.engine = engineWith("简历", "方便发一份简历给您");
-        f.replier.reply = AiReplier.Reply.ok("可以的，我整理下就发您");
+        f.replier.reply = AiReplier.Reply.ok("可以的，我整理下就发您", "");
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
@@ -165,7 +170,7 @@ class UnreadWatcherTest {
     @Test
     void 出站校验拦截时整条不发且不重试() {
         Fixture f = new Fixture(true);
-        f.replier.reply = AiReplier.Reply.ok("可以加我微信 13800138000 详聊");
+        f.replier.reply = AiReplier.Reply.ok("可以加我微信 13800138000 详聊", "");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "方便聊聊吗", 1));
 
         f.watcher.sweep(f.adapter, PLATFORM, false, false);
@@ -407,6 +412,162 @@ class UnreadWatcherTest {
         assertThat(f.adapter.sendCalls).isEmpty();
     }
 
+    // ------------------------------------------------------------------ 发简历
+
+    private static ReplyRuleEngine resumeEngine(String keyword, String fallback) {
+        return new ReplyRuleEngine(
+                List.of(new ReplyRuleEngine.Rule(1L, "简历索取", List.of(keyword),
+                        fallback == null ? List.of() : List.of(fallback), true,
+                        ReplyRuleEngine.RULE_ACTION_SEND_RESUME)),
+                List.of());
+    }
+
+    @Test
+    void 命中发简历规则时只发简历_不补文字也不花AI调用() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        assertThat(f.adapter.resumeCalls).containsExactly("resume:李四");
+        // 发完简历什么都不要说：连发两条（卡片 + 一句话）在 HR 眼里很像机器人
+        assertThat(f.adapter.sendCalls).isEmpty();
+        // 动作是确定性的，没有理由去问模型要不要发 —— 问了它就有能力发给不该发的人
+        assertThat(f.replier.inputs).isEmpty();
+        assertThat(r.replied()).isEqualTo(1);
+
+        ReplyLogEntity log = f.replyStore.logs.get(0);
+        assertThat(log.getAction()).isEqualTo(ReplyLogEntity.ACTION_REPLY_RESUME);
+        assertThat(log.getReplySource()).isEqualTo(ReplyLogEntity.SOURCE_RESUME);
+        assertThat(log.getReplyText()).isNull();
+        // 「为什么这么回」必须留在库里，而不是只在日志里
+        assertThat(log.getReasonNote()).contains("发简历").contains("简历索取");
+    }
+
+    @Test
+    void 简历按钮不可用时降级成兜底文案且留痕说明原因() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.resumeResult = ResumeResult.unavailable("求简历：双方回复后可用");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        assertThat(f.adapter.sendCalls).containsExactly("send:李四:好的，我把整理好的版本发您");
+        assertThat(r.replied()).isEqualTo(1);
+        ReplyLogEntity log = f.replyStore.logs.get(0);
+        assertThat(log.getReasonCode()).isEqualTo("RESUME_UNAVAILABLE");
+        assertThat(log.getReasonNote()).contains("按钮不可用");
+    }
+
+    @Test
+    void 按钮不可用且没有兜底文案时不算失败也不刷屏() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", null);
+        f.adapter.resumeResult = ResumeResult.unavailable("求简历：双方回复后可用");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        // 灰按钮重试一万次还是灰的，不能进重试链
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(f.mapper.rows.get(0).getLastAction()).isEqualTo(UnreadTaskStore.Action.AI_SKIPPED);
+    }
+
+    @Test
+    void 发简历失败进重试链() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.resumeResult = ResumeResult.failed("已点确定但 20 秒内没等到简历卡片");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        // 失败先置 FAILED 并排好下次重试时间（PENDING 只用于「本轮跳过、没消耗重试」）
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
+        assertThat(task.getAttemptCount()).isEqualTo(1);
+        assertThat(task.getNextRetryAt()).isNotNull();
+        assertThat(task.getLastAction()).isEqualTo(UnreadTaskStore.Action.SEND_FAILED);
+        assertThat(r.failed()).isEqualTo(1);
+        // 没发出去就不该谎报「已回复」
+        assertThat(r.replied()).isZero();
+    }
+
+    @Test
+    void 演练模式会说要发简历但不真发() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+
+        assertThat(r.wouldReply()).isEqualTo(1);
+        assertThat(f.adapter.resumeCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ 日志留痕
+
+    /**
+     * 用户报的第一现场是「进回复流程时一条日志都没有，真发了消息的人在日志里找不到自己」。
+     *
+     * <p>这类问题不能靠「代码里有 log.info」来证明：日志被配置挡掉、级别不对、logger 取错
+     * 都会让它在实际运行时消失。所以这里挂一个 ListAppender 把这一轮真实 emit 的事件收下来，
+     * 断言的是「打出来了什么」，不是「写了什么代码」。
+     */
+    @Test
+    void 每个进入回复流程的会话都留下可读日志() {
+        Logger logger = (Logger) LoggerFactory.getLogger(UnreadWatcher.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            Fixture f = new Fixture(true);
+            f.replyStore.engine = engineWith("简历", "好的，我把整理好的版本发您");
+            f.adapter.messages = List.of(new ChatMessage("mid-1", "方便发一份简历吗", false, false));
+            f.adapter.unread.add(UnreadThread.of("李四", "李四", "方便发一份简历吗", 1));
+
+            f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+            List<String> msgs = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .toList();
+            // 入口：出了问题人第一件事是翻日志，这里必须能看见「谁进了流程」
+            assertThat(msgs).anyMatch(m -> m.contains("进入回复流程") && m.contains("李四"));
+            // 判定：为什么这么回，必须能直接读出来，不能只落库
+            assertThat(msgs).anyMatch(m -> m.contains("判定") && m.contains("李四"));
+            // 结果：发出去了还是没发出去，同样要有一行
+            assertThat(msgs).anyMatch(m -> m.contains("已发送") && m.contains("李四"));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    /** 跳过的分支也要说清楚跳过了什么 —— 否则「值守跑了但什么都没发生」依然无法归因。 */
+    @Test
+    void 跳过时把跳过的原因写进任务而不是留空() {
+        Fixture f = new Fixture(true);
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "你好", true, false));
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        assertThat(task.getLastAction()).isEqualTo(ReplyRuleEngine.Action.SKIP_SELF.name());
+        // 理由落在 last_error 这个既有字段里（跳过不是错误，但表里没有专门的 note 列，
+        // 再为一句说明加一次迁移不划算；人读的话以后统一看 reply_log.reason_note）
+        assertThat(task.getLastError()).contains("我方");
+    }
+
     // ------------------------------------------------------------------ 装配
 
     private static ReplyRuleEngine engineWith(String keyword, String reply) {
@@ -490,7 +651,7 @@ class UnreadWatcherTest {
      * 「拿到什么输入」和「怎么处理它给出的三类结果」。
      */
     private static class FakeReplier extends AiReplier {
-        AiReplier.Reply reply = AiReplier.Reply.ok("方便发个简历给您看看吗");
+        AiReplier.Reply reply = AiReplier.Reply.ok("方便发个简历给您看看吗", "");
         final List<AiReplier.Input> inputs = new ArrayList<>();
 
         FakeReplier() {
@@ -577,10 +738,13 @@ class UnreadWatcherTest {
         final List<String> readCalls = new ArrayList<>();
         final List<String> readTitles = new ArrayList<>();
         final List<String> sendCalls = new ArrayList<>();
+        final List<String> resumeCalls = new ArrayList<>();
         final List<String> digests = new ArrayList<>();
         List<ChatMessage> messages = List.of(new ChatMessage("mid-1", "你好", false, false));
         boolean emptyMessages = false;
         boolean sendOk = true;
+        com.chatjob.platform.Models.ResumeResult resumeResult =
+                com.chatjob.platform.Models.ResumeResult.sent("简历卡片已出现");
         @Nullable ThreadTargetUnsafeException throwOnRead;
 
         @Override
@@ -610,6 +774,13 @@ class UnreadWatcherTest {
             sendCalls.add("send:" + thread.title() + ":" + text);
             events.add("send:" + thread.title());
             return sendOk;
+        }
+
+        @Override
+        public com.chatjob.platform.Models.ResumeResult sendResume(UnreadThread thread) {
+            resumeCalls.add("resume:" + thread.title());
+            events.add("resume:" + thread.title());
+            return resumeResult;
         }
 
         @Override

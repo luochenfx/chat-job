@@ -34,6 +34,9 @@
             <div>
               <strong style="font-size: 13.5px">{{ rule.name }}</strong>
               <span v-if="!rule.enabled" class="tag" style="margin-left: 8px">已关闭</span>
+              <span v-if="rule.action === 'SEND_RESUME'" class="tag" style="margin-left: 8px">
+                真实动作：发简历
+              </span>
             </div>
             <div class="row" style="gap: 6px">
               <button class="btn sm" @click="openRule(rule)">编辑</button>
@@ -44,8 +47,14 @@
             <span v-for="k in rule.keywords" :key="k" class="chip">{{ k }}</span>
           </div>
           <div class="hint-inline" style="margin-top: 8px">
-            文案 {{ rule.texts.length }} 条 · 本次命中会随机取一条：
-            <span style="color: var(--ink)">{{ rule.texts[0] }}</span>
+            <template v-if="rule.action === 'SEND_RESUME'">
+              命中后去点平台的「发简历」按钮，一句话都不说。下面这句只在按钮灰掉时兜底：
+              <span style="color: var(--ink)">{{ rule.texts[0] }}</span>
+            </template>
+            <template v-else>
+              文案 {{ rule.texts.length }} 条 · 本次命中会随机取一条：
+              <span style="color: var(--ink)">{{ rule.texts[0] }}</span>
+            </template>
           </div>
         </div>
       </div>
@@ -70,11 +79,22 @@
         </label>
       </div>
       <div class="field">
+        <label>命中后做什么</label>
+        <select v-model="form.action">
+          <option value="REPLY">回一句文案</option>
+          <option value="SEND_RESUME">发简历（真实点击，不说话）</option>
+        </select>
+        <div v-if="form.action === 'SEND_RESUME'" class="desc">
+          命中就点平台的「发简历」按钮，发完什么都不补。文案只在按钮不可用时兜底 ——
+          平台要求双方都说过话才能发，那时候才轮到文案出场
+        </div>
+      </div>
+      <div class="field">
         <label>关键词</label>
         <ChipInput v-model="form.keywords" placeholder="输入关键词后回车，如：面试" />
       </div>
       <div class="field">
-        <label>文案池</label>
+        <label>{{ form.action === 'SEND_RESUME' ? '兜底文案' : '文案池' }}</label>
         <ChipInput v-model="form.texts" placeholder="输入一条回复文案后回车" />
         <div class="desc">单条建议不超过 60 字，纯文本，不带表情</div>
       </div>
@@ -138,7 +158,14 @@ const saving = ref(false)
 const busy = ref(false)
 const dialogOpen = ref(false)
 
-const form = reactive<any>({ id: null, name: '', keywords: [], texts: [], enabled: true })
+const form = reactive<any>({
+  id: null,
+  name: '',
+  keywords: [],
+  texts: [],
+  enabled: true,
+  action: 'REPLY'
+})
 
 async function loadAll() {
   try {
@@ -189,7 +216,8 @@ function reasonText(m: any) {
       TONE: 'AI 味',
       CONTACT: '联系方式',
       SENSITIVE: '敏感词',
-      TOO_LONG: '太长'
+      TOO_LONG: '太长',
+      FALSE_CLAIM: '声称做过没做的事'
     }
     return `出站拦截 · ${map[kind] || kind}`
   }
@@ -226,6 +254,7 @@ function newRule() {
   form.keywords = []
   form.texts = []
   form.enabled = true
+  form.action = 'REPLY'
 }
 
 function editRule(rule: any) {
@@ -234,6 +263,7 @@ function editRule(rule: any) {
   form.keywords = [...rule.keywords]
   form.texts = [...rule.texts]
   form.enabled = rule.enabled
+  form.action = rule.action || 'REPLY'
 }
 
 /** rule 省略 = 新增；传 rule = 编辑 */
@@ -280,6 +310,7 @@ function promote(message: any) {
   form.keywords = []
   form.texts = []
   form.enabled = true
+  form.action = 'REPLY'
   dialogOpen.value = true
   show('已填入草稿，补充关键词与文案后保存')
 }

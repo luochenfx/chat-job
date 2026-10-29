@@ -43,6 +43,35 @@ public final class BossSelectors {
     /** 消息条目的稳定 id（平台下发，长度统一 15 位）。缺失时才退化为「序号+文本hash」。 */
     public static final String MESSAGE_ID_ATTR = "data-mid";
 
+    // ---------------------------------------------------------------- 工具栏：发简历
+    /**
+     * 输入框上方的工具栏容器。实测（chat-new/v5575）里面三个按钮：发简历 / 换电话 / 换微信。
+     * 这三个按钮的「可用」不是原生 {@code disabled}，而是类名 {@code unable} ——
+     * 与发送按钮的 {@code disabled} 是两个不同的判据，混用会导致对着灰按钮狂点。
+     */
+    public static final String CHAT_CONTROLS = ".chat-controls";
+    public static final String TOOLBAR_BTN = "div.toolbar-btn";
+    /** 工具栏按钮的不可用类名。带它时点下去没有任何反应，必须提前判。 */
+    public static final String TOOLBAR_UNABLE_CLASS = "unable";
+    /**
+     * 点「发简历」后弹出的确认气泡（实测类名 {@code panel-resume sentence-popover}）。
+     *
+     * <p>这一步容易漏：按钮点下去<b>不会直接发</b>，只是弹层。只点按钮不等弹层、
+     * 或者点完就走，都会表现为「看起来发了、其实没发」。
+     */
+    public static final String RESUME_CONFIRM_PANEL = ".panel-resume, .sentence-popover";
+    /** 确认气泡里的「确定」。气泡只有「取消 / 确定」两个短文本，按文本精确匹配最稳。 */
+    public static final String RESUME_CONFIRM_TEXT = "确定";
+    /**
+     * 简历发出后的凭据：一条系统消息，内含绿色简历卡片。
+     *
+     * <p>实测发出后新增两条 {@code li.message-item.item-system}：
+     * 第一条文本「附件简历请求已发送」，第二条是卡片（标题=文件名、按钮=点击预览附件简历）。
+     * 判据取卡片而不是文本 —— 文案会变，卡片结构跟着功能走。
+     */
+    public static final String RESUME_CARD =
+            "li.message-item.item-system .message-card-wrap.boss-green";
+
     // ---------------------------------------------------------------- 沟通确认框（BossChatNavigator 用）
     public static final String GREET_CONFIRM = ".greet-boss-dialog:visible .greet-boss-footer a.sure-btn";
     public static final String STAY_THIS_PAGE = ":text-is('留在此页'):visible";

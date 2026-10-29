@@ -76,6 +76,25 @@ public final class ReplyGuard {
     /** 数字之间的分隔符：手机号被写成「138 0013 8000」也要认出来 */
     private static final Pattern DIGIT_SEPARATOR = Pattern.compile("(?<=\\d)[\\s\\-_.·、](?=\\d)");
 
+    // ---------------------------------------------------------------- 虚假声明
+
+    /**
+     * 「已经发过简历」这类过去时声明。
+     *
+     * <p>这条规则是真实事故的直接产物：模板对要简历的 HR 回过「简历已在沟通里发过」，
+     * 而实际一次都没发过。模型比模板更容易犯这个错 —— 它会把「应该已经做了」写成「已经做了」。
+     *
+     * <p>只拦<b>过去时</b>，不拦将来时：「我整理好发您」是承诺（有风险但不算撒谎），
+     * 「简历已发您」是事实陈述（没发就是骗人）。两者的分界线必须画清楚，
+     * 否则「发您」两个字会被误伤，正常回复全没了。
+     *
+     * <p>形态上只认「已 / 已经」+ 发送类动词，不认「准备好了」「整理了」这类中性动作 ——
+     * 那些不构成对外承诺。
+     */
+    private static final Pattern CLAIM_SENT_RESUME = Pattern.compile(
+            "(简历|附件)[^。！？]{0,8}?(已经|已)[^。！？]{0,5}(发过|发了|发给|发送|发出|投递|投了|发您|发你)"
+                    + "|(已经|已)(发送|发出|发给|发过)[^。！？]{0,6}(简历|附件|您|你)");
+
     // ---------------------------------------------------------------- 薪资与承诺
 
     private static final Pattern SALARY_WORD =
@@ -90,6 +109,7 @@ public final class ReplyGuard {
         EMPTY,
         TOO_LONG,
         CONTACT,
+        FALSE_CLAIM,
         SENSITIVE,
         TONE
     }
@@ -175,7 +195,13 @@ public final class ReplyGuard {
             return Verdict.block(Rejection.CONTACT, contact);
         }
 
-        // 3) 薪资与承诺：敏感词表 + 固定的薪资/承诺词
+        // 3) 虚假声明：说了自己没做过的事。排在薪资前面 —— 薪资说错是丢机会，说做过没做的事是丢人。
+        var claim = CLAIM_SENT_RESUME.matcher(normalized);
+        if (claim.find()) {
+            return Verdict.block(Rejection.FALSE_CLAIM, "声称已完成的动作「" + claim.group() + "」");
+        }
+
+        // 4) 薪资与承诺：敏感词表 + 固定的薪资/承诺词
         for (String word : opts.sensitiveWords()) {
             String needle = TextNormalizer.normalize(word);
             if (!needle.isEmpty() && normalized.contains(needle)) {
@@ -187,7 +213,7 @@ public final class ReplyGuard {
             return Verdict.block(Rejection.SENSITIVE, "命中薪资/承诺词「" + salary.group() + "」");
         }
 
-        // 4) AI 味：词表（可配）+ 结构规则（固定）
+        // 5) AI 味：词表（可配）+ 结构规则（固定）
         if (opts.toneCheckEnabled()) {
             for (String term : opts.effectiveToneTerms()) {
                 String needle = TextNormalizer.normalize(term);

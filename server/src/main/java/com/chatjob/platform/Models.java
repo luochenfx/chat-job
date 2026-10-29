@@ -57,6 +57,42 @@ public final class Models {
         }
     }
 
+    /**
+     * 「发简历」的结果。
+     *
+     * <p>三态必须分开，因为调用方对它们的处置完全不同：
+     * <ul>
+     *   <li>{@link Status#SENT} —— 卡片已出现，可以收尾。</li>
+     *   <li>{@link Status#UNAVAILABLE} —— 工具栏按钮是灰的（平台要求「双方回复后可用」）。
+     *       这是<b>业务状态不是故障</b>：重试一万次也还是灰的，所以不能进重试链，
+     *       只能降级成文字回复。</li>
+     *   <li>{@link Status#FAILED} —— 点了确认但没等到卡片。可能网络慢、可能平台改版，
+     *       值得重试。</li>
+     * </ul>
+     */
+    public record ResumeResult(Status status, String detail) {
+
+        public enum Status {
+            SENT, UNAVAILABLE, FAILED
+        }
+
+        public static ResumeResult sent(String detail) {
+            return new ResumeResult(Status.SENT, detail);
+        }
+
+        public static ResumeResult unavailable(String detail) {
+            return new ResumeResult(Status.UNAVAILABLE, detail);
+        }
+
+        public static ResumeResult failed(String detail) {
+            return new ResumeResult(Status.FAILED, detail);
+        }
+
+        public boolean sent() {
+            return status == Status.SENT;
+        }
+    }
+
     public record LoginState(boolean loggedIn, String reason) {
         public static LoginState ok() {
             return new LoginState(true, "登录态 cookie 存在");

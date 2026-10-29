@@ -14,11 +14,28 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public class ReplyRuleEngine {
 
-    public record Rule(Long id, String name, List<String> keywords, List<String> texts, boolean enabled) {
+    /** 规则的默认动作：回一句文案 */
+    public static final String RULE_ACTION_REPLY = "REPLY";
+    /** 规则的动作：真的把简历发出去，而不是回一句话 */
+    public static final String RULE_ACTION_SEND_RESUME = "SEND_RESUME";
+
+    public record Rule(Long id, String name, List<String> keywords, List<String> texts, boolean enabled,
+                       String action) {
+
+        /** 兼容旧构造点：没写动作的规则一律按「回文案」处理。 */
+        public Rule(Long id, String name, List<String> keywords, List<String> texts, boolean enabled) {
+            this(id, name, keywords, texts, enabled, RULE_ACTION_REPLY);
+        }
+
+        public boolean sendsResume() {
+            return RULE_ACTION_SEND_RESUME.equalsIgnoreCase(action == null ? "" : action.trim());
+        }
     }
 
     public enum Action {
         REPLY,
+        /** 命中「发简历」类规则：执行真实动作，不产生文字 */
+        SEND_RESUME,
         SKIP_SELF,
         SKIP_DUPLICATE,
         SKIP_SENSITIVE,
@@ -100,13 +117,23 @@ public class ReplyRuleEngine {
                     "同会话回复过于频繁");
         }
         List<String> texts = bestRule.texts();
-        if (texts == null || texts.isEmpty()) {
+        String picked = (texts == null || texts.isEmpty())
+                ? null
+                : texts.get(ThreadLocalRandom.current().nextInt(texts.size()));
+
+        // 命中「发简历」规则：动作是发，不是回。文案降级为兜底 —— 简历按钮是灰的
+        // （平台要求双方回复后可用）时，还得有句话能说，否则这条消息就彻底没回应了。
+        if (bestRule.sendsResume()) {
+            return new Decision(Action.SEND_RESUME, bestRule.id(), bestKeyword, null, picked,
+                    "命中规则「" + bestRule.name() + "」（关键词「" + bestKeyword + "」），动作=发简历");
+        }
+
+        if (picked == null) {
             return new Decision(Action.UNMATCHED, bestRule.id(), bestKeyword, null, null,
                     "规则「" + bestRule.name() + "」没有配置文案");
         }
-        String reply = texts.get(ThreadLocalRandom.current().nextInt(texts.size()));
-        return new Decision(Action.REPLY, bestRule.id(), bestKeyword, null, reply,
-                "命中规则「" + bestRule.name() + "」");
+        return new Decision(Action.REPLY, bestRule.id(), bestKeyword, null, picked,
+                "命中规则「" + bestRule.name() + "」（关键词「" + bestKeyword + "」）");
     }
 
     /** 供控制台展示：规则覆盖了多少关键词 */

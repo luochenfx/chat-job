@@ -103,8 +103,8 @@ public class AiReplier {
      */
     public record Reply(String text, boolean skip, String skipReason, String note, String error) {
 
-        public static Reply ok(String text) {
-            return new Reply(text, false, null, "", null);
+        public static Reply ok(String text, String note) {
+            return new Reply(text, false, null, note == null ? "" : note, null);
         }
 
         public static Reply skip(String reason, String note) {
@@ -183,6 +183,17 @@ public class AiReplier {
 
         sb.append("怎么说话（必须遵守）：\n").append(style.strip()).append("\n\n");
 
+        // 事实底线：这一条是真实事故换来的。上一版模板对要简历的 HR 回过
+        // 「简历已在沟通里发过」，而实际上一次都没发过 —— 对方当场就能识破。
+        sb.append("""
+                事实底线（比风格重要，违反会让求职者当场翻车）：
+                - 只能说你确实做过、或明确打算去做的事。没发过的简历不要说「已经发过」，
+                  没约定的面试不要说「已确认」，没聊过的项目不要说「之前和您聊过」。
+                - 不编造年限、公司、项目、证书、薪资数字。
+                - 拿不准的事情就说不确定，或者说稍后确认，不要用一句顺话糊过去。
+                """);
+        sb.append('\n');
+
         sb.append("最近的对话（从早到晚，最后一条是对方刚发的）：\n");
         if (recent.isEmpty()) {
             sb.append("（读不到历史消息）\n");
@@ -210,10 +221,11 @@ public class AiReplier {
         sb.append("""
                 输出要求：
                 1. 只输出 JSON，不要任何解释性文字。
-                2. 该回就回：{"reply":"...","skip":false,"skipReason":null,"reason":""}
+                2. 该回就回：{"reply":"...","skip":false,"skipReason":null,"reason":"为什么这么回，不超过 20 字"}
                 3. 不该回就跳过：skip 设为 true，reply 置空，并在 reason 里用一句不超过 20 字的话说明。
                 4. skipReason 只能是这五个之一：NO_SUBSTANCE / SENSITIVE_TOPIC / ALREADY_HANDLED / LOW_CONFIDENCE / HUMAN_REQUIRED。
                 5. reply 不超过 60 字，一句话为主，不要分点、不要小标题、不要复述对方的话。
+                6. reason 无论 skip 与否都要填：它会被记进留痕表，用来回答「这句为什么这么回」。
                 """);
         return sb.toString();
     }
@@ -236,7 +248,7 @@ public class AiReplier {
             // 既没 skip 又没内容：这是模型没遵守契约，算技术失败而不是「不想回」
             return Reply.fail("模型既没有给 reply 也没有 skip");
         }
-        return Reply.ok(text);
+        return Reply.ok(text, note);
     }
 
     /**

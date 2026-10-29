@@ -14,6 +14,14 @@ public class ReplyLogEntity {
     public static final String SOURCE_TEMPLATE = "TEMPLATE";
     /** 由 AI 生成后发出的 */
     public static final String SOURCE_AI = "AI";
+    /**
+     * 发简历动作。{@code reply_text} 为空 —— 这个动作不产生文字，
+     * 拿一个空字符串去填充反而会让人以为「发了条空消息」。
+     */
+    public static final String SOURCE_RESUME = "RESUME";
+
+    /** 动作名：发出了一份简历 */
+    public static final String ACTION_REPLY_RESUME = "REPLY_RESUME";
 
     @TableId(type = IdType.AUTO)
     private Long id;
