@@ -46,7 +46,7 @@ public class JobController {
     public List<Map<String, Object>> jobs(@RequestParam(defaultValue = "100") int limit) {
         List<JobPostingEntity> jobs = jobMapper.selectList(Wrappers.<JobPostingEntity>lambdaQuery()
                 .orderByDesc(JobPostingEntity::getLastSeenAt)
-                .last("LIMIT " + Math.max(1, Math.min(limit, 500))));
+                .last("LIMIT " + Math.clamp(limit, 1, 500)));
         List<Map<String, Object>> out = new ArrayList<>(jobs.size());
         for (JobPostingEntity job : jobs) {
             Map<String, Object> item = new LinkedHashMap<>();

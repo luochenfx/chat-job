@@ -15,6 +15,7 @@ import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
+import com.chatjob.platform.UnreadScanLimit;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -369,7 +370,10 @@ public class BossAdapter implements PlatformAdapter {
                     ? job.detailUrl()
                     : BossEndpoints.jobDetail(job.platformJobId());
 
+            // detailPage 是「岗位详情页」，全程保留引用：送达复核要回到它上面读按钮文案。
+            // 不能像以前那样把它改指向聊天页——那会同时丢掉详情页和唯一的送达判据。
             Page detailPage = session.newPage();
+            Page chatPage = detailPage;
             try {
                 detailPage.navigate(detailUrl, new Page.NavigateOptions()
                         .setTimeout(45_000)
@@ -381,6 +385,7 @@ public class BossAdapter implements PlatformAdapter {
                     return DeliveryResult.skipped("未找到可用的沟通按钮");
                 }
                 boolean repeatByButton = buttonText.contains("继续沟通");
+                boolean firstContact = !repeatByButton;
 
                 try (BossChatNavigator navigator = new BossChatNavigator(detailPage)) {
                     BossChatNavigator.Chat chat = navigator.open(
@@ -392,11 +397,11 @@ public class BossAdapter implements PlatformAdapter {
                     if (chat == null) {
                         return DeliveryResult.skipped(repeatByButton ? "已沟通过的会话，按配置跳过" : "进入会话超时");
                     }
-                    detailPage = chat.page();
+                    chatPage = chat.page();
 
                     // 不依赖按钮文案：进会话后先读消息列表。
                     // 已有我方消息 = 这不是首次沟通（平台自动发的默认招呼也算）。
-                    int selfBefore = countSelfMessages(detailPage);
+                    int selfBefore = countSelfMessages(chatPage);
                     boolean alreadyContacted = selfBefore > 0 || repeatByButton;
 
                     String message;
@@ -415,18 +420,44 @@ public class BossAdapter implements PlatformAdapter {
                         return DeliveryResult.skipped("招呼语为空");
                     }
 
-                    if (!fillInput(detailPage, message)) {
+                    if (!fillInput(chatPage, message)) {
                         return DeliveryResult.failed("输入框填入失败");
                     }
-                    if (!clickSend(detailPage)) {
+                    if (!clickSend(chatPage)) {
                         return DeliveryResult.failed("未找到发送按钮");
                     }
-                    boolean delivered = waitForOwnMessage(detailPage, selfBefore, DELIVER_CONFIRM_TIMEOUT_MS);
-                    if (!delivered) {
-                        return DeliveryResult.failed("发送后 " + (DELIVER_CONFIRM_TIMEOUT_MS / 1000)
-                                + "s 内聊天区未出现本人消息");
+                    // 首次沟通：平台一旦收到这句话，详情页按钮会从「立即沟通」变成「继续沟通」。
+                    // 这是平台自己落库的状态，比数聊天区气泡稳得多（气泡会被 SPA 重渲染、
+                    // 分页加载、以及「谁先渲染谁后渲染」的时序影响，出现过「界面明明发出去了、
+                    // 这里数到 0 条」的假失败）。
+                    // 只有「按钮说立即沟通 + 会话里本来一条我方消息都没有」才有跃迁可看；
+                    // 已经是「继续沟通」、或会话里已有我方消息的，只能回退到气泡判据。
+                    boolean expectButtonFlip = firstContact && selfBefore == 0;
+                    String verify;
+                    boolean delivered;
+                    if (expectButtonFlip) {
+                        verify = "详情页按钮 立即沟通→继续沟通";
+                        ButtonConfirm confirm = confirmByChatButton(detailPage, chatPage, detailUrl, stop);
+                        delivered = confirm.ok();
+                        if (!delivered) {
+                            // 同标签页时 chatPage 就是详情页，此刻已被导回详情页，读它只会读到 0 条。
+                            // 只有独立聊天页时报这个数才有意义。
+                            String selfInfo = chatPage.equals(detailPage)
+                                    ? "" : "；聊天页我方消息 " + countSelfMessages(chatPage) + " 条";
+                            return DeliveryResult.failed("发送后 " + (DELIVER_CONFIRM_TIMEOUT_MS / 1000)
+                                    + "s 内详情页按钮未变为「继续沟通」（最后读到「" + confirm.lastText()
+                                    + "」" + selfInfo + "）");
+                        }
+                    } else {
+                        verify = "聊天区本人消息 +1";
+                        delivered = waitForOwnMessage(chatPage, selfBefore, DELIVER_CONFIRM_TIMEOUT_MS);
+                        if (!delivered) {
+                            return DeliveryResult.failed("发送后 " + (DELIVER_CONFIRM_TIMEOUT_MS / 1000)
+                                    + "s 内聊天区未出现本人消息");
+                        }
                     }
-                    log.info("投递成功 | {} @ {} | 招呼语: {}", job.jobName(), job.companyName(), message);
+                    log.info("投递成功（判据: {}）| {} @ {} | 招呼语: {}",
+                            verify, job.jobName(), job.companyName(), message);
                     return DeliveryResult.delivered(message);
                 }
             } catch (BlockedException e) {
@@ -435,13 +466,8 @@ public class BossAdapter implements PlatformAdapter {
                 log.warn("投递异常 | {} @ {}: {}", job.jobName(), job.companyName(), e.getMessage());
                 return DeliveryResult.failed(e.getClass().getSimpleName() + ": " + e.getMessage());
             } finally {
-                try {
-                    if (detailPage != null && !detailPage.isClosed()) {
-                        detailPage.close();
-                    }
-                } catch (Exception ignore) {
-                    // 关页失败不影响投递结论
-                }
+                closeQuietly(chatPage);
+                closeQuietly(detailPage); // navigator 已关掉的会跳过
             }
         });
     }
@@ -467,10 +493,115 @@ public class BossAdapter implements PlatformAdapter {
         return null;
     }
 
+    /** 送达复核的结论：{@code ok} 为结论，{@code lastText} 为最后一次读到的按钮文案（失败时用于留证）。 */
+    private record ButtonConfirm(boolean ok, String lastText) {
+    }
+
+    /**
+     * 送达复核：回详情页看按钮是否已从「立即沟通」变成「继续沟通」。
+     *
+     * <p>为什么用按钮而不是数气泡：按钮文案是<b>平台自己的服务端状态</b>——没有会话就渲染不出
+     * 「继续沟通」。气泡判据依赖三个易碎前提：聊天区已挂载、列表没被虚拟滚动裁掉、读的时候
+     * 刚好没在重渲染。线上实际发生过「界面明明有消息、判据数到 0 条」，一条真实投递被记成
+     * {@code FAILED}，配额也跟着少记。
+     *
+     * <p>三条实现约束：
+     * <ol>
+     *   <li><b>先停 2~3 秒再离开聊天页</b>：同一标签页场景下，点完发送立刻导航会打断还在飞的
+     *       发送请求，等于自己把消息掐掉。</li>
+     *   <li><b>必须重新导航一次</b>：详情页是 SPA，点进会话前的那份 DOM 不会因为服务端状态
+     *       变化而自更新，直接读旧页面永远读到「立即沟通」。</li>
+     *   <li><b>中途重载一次</b>：首次沟通的会话是服务端新建的，若首次渲染早于落库，页面会一直
+     *       停在「立即沟通」。15 秒后强制重载一次即可，不必反复刷。</li>
+     * </ol>
+     */
+    private ButtonConfirm confirmByChatButton(Page detailPage, Page chatPage, String detailUrl,
+                                              BooleanSupplier stop) {
+        long start = System.currentTimeMillis();
+        long deadline = start + DELIVER_CONFIRM_TIMEOUT_MS;
+        boolean reloaded = false;
+        int navAttempts = 0;
+        String lastText = "";
+
+        // 发送请求落地前别动页面
+        pause(2_000, 3_000);
+
+        while (System.currentTimeMillis() < deadline) {
+            if (stop != null && stop.getAsBoolean()) {
+                return new ButtonConfirm(false, lastText.isBlank() ? "任务已停止" : lastText);
+            }
+            // 同标签页场景下，聊天页就是详情页本身，URL 已经不是 job_detail → 这里会把它导回去。
+            // 导航次数封顶：真导不回去时不要让每轮都吃一次 30s 导航超时，那样窗口直接被吃光。
+            if (!landedOn(detailPage, detailUrl) && navAttempts < 3) {
+                navAttempts++;
+                try {
+                    navigateWithRetry(detailPage, detailUrl, 30_000, 1);
+                    pause(800, 1_400);
+                } catch (Exception e) {
+                    log.debug("复核送达时导航回详情页失败（第 {} 次）: {}", navAttempts, e.getMessage());
+                }
+            }
+            lastText = chatButtonText(detailPage);
+            if (lastText.contains("继续沟通")) {
+                // 同标签页时 chatPage 此刻已经停在详情页上，读它的条数没有意义
+                log.info("详情页按钮已变为【继续沟通】，确认送达{}",
+                        chatPage.equals(detailPage) ? "" : "（聊天页我方消息 " + countSelfMessages(chatPage) + " 条）");
+                return new ButtonConfirm(true, lastText);
+            }
+            if (isSecurityVerify(detailPage)) {
+                log.warn("复核送达时页面落在安全验证页: {}", safeUrl(detailPage));
+                return new ButtonConfirm(false, "安全验证页");
+            }
+            if (!reloaded && System.currentTimeMillis() - start > 15_000) {
+                reloaded = true;
+                log.debug("详情页仍显示「{}」，重载一次再判", lastText);
+                try {
+                    detailPage.reload(new Page.ReloadOptions()
+                            .setTimeout(30_000)
+                            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+                    pause(800, 1_400);
+                    continue;
+                } catch (Exception e) {
+                    log.debug("复核送达时重载详情页失败（继续轮询）: {}", e.getMessage());
+                }
+            }
+            detailPage.waitForTimeout(1_500);
+        }
+        log.warn("详情页按钮在 {}s 内始终未变为「继续沟通」（最后读到「{}」，页面: {}）",
+                DELIVER_CONFIRM_TIMEOUT_MS / 1000, lastText, safeUrl(detailPage));
+        return new ButtonConfirm(false, lastText);
+    }
+
+    /** 详情页沟通按钮的当前文案；读不到返回空串（渲染中/改版），由调用方决定是否继续等。 */
+    private String chatButtonText(Page page) {
+        try {
+            Locator button = page.locator(BossSelectors.CHAT_BUTTON).first();
+            if (button.count() == 0) {
+                return "";
+            }
+            String text = button.textContent();
+            return text == null ? "" : text.trim();
+        } catch (Exception e) {
+            log.debug("读取沟通按钮文案失败: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    private void closeQuietly(Page page) {
+        try {
+            if (page != null && !page.isClosed()) {
+                page.close();
+            }
+        } catch (Exception ignore) {
+            // 关页失败不影响投递结论
+        }
+    }
+
     private int countSelfMessages(Page page) {
         try {
             return page.locator(BossSelectors.MESSAGE_SELF).count();
         } catch (Exception e) {
+            log.debug("读取本人消息条数失败: {}", e.getMessage());
             return 0;
         }
     }
@@ -535,8 +666,16 @@ public class BossAdapter implements PlatformAdapter {
             }
             List<UnreadThread> out = new ArrayList<>();
             Locator items = page.locator(BossSelectors.CHAT_LIST_ITEM);
-            int count = Math.min(items.count(), 30);
-            for (int i = 0; i < count; i++) {
+            // 上限可配置（V6）。写死数字时，超出部分的会话既不回复也不报错 ——
+            // 列表整页渲染、DOM 里本来就有全部的人，漏掉纯属「读到一半停下」。
+            UnreadScanLimit.Plan plan = UnreadScanLimit.plan(
+                    items.count(), configStore.unreadScanLimit(PLATFORM));
+            if (plan.truncated()) {
+                log.warn("聊天列表有 {} 个会话，超过本轮扫描上限 {}，排在其后的 {} 个本轮不会被发现"
+                                + "（不回复、不报错）。需要时调大「平台配置 → 未读列表扫描上限」",
+                        plan.total(), plan.limit(), plan.skipped());
+            }
+            for (int i = 0; i < plan.take(); i++) {
                 try {
                     Locator item = items.nth(i);
                     // 必须与 openThread 比较时用同一个归一化函数（nameOf）。两边口径不同

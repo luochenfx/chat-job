@@ -479,7 +479,9 @@ P5 单独列出来的原因：前置条件自检时「真发送」没有验证�
 
 **两个遗留问题（不在 P1 范围内，需单独裁决）**：
 
-1. **只扫前 30 条**：`listUnreadThreads` 里 `Math.min(items.count(), 30)`，实测列表有 35 条 —— 排在 30 名之后的会话永远不会被发现，且没有任何日志。任务表解决的是「发现了但处理失败」，解决不了「压根没发现」。
+1. ~~**只扫前 30 条**~~ **已修（2026-10-29）**：`listUnreadThreads` 里 `Math.min(items.count(), 30)`，实测列表有 35 条 —— 排在 30 名之后的会话永远不会被发现，且没有任何日志。任务表解决的是「发现了但处理失败」，解决不了「压根没发现」。
+
+   修法不是把 30 改大，而是让它成为配置项：`platform_config.unread_scan_limit`（V6，默认 100、上限 500），并把「本轮读多少条」从 Playwright 调用中间抽成纯函数 `UnreadScanLimit.plan(total, limit)`（有单测覆盖 35 条 / 30 条漏 5 条这一现场）。上限本身保留 —— 列表异常膨胀时一轮值守不能吃掉整个扫描节奏 —— 但**触发时必须留证据**：`plan.truncated()` 是唯一信号，`BossAdapter` 在截断时打 warn 并报出「总条数 / 上限 / 被挡在门外的条数」。即把「静默漏人」换成「可见的漏人」。控制台入口在「平台配置 → 配额与节奏 → 未读列表扫描上限」。
 2. ~~**`DRY_RUN` 不防护值守发送**~~ **已修（2026-10-29）**：`RunService` 里 `deliver` 有 `DRY_RUN` 分支（不实际投递），但 `unreadWatcher.sweep(...)` 在同一个循环里无条件调用，命中规则时照样 `sendText` —— 用演练模式验证重试链，会给真实 HR 发消息。P3 接 AI 之后更危险。
 
    修法不是补 `if`，而是给 `UnreadWatcher` 加一条**独立的演练支路** `sweepDryRun`：方法体里没有 `sendText`、没有 `replyStore.log`、没有 `markOwnReply`、没有任何任务表写操作，所以「演练不发消息」在结构上成立，不依赖后续维护者的记性。`sweep(...)` 多一个 `boolean dryRun` 参数，且**排在 `ai_reply_enabled` 判断之前**（演练与开关无关）。
@@ -501,10 +503,28 @@ P5 单独列出来的原因：前置条件自检时「真发送」没有验证�
    测试守门：`UnreadWatcherTest` 新增 4 个用例，断言「一条没发 + `reply_log`/`unread_task`/`conversation` 三张表一行没写 + 冷却为空 + `replied=0`」，把上述结构钉住。
 
 
-### 4.3 测试
+**P2 实施记录（2026-10-29，已完成）**
 
+| 项 | 落地 |
+|---|---|
+| 校验器 | 新增 `watcher/ReplyGuard.java`，纯静态函数，词表与敏感词由 `GuardOptions` 传入，不读库、不碰浏览器 |
+| 配置落点 | `V7__ai_reply_tone.sql` 只加 `ai_reply_tone_check_enabled` / `ai_reply_tone_terms` 两列；其余 6 个 `ai_config` 字段仍留给 P3 / P4 |
+| 读取 | `ConfigStore.toneCheckEnabled()` / `toneTerms()` / `parseToneTerms()`（去空行、去空白、去重、保序） |
+| 控制台 | P2 不动。8 个配置项的界面与 `GET/PUT /api/config/ai` 扩展一起在 P4 做，避免接口先出现半成品字段 |
+
+三处实施结论：
+
+1. **结构规则必须拿原文判，不能拿归一化后的文本判。** `TextNormalizer` 会把换行折叠成空格，`^` 行首与 `：\n` 这两条判据在归一化之后全部失效 —— 小标题和列表一条都拦不住，而日志上看起来是「检查通过」。词表匹配仍走归一化（大小写、全角），结构判定走原文，分界写在注释里。
+2. **长度超限暂不映射为 `BLOCKED_*` action。** §3.7 只给联系方式 / 薪资 / AI 味定了三个 `BLOCKED_*`，长度没有对应值，但「超长且截不动」确实要整条不发。P2 只让 `Verdict.rejection()` 报 `TOO_LONG`，action 映射留给 P3 —— 那时才有 `reply_log` 的写入点，现在不发明 spec 外的枚举值。
+3. **空词表 = 用默认，不是关闭。** `tone_check_enabled` 管开关、`tone_terms` 管内容，所以「清空词表」只会回落到 31 条默认值，不会把检查关掉（有单测钉住）。
+
+单测 `ReplyGuardTest` 共 53 个用例：常规 6 类 + AI 味三组（31 条默认词参数化逐条命中、自定义词表整体替换、`tone_check_enabled=0` 放行且不影响前三检）+ 结构规则 5 条 + 3 条口语反例 + 词表解析。
+
+### 4.3 测试
 - `ReplyRuleEngine` 现有单测必须全绿且**不改判定顺序**。
-- `ReplyGuard`：表驱动覆盖常规 6 类（正常、超长、手机号、微信、薪资、空串）+ AI 味三组 —— ① `DEFAULT_TONE_TERMS` 每条至少一个命中用例（31 条都要有，参数化生成，防止加词不测）；② 自定义词表整体替换默认（旧默认词不再命中）；③ `tone_check_enabled=0` 时套话直接放行。另加 3 条正常口语反例（含 `感谢`、`您好`、`我将简历发您`）必须通过，否则说明词表过宽。
+- `ReplyGuard`：表驱动覆盖常规 6 类（正常、超长、手机号、微信、薪资、空串）+ AI 味三组 —— ① `DEFAULT_TONE_TERMS` 每条至少一个命中用例（31 条都要有，参数化生成，防止加词不测）；② 自定义词表整体替换默认（旧默认词不再命中）；③ `tone_check_enabled=0` 时套话直接放行。另加 3 条正常口语反例（含 `感谢`、`您好`、`我把简历发您看看`）必须通过，否则说明词表过宽。
+
+  > 「我将简历发您」原本也列在这三条反例里，但它与 §3.7 默认词表中的 `我将` 直接冲突 —— 两者不可能同时成立。P2 实施时的裁决：**保留词表、把这句话记为已知误杀**（§3.7 已说明 `我将` 是留着观察的边界项），并单独一条用例断言它会被拦，等真实的 `BLOCKED_TONE` 样本决定删不删词。删词是安全的单向操作。
 - `AiReplier`：用 hand-written fake 的 `HttpClient`（不引入 mock 框架），覆盖 200 正常、非 200、超时、非法 JSON、`skip=true` 五种；另加两例 —— `skipReason` 给枚举外的值时必须归一化为 `LOW_CONFIDENCE`，`ai_reply_style` 为空串时 prompt 里必须出现 `DEFAULT_STYLE` 文案。
 - `UnreadTaskStore`：覆盖「同会话重复落任务不堆积」「第 4 次失败不再重试」「DONE 后可再建新任务」「手动重试把 `attempt_count` 归零并回到 PENDING」「非 `GAVE_UP` 的重试被拒绝」。
 - `WatcherStatsTest`：四档状态的边界 —— 阈值 0 → `DISABLED`；总数 < min_sample → `INSUFFICIENT`（**不能是 `OK`**）；占比等于阈值 → `OK`（用 `>` 而非 `>=`）；占比超阈值 → `ALERT`。另测分母只计入 `reply_source='AI'`，混入 `TEMPLATE` 后占比不变。

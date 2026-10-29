@@ -22,5 +22,9 @@ public class AiConfigEntity {
     private Integer collectEffectMetrics;
     /** 值守 AI 回复总开关。0 = 值守走改造前那条路径，逐行一致。 */
     private Integer aiReplyEnabled;
+    /** AI 味检查开关（出站四检的第四检）。默认 1 */
+    private Integer aiReplyToneCheckEnabled;
+    /** AI 味词表，换行分隔。空串 = 用 ReplyGuard.DEFAULT_TONE_TERMS，不是「关闭检查」 */
+    private String aiReplyToneTerms;
     private String updatedAt;
 }

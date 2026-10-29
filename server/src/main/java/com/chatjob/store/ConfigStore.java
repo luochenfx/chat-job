@@ -17,8 +17,10 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /** 配置读写。所有"单行表"的默认值都在这里兜底，避免空库启动后处处判空。 */
 @Slf4j
@@ -30,6 +32,15 @@ public class ConfigStore {
     /** 值守时段默认值，与 V4 迁移里的列默认值保持一致 */
     public static final String DEFAULT_DUTY_START = "09:00";
     public static final String DEFAULT_DUTY_END = "22:00";
+
+    /** 未读列表一轮扫描条数的默认值，与 V6 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_UNREAD_SCAN_LIMIT = 100;
+
+    /**
+     * 未读列表扫描条数的安全上限。不是业务限制，而是防止列表异常膨胀时
+     * 一轮值守把整个扫描节奏吃掉 —— 每条要读 3 次 DOM，500 条已经是几秒到十几秒。
+     */
+    public static final int MAX_UNREAD_SCAN_LIMIT = 500;
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -113,6 +124,7 @@ public class ConfigStore {
         created.setDailyEvalLimit(150);
         created.setScrollRoundLimit(300);
         created.setCombinationTimeLimitSec(1200);
+        created.setUnreadScanLimit(DEFAULT_UNREAD_SCAN_LIMIT);
         created.setRepeatChatEnabled(0);
         created.setRepeatChatMessages(writeList(DEFAULT_REPEAT_MESSAGES));
         created.setResumeImageEnabled(0);
@@ -133,6 +145,29 @@ public class ConfigStore {
         }
     }
 
+    /**
+     * 值守时一轮最多读多少个会话项。
+     *
+     * <p>读之前必须过这一层，调用方拿到的永远是合法值 —— 也好过让每个调用点各写一遍
+     * {@code null} 判断，然后漏掉一处。
+     */
+    public int unreadScanLimit(String platform) {
+        return clampUnreadScanLimit(platformConfig(platform).getUnreadScanLimit());
+    }
+
+    /**
+     * 扫描条数归一。
+     *
+     * <p>{@code null} / 小于 1 一律按默认值处理，而<b>不是</b>按「一条都不读」处理：
+     * 后者会让整个值守静默空转，正是这个配置项要避免的失败模式。
+     */
+    public static int clampUnreadScanLimit(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_UNREAD_SCAN_LIMIT;
+        }
+        return Math.min(configured, MAX_UNREAD_SCAN_LIMIT);
+    }
+
     // ------------------------------------------------------------ AI 配置
 
     public AiConfigEntity aiConfig() {
@@ -151,6 +186,8 @@ public class ConfigStore {
         created.setAiTimeoutSeconds(20);
         created.setCollectEffectMetrics(0);
         created.setAiReplyEnabled(0);
+        created.setAiReplyToneCheckEnabled(1);
+        created.setAiReplyToneTerms("");
         created.setUpdatedAt(now());
         aiConfigMapper.insert(created);
         log.info("已创建 AI 配置默认值");
@@ -183,6 +220,45 @@ public class ConfigStore {
     public List<String> repeatMessages(PlatformConfigEntity cfg) {
         List<String> list = readList(cfg.getRepeatChatMessages());
         return list.isEmpty() ? DEFAULT_REPEAT_MESSAGES : list;
+    }
+
+    // ------------------------------------------------------------ 出站校验（P2）
+
+    /**
+     * AI 味检查开关。{@code null} 按开处理 —— 列有 {@code NOT NULL DEFAULT 1}，
+     * 真读到 null 只可能是实体刚构造还没落库，此时「默认开着」比「默认关着」安全。
+     */
+    public boolean toneCheckEnabled() {
+        Integer v = aiConfig().getAiReplyToneCheckEnabled();
+        return v == null || v == 1;
+    }
+
+    /**
+     * AI 味词表。空结果表示「没配，用代码里的默认 31 条」，由 {@code ReplyGuard} 兜底 ——
+     * 默认值只有一份，放在校验器那一侧，控制台要展示时也是从那里取。
+     */
+    public List<String> toneTerms() {
+        return parseToneTerms(aiConfig().getAiReplyToneTerms());
+    }
+
+    /**
+     * 解析换行分隔的词表：去空行、去首尾空白、去重（保持输入顺序）。
+     *
+     * <p>去重不是洁癖：同一行粘两遍在整串匹配下没有额外作用，但会让「当前生效 N 条」这个
+     * 数字比实际大，用户会以为检查覆盖得更多。
+     */
+    public static List<String> parseToneTerms(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (String line : raw.split("\\R")) {
+            String term = line.strip();
+            if (!term.isEmpty()) {
+                seen.add(term);
+            }
+        }
+        return new ArrayList<>(seen);
     }
 
     // ------------------------------------------------------------ 提供商

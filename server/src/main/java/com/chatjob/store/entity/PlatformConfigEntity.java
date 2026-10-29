@@ -31,6 +31,8 @@ public class PlatformConfigEntity {
     private Integer dailyEvalLimit;
     private Integer scrollRoundLimit;
     private Integer combinationTimeLimitSec;
+    /** 值守时一轮最多读多少个会话项。原先写死 30，超出部分静默漏扫（V6） */
+    private Integer unreadScanLimit;
     private Integer repeatChatEnabled;
     private String repeatChatMessages;
     private Integer resumeImageEnabled;

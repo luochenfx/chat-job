@@ -230,7 +230,7 @@
 
       <div class="card">
         <h2>配额与节奏</h2>
-        <p class="hint">三个上限各管一件事：投递管产出与风险、评估管成本与暴露、轮数只管防死循环</p>
+        <p class="hint">四个上限各管一件事：投递管产出与风险、评估管成本与暴露、轮数只管防死循环、未读扫描管值守能看到多少人</p>
         <div class="grid cols-3">
           <div class="field">
             <label>日投递配额</label>
@@ -252,6 +252,13 @@
           <div class="field">
             <label>单组合时长上限（秒）</label>
             <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" />
+          </div>
+          <div class="field">
+            <label>未读列表扫描上限（条）</label>
+            <input v-model.number="platform.unreadScanLimit" type="number" min="1" max="500" />
+            <div class="desc">
+              一轮值守最多看多少个会话。曾经写死 30 条：列表第 31 个之后的人永远收不到回复，也不报错。超出会打警告日志
+            </div>
           </div>
         </div>
       </div>
@@ -366,6 +373,7 @@ const platform = reactive<any>({
   dailyEvalLimit: 150,
   scrollRoundLimit: 300,
   combinationTimeLimitSec: 1200,
+  unreadScanLimit: 100,
   repeatChatEnabled: false,
   repeatChatMessages: [],
   dutyStartTime: '09:00',
