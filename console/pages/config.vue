@@ -152,8 +152,9 @@
             <input v-model.number="ai.jdMaxChars" type="number" min="500" max="20000" />
           </div>
           <div class="field">
-            <label>单次超时（秒）</label>
+            <label>判定单次超时（秒）</label>
             <input v-model.number="ai.aiTimeoutSeconds" type="number" min="5" max="120" />
+            <div class="desc">投递判定与招呼语的调用超时，与下方值守回复的超时是两件事</div>
           </div>
           <div class="field">
             <label>效果采集</label>
@@ -164,9 +165,67 @@
           </div>
         </div>
 
-        <div class="divider"></div>
-        <button class="btn primary" :disabled="saving" @click="saveAi">保存 AI 配置</button>
       </div>
+
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div>
+            <h2>值守 AI 回复</h2>
+            <p class="hint">
+              HR 发来新消息时由 AI 生成回复。关闭时这部分整条链路不动作，值守行为与改造前完全一致
+            </p>
+          </div>
+          <span class="tag" :class="ai.aiReplyEnabled ? 'ok' : ''">
+            {{ ai.aiReplyEnabled ? '运行中' : '已关闭' }}
+          </span>
+        </div>
+
+        <label class="switch">
+          <input v-model="ai.aiReplyEnabled" type="checkbox" />
+          <span>开启值守 AI 回复</span>
+        </label>
+
+        <div class="field" style="margin-top: 16px">
+          <label>回复风格约束</label>
+          <textarea
+            v-model="ai.aiReplyStyle"
+            :placeholder="aiStyleDefault"
+            style="min-height: 150px"
+          />
+          <div class="desc">
+            <template v-if="ai.aiReplyStyle && ai.aiReplyStyle.trim()">
+              当前使用自定义风格（{{ ai.aiReplyStyle.trim().length }} 字）。改风格不等于收紧了出口，
+              能不能发仍由出站校验决定
+            </template>
+            <template v-else>
+              留空则使用默认风格。默认内容已显示在输入框的灰字里，共 {{ aiStyleDefault.length }} 字
+            </template>
+            <button class="btn sm" style="margin-left: 8px" @click="restoreStyle">填入默认</button>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label>单次生成超时（秒）</label>
+            <input v-model.number="ai.aiReplyTimeoutSeconds" type="number" min="1" max="120" />
+            <div class="desc">
+              模型迟迟不回时，等多久就放弃这条。超时会进重试链，不是静默跳过。
+              <template v-if="effectiveReplyTimeout && effectiveReplyTimeout < ai.aiReplyTimeoutSeconds">
+                <b>实际生效 {{ effectiveReplyTimeout }} 秒</b> —— 当前提供商的超时更短，会先断开
+              </template>
+            </div>
+          </div>
+          <div class="field">
+            <label>单轮 AI 回复上限（条）</label>
+            <input v-model.number="ai.aiReplyMaxPerSweep" type="number" min="1" max="10" />
+            <div class="desc">
+              一轮值守最多花几次模型调用。超出的未读退回待处理，不消耗重试次数，下一轮继续
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn primary" :disabled="saving" @click="saveAi">保存 AI 配置</button>
     </section>
 
     <!-- ---------------------------------------------------- 平台配置 -->
@@ -353,8 +412,16 @@ const ai = reactive<any>({
   templateGreeting: '',
   jdMaxChars: 4000,
   aiTimeoutSeconds: 20,
-  collectEffectMetrics: false
+  collectEffectMetrics: false,
+  aiReplyEnabled: false,
+  aiReplyStyle: '',
+  aiReplyTimeoutSeconds: 8,
+  aiReplyMaxPerSweep: 5
 })
+
+// 默认风格由后端提供唯一一份（AiReplier.DEFAULT_STYLE），前端只负责展示，
+// 不在前端复制文案 —— 两处各写一份必然漂移
+const aiStyleDefault = ref('')
 
 const platform = reactive<any>({
   cities: [],
@@ -378,6 +445,17 @@ const platform = reactive<any>({
   repeatChatMessages: [],
   dutyStartTime: '09:00',
   dutyEndTime: '22:00'
+})
+
+// 回复超时在 AiReplier 里还要被提供商超时压一道（取较小值）。
+// 只信输入框就会以为「设 120 就是 120」，所以把算完的真实值显示出来
+const effectiveReplyTimeout = computed(() => {
+  const configured = Number(ai.aiReplyTimeoutSeconds)
+  if (!Number.isInteger(configured) || configured < 1) return null
+  const p = (providers.value || []).find((x: any) => String(x.id) === String(ai.providerId))
+  if (!p) return null
+  const providerTimeout = Number(p.timeoutSeconds) || 60
+  return Math.min(configured, Math.max(1, providerTimeout))
 })
 
 // 值守时段的语义有三种（当天 / 跨天 / 全天），输入完直接把结果说出来，避免用户靠猜
@@ -412,6 +490,10 @@ async function loadAll() {
     ])
     providers.value = p || []
     Object.assign(ai, a || {})
+    // 后端可能回 null（列可空）。textarea 绑 null 会渲染成空但状态不一致，
+    // 统一归一化成空串 —— 空串的语义是「没配」，与「关闭」无关
+    ai.aiReplyStyle = a?.aiReplyStyle ?? ''
+    aiStyleDefault.value = (a?.aiReplyStyleDefault ?? '').trim()
     Object.assign(platform, c || {})
     blacklist.value = b || []
     await loadDictionary()
@@ -511,11 +593,43 @@ async function deleteProvider(p: any) {
   }
 }
 
+/** 把默认风格填进输入框，不落库 —— 保存动作留给用户，与「点了就改配置」区分开 */
+function restoreStyle() {
+  if (!aiStyleDefault.value) {
+    show('默认风格尚未加载，请刷新页面重试', true)
+    return
+  }
+  ai.aiReplyStyle = aiStyleDefault.value
+}
+
 async function saveAi() {
+  // 数字框被清空时 v-model.number 会变成空串，直接 PUT 过去是 400。
+  // 不去猜默认值填回去：空着就是用户没填，拦住并说清楚比静默改值诚实
+  const timeout = Number(ai.aiReplyTimeoutSeconds)
+  const maxPerSweep = Number(ai.aiReplyMaxPerSweep)
+  if (!Number.isInteger(timeout) || timeout < 1) {
+    show('单次生成超时要填 ≥1 的整数', true)
+    return
+  }
+  if (!Number.isInteger(maxPerSweep) || maxPerSweep < 1) {
+    show('单轮 AI 回复上限要填 ≥1 的整数', true)
+    return
+  }
+
   saving.value = true
   try {
-    await call('/config/ai', { method: 'PUT', body: ai })
+    await call('/config/ai', {
+      method: 'PUT',
+      body: {
+        ...ai,
+        aiReplyStyle: ai.aiReplyStyle ?? '',
+        aiReplyTimeoutSeconds: timeout,
+        aiReplyMaxPerSweep: maxPerSweep
+      }
+    })
     show('AI 配置已保存')
+    // 回读一次：超时上限 120、回复上限 10 这类 clamp 在后端做，前端不该假装自己知道结果
+    await loadAll()
   } catch (e: any) {
     show(e.message, true)
   } finally {

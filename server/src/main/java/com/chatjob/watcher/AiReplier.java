@@ -140,8 +140,11 @@ public class AiReplier {
         List<ChatMessage> recent = tail(input.recent(), CONTEXT_SIZE);
         String prompt = render(input, style, recent);
 
-        int configured = ai.getAiReplyTimeoutSeconds() == null ? 8 : ai.getAiReplyTimeoutSeconds();
+        // 默认值与上限只走 ConfigStore 那一份：这里若自己写 `== null ? 8`，
+        // 改默认值时两处必然漂移，而且绕过 120 秒上限
+        int configured = ConfigStore.clampAiReplyTimeoutSeconds(ai.getAiReplyTimeoutSeconds());
         int providerTimeout = provider.getTimeoutSeconds() == null ? 60 : provider.getTimeoutSeconds();
+        // 再被提供商超时压一道：模型侧 30 秒断连时，这里写 120 也没用
         int timeout = Math.min(Math.max(1, configured), Math.max(1, providerTimeout));
 
         long started = System.currentTimeMillis();
