@@ -15,7 +15,7 @@ public class RunEntity {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String platform;
-    /** CREATED|RUNNING|PAUSED|COMPLETED|QUOTA_REACHED|CIRCUIT_OPEN|LOGIN_LOST|CANCELLED|FAILED */
+    /** CREATED|WAITING_DUTY|RUNNING|PAUSED|COMPLETED|QUOTA_REACHED|CIRCUIT_OPEN|LOGIN_LOST|CANCELLED|FAILED */
     private String status;
     /** NORMAL | DRY_RUN */
     private String mode;

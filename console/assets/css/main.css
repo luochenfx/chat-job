@@ -487,6 +487,12 @@ td.num {
   letter-spacing: 0.01em;
 }
 
+/* 与 .notice 共用版式，只换左边框颜色：这档说的是「这次跑不起来」，
+   但按钮仍然可用——所以不整块铺成红底，避免读成「出错了」。 */
+.notice.warn {
+  border-left-color: var(--warn);
+}
+
 .notice-body,
 .notice-foot {
   color: var(--ink-2);

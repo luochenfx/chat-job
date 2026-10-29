@@ -6,6 +6,9 @@ export interface StreamEvent {
 
 const EVENT_TYPES = [
   'run.started',
+  // 挂起与唤醒：白名单漏一个是静默失效，前端只会「什么都没发生」
+  'run.waiting',
+  'run.awakened',
   'combination.started',
   'job.evaluated',
   'delivery.updated',

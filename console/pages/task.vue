@@ -4,6 +4,8 @@
       <div>
         <h1>任务</h1>
         <p>一个 Run = 一串搜索组合；断点记到卡片索引，重启后从这里续跑</p>
+        <!-- 时段只决定「什么时候开始跑」，不再是启动门禁：窗口内说到点时刻，等待态说还要等多久 -->
+        <p v-if="dutyLine" class="hint" style="margin-bottom: 0">{{ dutyLine }}</p>
       </div>
       <div class="row">
         <select v-model="mode" style="width: 170px" :disabled="active">
@@ -13,10 +15,29 @@
         <button v-if="!active" class="btn primary" :disabled="busy" @click="start">启动</button>
         <template v-else>
           <button v-if="run.status === 'PAUSED'" class="btn" :disabled="busy" @click="resume">继续</button>
-          <button v-else class="btn" :disabled="busy" @click="pause">暂停</button>
-          <button class="btn danger" :disabled="busy" @click="cancel">停止</button>
+          <!-- 等待态没有可暂停的东西，只能取消；取消会直接落库，不等窗口打开 -->
+          <button v-else-if="run.status === 'WAITING_DUTY'" class="btn danger" :disabled="busy" @click="cancel">
+            取消等待
+          </button>
+          <template v-else>
+            <button class="btn" :disabled="busy" @click="pause">暂停</button>
+            <button class="btn danger" :disabled="busy" @click="cancel">停止</button>
+          </template>
         </template>
       </div>
+    </div>
+
+    <!-- 窗口外提示：启动按钮照常可点，这一轮不会立刻执行，而是排到窗口打开时自动开始 -->
+    <div v-if="dutyWarning" class="notice warn">
+      <div class="notice-title">现在不在值守时段（{{ duty.window }}）</div>
+      <p class="notice-body">
+        点启动不会立刻执行：这条任务会挂在队列里等窗口打开，{{ duty.hint }}。
+        挂起期间不打开浏览器、不发消息、也不动未读红点，期间可以随时「取消等待」。
+        <template v-if="duty.opensInMinutes > 0">预计还要等 {{ waitText(duty.opensInMinutes) }}。</template>
+      </p>
+      <p class="notice-foot">
+        想在窗口外立刻验证流程，切到<b>演练模式</b>：它不受时段限制，代价是不发任何消息。
+      </p>
     </div>
 
     <!-- 演练说明：启动前与运行中都必须可见。运行中尤其重要 ——
@@ -141,11 +162,27 @@ const combinations = ref<any[]>([])
 const logs = ref<any[]>([])
 const mode = ref('NORMAL')
 const busy = ref(false)
+// 服务端算好的时段状态（跨天/全天三种写法的判定只在后端做一次，界面不重复实现）
+const duty = ref<any>(null)
 let lastLogId = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let currentRunId: number | null = null
 
-const active = computed(() => run.value && ['RUNNING', 'PAUSED', 'CREATED'].includes(run.value.status))
+const active = computed(() => run.value
+  && ['RUNNING', 'PAUSED', 'WAITING_DUTY', 'CREATED'].includes(run.value.status))
+// 窗口外 + 正常模式 + 还没跑：点启动不会立刻执行，而是排到窗口打开（见模板里的 warn 块）。
+// 演练模式不发消息，本来就是窗口外唯一能立刻验证流程的方式，所以不提示。
+const dutyWarning = computed(() =>
+  duty.value && !duty.value.open && mode.value === 'NORMAL' && !active.value)
+
+// 分钟数说成人话：隔夜的任务是「13 小时 20 分钟」，不是「800 分钟」
+function waitText(minutes: number) {
+  const total = Math.max(0, Math.round(minutes))
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  if (!h) return `${m} 分钟`
+  return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+}
 // 说明块跟随「当前生效的模式」：没启动时看下拉（运行中下拉被禁用），跑起来后看 Run 自己的 mode ——
 // 只读下拉的话，「上一轮就是演练、现在还在跑」这种情况会被漏掉
 const dryRunVisible = computed(() => (
@@ -153,10 +190,27 @@ const dryRunVisible = computed(() => (
 ) === 'DRY_RUN')
 // 计数格跟随「这一轮 Run 的模式」：跑完之后 active 变 false，但那一轮确实一条没投，仍要显示 —
 const runIsDryRun = computed(() => run.value?.mode === 'DRY_RUN')
+
+// 头部那一行：等待态说「还要等多久」，窗口内说「还能跑多久」，其余不占地方。
+// 判定放这里而不是模板里，是因为它要同时看 run 状态、模式与时段三处。
+const dutyLine = computed(() => {
+  if (run.value?.status === 'WAITING_DUTY') {
+    const minutes = duty.value?.opensInMinutes
+    return minutes > 0
+      ? `已挂起，${waitText(minutes)}后自动开始（值守时段 ${duty.value.window}）`
+      : '已挂起，等值守时段开始后自动执行'
+  }
+  if (duty.value?.open && mode.value === 'NORMAL' && !dryRunVisible.value) {
+    return duty.value.minutesLeft >= 0
+      ? `值守时段 ${duty.value.window}，还能跑约 ${waitText(duty.value.minutesLeft)}`
+      : `值守时段 ${duty.value.window}，${duty.value.hint}`
+  }
+  return ''
+})
 const statusClass = computed(() => {
   const s = run.value?.status
   if (s === 'COMPLETED' || s === 'QUOTA_REACHED') return 'ok'
-  if (s === 'RUNNING' || s === 'PAUSED') return 'warn'
+  if (s === 'RUNNING' || s === 'PAUSED' || s === 'WAITING_DUTY') return 'warn'
   if (s === 'FAILED' || s === 'CIRCUIT_OPEN' || s === 'LOGIN_LOST') return 'danger'
   return ''
 })
@@ -180,6 +234,10 @@ function describe(e: { type: string; data: any }) {
   switch (e.type) {
     case 'run.started':
       return `任务启动（${modeText(d.mode)}）`
+    case 'run.waiting':
+      return `不在值守时段（${d.window}，${d.at}），已挂起等待`
+    case 'run.awakened':
+      return `值守时段已到（${d.at}），开始执行挂起的任务`
     case 'combination.started':
       return `开始组合 #${d.seq + 1} ${d.city || '不限'} / ${d.keyword || '不限'}`
     case 'job.evaluated':
@@ -211,6 +269,7 @@ async function refresh() {
   try {
     const cur = await call('/runs/current')
     run.value = cur.run
+    duty.value = cur.duty || null
     combinations.value = cur.combinations || []
     if (cur.run && cur.run.id !== currentRunId) {
       currentRunId = cur.run.id
@@ -237,7 +296,12 @@ async function start() {
   busy.value = true
   try {
     await call('/runs', { method: 'POST', body: { mode: mode.value } })
-    show('任务已启动')
+    // 窗口外启动不再报错，而是挂起：toast 必须说「排到几点」，否则人会以为任务已经跑起来了
+    if (duty.value && !duty.value.open && mode.value === 'NORMAL') {
+      show(`已挂起，${duty.value.hint}`)
+    } else {
+      show('任务已启动')
+    }
     await refresh()
   } catch (e: any) {
     show(e.message, true)

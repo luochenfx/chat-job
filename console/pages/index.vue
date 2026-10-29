@@ -56,7 +56,9 @@
           </div>
           <div class="row" style="justify-content: space-between">
             <span>任务</span>
-            <span class="tag" :class="active ? 'warn' : ''">{{ active ? '运行中' : '空闲' }}</span>
+            <span class="tag" :class="active ? 'warn' : ''">
+              {{ run?.status === 'WAITING_DUTY' ? '等待时段' : (active ? '运行中' : '空闲') }}
+            </span>
           </div>
           <div v-if="status && !status.driverAvailable" class="hint-inline" style="color: var(--danger)">
             {{ status.driverMessage }}
@@ -130,7 +132,8 @@ const cfg = ref<any>({ dailyDeliveryQuota: 30, dailyEvalLimit: 150 })
 const busy = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
-const active = computed(() => run.value && ['RUNNING', 'PAUSED', 'CREATED'].includes(run.value.status))
+const active = computed(() => run.value
+  && ['RUNNING', 'PAUSED', 'WAITING_DUTY', 'CREATED'].includes(run.value.status))
 const quota = computed(() => cfg.value?.dailyDeliveryQuota ?? 30)
 const evalLimit = computed(() => cfg.value?.dailyEvalLimit ?? 150)
 
@@ -138,6 +141,7 @@ const runStatusText = computed(() => {
   if (!run.value) return '—'
   const map: Record<string, string> = {
     CREATED: '准备中',
+    WAITING_DUTY: '等待时段',
     RUNNING: '运行中',
     PAUSED: '已暂停',
     COMPLETED: '已完成',

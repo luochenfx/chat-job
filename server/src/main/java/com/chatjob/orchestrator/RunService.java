@@ -24,6 +24,9 @@ import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
 import com.chatjob.watcher.UnreadWatcher;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
@@ -35,11 +38,12 @@ import java.util.Map;
 /**
  * Run 生命周期与主循环。
  *
- * <p>三条硬规则，任何改动都不能破坏：
+ * <p>四条硬规则，任何改动都不能破坏：
  * <ol>
- *   <li>同一时刻只有一个 RUNNING（DB 部分唯一索引 + 内存标志双保险）。</li>
+ *   <li>同一时刻只有一个未终结的 Run（DB 部分唯一索引 + 内存标志双保险），等待值守时段的那条也算。</li>
  *   <li>终止条件按优先级判：投递配额 → 评估上限 → 组合耗尽；熔断优先于全部。</li>
  *   <li>任何异常都终止 Run，不重试穿越。绕过一次验证码的代价远大于当天少投几十个岗。</li>
+ *   <li>窗口外启动 = 挂起等待，不是收工：状态落库、由调度唤醒，进程重启也不丢（见 {@link #wakeWaitingRuns()}）。</li>
  * </ol>
  */
 @Slf4j
@@ -102,17 +106,15 @@ public class RunService {
     public synchronized RunEntity start(String mode) {
         String platform = adapter.platform();
         runStore.active(platform).ifPresent(run -> {
+            if (RunStatus.WAITING_DUTY.name().equals(run.getStatus())) {
+                throw new IllegalStateException("已有一条任务在等待值守时段（id=" + run.getId()
+                        + "），要重新启动请先取消它");
+            }
             throw new IllegalStateException("已有进行中的任务（id=" + run.getId() + "，" + run.getStatus()
                     + "），请先停止或等待其结束");
         });
         if (worker != null && worker.isAlive()) {
             throw new IllegalStateException("上一个任务的线程尚未退出，请稍候");
-        }
-        // fail-closed 前置到启动这一刻：driver 不可用时直接拒绝，而不是建一个 Run
-        // 让它在后台线程里失败 —— 后者会让控制台先看到"已启动"再看到"失败"，误导操作。
-        PatchrightDriver.Status driver = patchright.inspect();
-        if (!driver.available()) {
-            throw new IllegalStateException("拒绝启动：" + driver.message());
         }
 
         PlatformConfigEntity cfg = configStore.platformConfig(platform);
@@ -122,21 +124,23 @@ public class RunService {
             throw new IllegalStateException("搜索条件为空：请先在平台配置里填写城市与关键词");
         }
 
-        // 值守时段在启动这一刻就判：窗口外根本不该产生外发动作，放进来只会先发错一条再收工。
-        // 演练模式不发送任何消息，所以任何时间都放行，方便半夜验证流程。
         String effectiveMode = mode == null ? "NORMAL" : mode;
-        if (!"DRY_RUN".equals(effectiveMode)) {
-            DutyWindow window = DutyWindow.of(cfg);
-            LocalTime now = LocalTime.now();
-            if (!window.contains(now)) {
-                // 提示里必须带上代价：「不会发消息」容易被理解成「什么都不会发生」，
-                // 而演练会真实浏览平台、真实调用 AI，并清掉未读红点。
-                throw new IllegalStateException("当前 " + DutyWindow.format(now) + " 不在值守时段 "
-                        + window.describe() + " 内，" + window.nextOpenHint(now)
-                        + "；只想验证流程可用演练模式：不发送任何消息，但会真实浏览平台并清掉未读红点");
+        // 挂起的 Run 这一刻不开浏览器，所以不在这里校验 driver —— 否则「晚上想排明早的任务」
+        // 会因为此刻 driver 起不来而被直接拒掉。真正的校验留到唤醒后的 runLoop 入口。
+        boolean parked = !"DRY_RUN".equals(effectiveMode) && !DutyWindow.of(cfg).contains(LocalTime.now());
+
+        if (!parked) {
+            // fail-closed 前置到启动这一刻：driver 不可用时直接拒绝，而不是建一个 Run
+            // 让它在后台线程里失败 —— 后者会让控制台先看到"已启动"再看到"失败"，误导操作。
+            PatchrightDriver.Status driver = patchright.inspect();
+            if (!driver.available()) {
+                throw new IllegalStateException("拒绝启动：" + driver.message());
             }
         }
 
+        // 值守时段不在启动这一刻拦人：窗口外照样建 Run，但状态直接是 WAITING_DUTY，
+        // 等窗口打开由 wakeWaitingRuns() 拉起（落库 + 轮询，所以隔夜、跨重启都接得上）。
+        // 演练模式全程不发消息，本来就不受时段约束，任何时间都能完整跑一遍。
         RunEntity run = runStore.create(platform, effectiveMode);
         List<CombinationRunEntity> entities = new ArrayList<>();
         for (CombinationPlanner.Combo combo : combos) {
@@ -174,6 +178,19 @@ public class RunService {
     public synchronized void stop() {
         stopRequested = true;
         pauseRequested = false;
+        // 等待态没有线程在盯着 stopRequested（挂起时线程早已退出），不在这里直接落库，
+        // 它会一直挂到明天窗口打开才「跑起来又收工」—— 用户点停止却什么都没发生。
+        RunEntity waiting = runStore.waiting(adapter.platform()).orElse(null);
+        if (waiting != null && (worker == null || !worker.isAlive())) {
+            finish(waiting, RunStatus.CANCELLED, "CANCELLED", "用户主动停止（等待值守时段中）");
+            currentRunId = null;
+            publish(waiting, "run.finished", Map.of(
+                    "runId", waiting.getId(),
+                    "status", waiting.getStatus(),
+                    "delivered", 0,
+                    "evaluated", 0,
+                    "costSeconds", 0));
+        }
     }
 
     public RunEntity current() {
@@ -198,6 +215,12 @@ public class RunService {
         String platform = run.getPlatform();
         long startedAt = System.currentTimeMillis();
         try {
+            // 时段守卫放在最前面，连 driver 自检都不做：窗口外的 Run 只该挂起等待，
+            // 不该在等待期间自检、开浏览器，也不该用「driver 不可用」这类次要原因盖掉真正的原因。
+            if (!readyToRun(run)) {
+                return;
+            }
+
             PatchrightDriver.Status driver = patchright.inspect();
             if (!driver.available()) {
                 finish(run, RunStatus.FAILED, "DRIVER_UNAVAILABLE", driver.message());
@@ -225,6 +248,7 @@ public class RunService {
                     "platform", platform,
                     "mode", run.getMode()));
             log(run, "INFO", "任务启动，模式 " + modeLabel(run.getMode()));
+            logDutyDeadline(run);
 
             executeCombinations(run);
 
@@ -250,12 +274,16 @@ public class RunService {
             notifier.notify("run-failed", "任务异常终止", String.valueOf(e.getMessage()));
         } finally {
             long costSeconds = (System.currentTimeMillis() - startedAt) / 1000;
-            publish(run, "run.finished", Map.of(
-                    "runId", run.getId(),
-                    "status", run.getStatus(),
-                    "delivered", run.getDeliveredCount() == null ? 0 : run.getDeliveredCount(),
-                    "evaluated", run.getEvaluatedCount() == null ? 0 : run.getEvaluatedCount(),
-                    "costSeconds", costSeconds));
+            // 挂起等待的 Run 也走这里退出，但它是「还没开始」而不是「已结束」：
+            // 无条件推 run.finished 会让界面闪一条「任务结束：WAITING_DUTY」，把等待读成收工。
+            if (run.getStatus() != null && RunStatus.valueOf(run.getStatus()).isTerminal()) {
+                publish(run, "run.finished", Map.of(
+                        "runId", run.getId(),
+                        "status", run.getStatus(),
+                        "delivered", run.getDeliveredCount() == null ? 0 : run.getDeliveredCount(),
+                        "evaluated", run.getEvaluatedCount() == null ? 0 : run.getEvaluatedCount(),
+                        "costSeconds", costSeconds));
+            }
         }
     }
 
@@ -516,6 +544,113 @@ public class RunService {
     // ---------------------------------------------------------------- 工具
 
     /**
+     * 启动（或唤醒）时的时段守卫：只决定「现在能不能开跑」，不决定「能不能启动」。
+     *
+     * <p>窗口外返回 false，并把 Run 置为 {@link RunStatus#WAITING_DUTY} 挂起 —— 不是收工。
+     * 位置刻意放在打开浏览器、自检与登录探测之前：挂起期间不留任何副作用，
+     * 不浏览平台、不清未读红点、不花一次 AI 调用。
+     *
+     * @return true 表示现在就能开跑
+     */
+    private boolean readyToRun(RunEntity run) {
+        // 演练模式不发送任何消息，不受时段约束（它的副作用见 console 的演练说明块）
+        if ("DRY_RUN".equals(run.getMode())) {
+            return true;
+        }
+        DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
+        LocalTime now = LocalTime.now();
+        if (window.contains(now)) {
+            return true;
+        }
+        long waitMinutes = window.opensInMinutes(now);
+        // nextOpenHint 自带「之后才会真正执行」，这里不要再接「自动开始」，否则读成「真正执行自动开始」
+        String message = "当前 " + DutyWindow.format(now) + " 不在值守时段 " + window.describe()
+                + " 内，已挂起等待；" + window.nextOpenHint(now);
+        runStore.markWaiting(run, message);
+        log(run, "INFO", message);
+        publish(run, "run.waiting", Map.of(
+                "window", window.describe(),
+                "at", DutyWindow.format(now),
+                "opensInMinutes", waitMinutes));
+        // 挂起是用户点启动的直接后果，人就在界面前，不发企业微信通知：那条通知只会复读屏幕上已经写着的话。
+        return false;
+    }
+
+    /**
+     * 等待态的唤醒器。
+     *
+     * <p>为什么不让线程 sleep 到明天：线程活不过进程重启，而「昨晚点的启动、今早九点还在等着」
+     * 恰恰是这个功能最有价值的场景。等待态落库 + 这里每 30s 轮询一次，重启后也能接上。
+     *
+     * <p>synchronized 与 start()/stop() 同一把锁：唤醒本质上就是「替用户再点一次启动」，
+     * 必须和人工启动互斥，否则会同时起两个 worker 抢同一个浏览器档案。
+     */
+    @Scheduled(fixedDelay = 30_000, initialDelay = 15_000)
+    public synchronized void wakeWaitingRuns() {
+        if (worker != null && worker.isAlive()) {
+            return;
+        }
+        RunEntity waiting = runStore.waiting(adapter.platform()).orElse(null);
+        if (waiting == null) {
+            return;
+        }
+        DutyWindow window = DutyWindow.of(configStore.platformConfig(waiting.getPlatform()));
+        LocalTime now = LocalTime.now();
+        if (!window.contains(now)) {
+            return;
+        }
+        log(waiting, "INFO", "值守时段已到（现在 " + DutyWindow.format(now) + "），开始执行挂起的任务");
+        publish(waiting, "run.awakened", Map.of(
+                "runId", waiting.getId(),
+                "at", DutyWindow.format(now),
+                "window", window.describe()));
+        stopRequested = false;
+        pauseRequested = false;
+        dutyEnded = false;
+        currentRunId = waiting.getId();
+        worker = new Thread(() -> runLoop(waiting), "run-worker-" + waiting.getId());
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /**
+     * 进程重启后的收尾：把库里「没有任何线程持有」的 Run 标为失败。
+     *
+     * <p>单进程部署下，启动那一刻必然不持有任何线程，所以 CREATED/RUNNING/PAUSED 全是上一轮的孤儿。
+     * 不清掉它们会两处出事：uk_run_running 唯一索引挡住新 Run 的创建；active() 让用户看到
+     * 「已有进行中的任务」却找不到那个任务。等待态（WAITING_DUTY）不在此列 —— 它本来就该留着等。
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public synchronized void recoverAfterRestart() {
+        for (RunEntity run : runStore.orphaned()) {
+            finish(run, RunStatus.FAILED, "SERVICE_RESTART", "服务重启，上一轮中断；如需继续请重新启动");
+            publish(run, "run.finished", Map.of(
+                    "runId", run.getId(),
+                    "status", run.getStatus(),
+                    "delivered", run.getDeliveredCount() == null ? 0 : run.getDeliveredCount(),
+                    "evaluated", run.getEvaluatedCount() == null ? 0 : run.getEvaluatedCount(),
+                    "costSeconds", 0));
+        }
+    }
+
+    /** 启动后立刻把「这一轮能跑多久」写进日志——时段是运行时长上限，不是启动门槛 */
+    private void logDutyDeadline(RunEntity run) {
+        if ("DRY_RUN".equals(run.getMode())) {
+            log(run, "INFO", "演练模式不受值守时段约束，本轮跑到组合队列耗尽为止");
+            return;
+        }
+        DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
+        if (window.alwaysOn()) {
+            log(run, "INFO", "值守时段为全天，本轮不会因时段收工");
+            return;
+        }
+        long minutes = window.closesInMinutes(LocalTime.now());
+        String left = minutes < 0 ? "" : "（还能跑约 " + minutes + " 分钟）";
+        log(run, "INFO", "值守时段 " + window.describe() + "，到 " + DutyWindow.format(window.end())
+                + " 自动收工" + left);
+    }
+
+    /**
      * 卡片边界的值守检查。越过结束时刻就收工，不再发下一条招呼语。
      *
      * <p>为什么只在这里判：滚动卡池和投递中途都不该被时间打断——半条招呼语比晚几分钟更糟。
@@ -636,6 +771,34 @@ public class RunService {
 
     public boolean isRunning() {
         return worker != null && worker.isAlive();
+    }
+
+    /**
+     * 给控制台的时段状态。因为窗口外也允许启动（挂起等待），界面必须先说清
+     * 「现在点会立刻开跑，还是排到几点自己开始」，否则操作者不知道自己在等什么。
+     *
+     * @param open           当前是否在时段内
+     * @param hint           窗口外是「何时自动开始」，窗口内是「何时到点收工」
+     * @param minutesLeft    窗口内还能跑多久（分钟）；窗口外或全天不限为 -1
+     * @param opensInMinutes 窗口外还要等多久才开跑（分钟）；窗口内或全天不限为 -1
+     */
+    public record DutyStatus(String window, boolean open, String hint,
+                             long minutesLeft, long opensInMinutes) {
+    }
+
+    public DutyStatus dutyStatus() {
+        DutyWindow window = DutyWindow.of(configStore.platformConfig(adapter.platform()));
+        LocalTime now = LocalTime.now();
+        if (!window.contains(now)) {
+            return new DutyStatus(window.describe(), false, window.nextOpenHint(now),
+                    -1, window.opensInMinutes(now));
+        }
+        if (window.alwaysOn()) {
+            return new DutyStatus(window.describe(), true, "全天不限，不会到点收工", -1, -1);
+        }
+        return new DutyStatus(window.describe(), true,
+                "到 " + DutyWindow.format(window.end()) + " 自动收工",
+                window.closesInMinutes(now), -1);
     }
 
     public BrowserSession session() {

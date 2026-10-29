@@ -73,6 +73,8 @@ public class RunController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("run", run);
         out.put("running", runService.isRunning());
+        // 时段状态随概览一起下发：窗口外也能启动，界面需要提前说清这一轮跑不跑得起来
+        out.put("duty", runService.dutyStatus());
         List<CombinationRunEntity> combos = run == null ? List.of() : runService.combinationsOf(run.getId());
         out.put("combinations", combos);
         if (run != null) {

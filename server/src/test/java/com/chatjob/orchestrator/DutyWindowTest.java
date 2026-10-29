@@ -77,10 +77,47 @@ class DutyWindowTest {
     }
 
     @Test
-    void 窗口外给出下一次可启动的提示() {
+    void 窗口外给出下一次真正执行的提示() {
         DutyWindow w = window("09:00", "22:00");
-        assertThat(w.nextOpenHint(LocalTime.of(3, 0))).isEqualTo("今天 09:00 之后可以启动");
-        assertThat(w.nextOpenHint(LocalTime.of(23, 0))).isEqualTo("明天 09:00 之后可以启动");
+        assertThat(w.nextOpenHint(LocalTime.of(3, 0))).isEqualTo("今天 09:00 之后才会真正执行");
+        assertThat(w.nextOpenHint(LocalTime.of(23, 0))).isEqualTo("明天 09:00 之后才会真正执行");
+    }
+
+    @Test
+    void 窗口内剩余分钟用来回答还能跑多久() {
+        DutyWindow w = window("09:00", "22:00");
+        assertThat(w.closesInMinutes(LocalTime.of(9, 0))).isEqualTo(13 * 60);
+        assertThat(w.closesInMinutes(LocalTime.of(21, 30))).isEqualTo(30);
+        // 窗口外没有可跑的时间，不该算成「还剩 0 分钟」
+        assertThat(w.closesInMinutes(LocalTime.of(23, 0))).isEqualTo(-1);
+        // 全天不限没有收工时刻
+        assertThat(window("09:00", "09:00").closesInMinutes(LocalTime.of(3, 0))).isEqualTo(-1);
+    }
+
+    @Test
+    void 跨天窗口的剩余分钟补一整天才对得上() {
+        DutyWindow w = window("22:00", "06:00");
+        assertThat(w.closesInMinutes(LocalTime.of(23, 0))).isEqualTo(7 * 60);
+        assertThat(w.closesInMinutes(LocalTime.of(5, 30))).isEqualTo(30);
+        assertThat(w.closesInMinutes(LocalTime.of(12, 0))).isEqualTo(-1);
+    }
+
+    @Test
+    void 窗口外算出还要等多久才开始() {
+        DutyWindow w = window("09:00", "18:00");
+        // 前一天 20:00 点启动，要等到次日 09:00 = 13 小时，这正是「挂起等待」需要回答的问题
+        assertThat(w.opensInMinutes(LocalTime.of(20, 0))).isEqualTo(13 * 60);
+        assertThat(w.opensInMinutes(LocalTime.of(7, 0))).isEqualTo(2 * 60);
+        // 窗口内不用等，全天不限也没有「开始」可言
+        assertThat(w.opensInMinutes(LocalTime.of(10, 0))).isEqualTo(-1);
+        assertThat(window("09:00", "09:00").opensInMinutes(LocalTime.of(3, 0))).isEqualTo(-1);
+    }
+
+    @Test
+    void 跨天窗口外等到今晚才开() {
+        DutyWindow w = window("22:00", "06:00");
+        assertThat(w.opensInMinutes(LocalTime.of(12, 0))).isEqualTo(10 * 60);
+        assertThat(w.opensInMinutes(LocalTime.of(6, 30))).isEqualTo(15 * 60 + 30);
     }
 
     @Test

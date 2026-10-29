@@ -36,7 +36,7 @@ public class PlatformConfigEntity {
     private Integer repeatChatEnabled;
     private String repeatChatMessages;
     private Integer resumeImageEnabled;
-    /** 值守时段，HH:mm。窗口外一律不发消息；两值相同表示不限 */
+    /** 值守时段，HH:mm。窗口外一律不发消息、也不会长时间运行；两值相同表示不限。它不拦启动 */
     private String dutyStartTime;
     private String dutyEndTime;
     private String updatedAt;

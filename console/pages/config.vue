@@ -386,7 +386,10 @@
 
       <div class="card">
         <h2>值守时段</h2>
-        <p class="hint">窗口外不发任何消息——凌晨的招呼语只会被当成骚扰。到点自动收工，不在窗口内也不允许启动</p>
+        <p class="hint">
+          窗口外不发任何消息——凌晨的招呼语只会被当成骚扰。它限制的是「什么时候开始跑」，不是「能不能点启动」：
+          窗口外点启动会把任务挂起，等窗口打开自动开始（隔夜、服务重启都不丢），期间可以随时取消。
+        </p>
         <div class="grid cols-2">
           <div class="field">
             <label>开始</label>
@@ -556,7 +559,7 @@ const dutyHint = computed(() => {
   if (!start || !end) return '留空按默认 09:00–22:00 处理'
   if (start === end) return '开始与结束相同 = 全天不限，凌晨也会发消息'
   return start < end
-    ? `每天 ${start}–${end} 发消息，其余时间扫描与投递一起收工`
+    ? `每天 ${start}–${end}：窗口内启动立刻开跑、到 ${end} 自动收工；窗口外启动会挂起，等到下一次 ${start} 自动开始`
     : `跨天窗口：${start} 到次日 ${end}`
 })
 

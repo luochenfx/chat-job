@@ -4,6 +4,7 @@ import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.Duration;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.regex.Matcher;
@@ -12,8 +13,13 @@ import java.util.regex.Pattern;
 /**
  * 值守时段——"什么时候允许打扰人"的硬边界。
  *
- * <p>它约束的不是"能不能干活"，而是"能不能发消息"。凌晨三点给 HR 发招呼语，
- * 换来的只会是被标记成骚扰，所以窗口外整条链路一起收工，而不是只挑几个动作跳过。
+ * <p>它约束的不是"能不能点启动"，而是"启动后能不能持续跑、能不能发消息"。
+ * 凌晨三点给 HR 发招呼语，换来的只会是被标记成骚扰，所以窗口外整条链路一起收工，
+ * 而不是只挑几个动作跳过。
+ *
+ * <p>因此窗口的判定只发生在运行期，从不发生在启动期：人任何时候都可以点启动，
+ * 窗口外启动的 Run 会在打开浏览器之前就以「不在值守时段」收工（见 RunService）。
+ * 两处语义差别很关键——前者是拒绝操作，后者是「这次跑不了」。
  *
  * <p>三种写法：
  * <ul>
@@ -106,17 +112,46 @@ public record DutyWindow(LocalTime start, LocalTime end) {
                 : format(start) + "–次日 " + format(end);
     }
 
-    /** 不在窗口内时，告诉人下一次什么时候能启动 */
+    /** 不在窗口内时，告诉人下一次能真正执行是什么时候 */
     public String nextOpenHint(LocalTime now) {
         if (alwaysOn()) {
             return "";
         }
         if (start.isBefore(end)) {
-            return now.isBefore(start) ? "今天 " + format(start) + " 之后可以启动"
-                    : "明天 " + format(start) + " 之后可以启动";
+            return now.isBefore(start) ? "今天 " + format(start) + " 之后才会真正执行"
+                    : "明天 " + format(start) + " 之后才会真正执行";
         }
-        return now.isBefore(start) ? "今天 " + format(start) + " 之后可以启动"
-                : "今晚 " + format(start) + " 之后可以启动";
+        return now.isBefore(start) ? "今天 " + format(start) + " 之后才会真正执行"
+                : "今晚 " + format(start) + " 之后才会真正执行";
+    }
+
+    /**
+     * 距收工的剩余分钟数，用来回答「这次能跑多久」。
+     *
+     * <p>窗口外与全天不限都返回 -1：前者根本没有可跑的时间，后者没有收工时刻，
+     * 两者都不该被界面上算成「还剩 0 分钟」。
+     */
+    public long closesInMinutes(LocalTime now) {
+        if (alwaysOn() || !contains(now)) {
+            return -1;
+        }
+        long minutes = Duration.between(now, end).toMinutes();
+        // 跨天窗口：end 在次日，Duration 求出负数，补一整天才对得上「还剩多久」
+        return minutes < 0 ? minutes + 24 * 60 : minutes;
+    }
+
+    /**
+     * 距窗口打开的分钟数，用来回答「还要等多久才开始」。
+     *
+     * <p>窗口内与全天不限都返回 -1：前者没必要等，后者没有关闭的时候。
+     */
+    public long opensInMinutes(LocalTime now) {
+        if (alwaysOn() || contains(now)) {
+            return -1;
+        }
+        long minutes = Duration.between(now, start).toMinutes();
+        // 已过今天这个时刻（如 20:00 等明天 09:00），补一整天才对得上「还要等多久」
+        return minutes < 0 ? minutes + 24 * 60 : minutes;
     }
 
     /** 约定：库里没配过时按默认窗口，而不是放任全天 */

@@ -65,12 +65,48 @@ public class RunStore {
         return run;
     }
 
+    /**
+     * 未终结的 Run。等待值守时段的那条也算在内：它虽然没在跑，但已经占着「这一轮」，
+     * 不能让人在等的时候再点一次启动造出第二条。
+     */
     public Optional<RunEntity> active(String platform) {
         List<RunEntity> list = runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
                 .eq(RunEntity::getPlatform, platform)
-                .in(RunEntity::getStatus, List.of(RunStatus.RUNNING.name(), RunStatus.PAUSED.name()))
+                .in(RunEntity::getStatus, List.of(
+                        RunStatus.RUNNING.name(),
+                        RunStatus.PAUSED.name(),
+                        RunStatus.WAITING_DUTY.name()))
                 .orderByDesc(RunEntity::getId));
         return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /** 正在等值守时段的那条（至多一条，由 uk_run_running 部分唯一索引保证） */
+    public Optional<RunEntity> waiting(String platform) {
+        List<RunEntity> list = runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
+                .eq(RunEntity::getPlatform, platform)
+                .eq(RunEntity::getStatus, RunStatus.WAITING_DUTY.name())
+                .orderByAsc(RunEntity::getId));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
+     * 进程刚起来时「没有任何线程持有」的 Run：服务被杀或崩溃会把这些状态留在库里。
+     * 单进程部署下，启动那一刻必然不持有任何线程，所以它们全都是孤儿。
+     */
+    public List<RunEntity> orphaned() {
+        return runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
+                .in(RunEntity::getStatus, List.of(
+                        RunStatus.CREATED.name(),
+                        RunStatus.RUNNING.name(),
+                        RunStatus.PAUSED.name()))
+                .orderByAsc(RunEntity::getId));
+    }
+
+    /** 挂起等待值守时段：不写 startedAt（真正开跑时 markRunning 才写） */
+    public void markWaiting(RunEntity run, String message) {
+        run.setStatus(RunStatus.WAITING_DUTY.name());
+        run.setMessage(message);
+        runMapper.updateById(run);
     }
 
     public RunEntity get(Long id) {
