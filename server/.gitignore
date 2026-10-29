@@ -9,12 +9,12 @@ target/
 *.jar
 *.war
 
-# 误跑产生的运行时目录。
-# application.yaml 里的 ./data、./browser-data 都相对「工作目录」解析：
-# 从仓库根启动（start.bat / dev.bat）时会落到 /data 与 /browser-data；
-# 若直接在 server/ 下跑 spring-boot:run，就会在这里多出一份，必须出局。
+# 运行时目录兜底。
+# 数据落点已由 chat-job.home 锚定到项目根（见 ProjectHome），正常情况下这里不会再生出
+# data/ 与 browser-data/；规则保留是为了万一（例如手工改动配置）也不把这类目录带进版本库。
 data/
 browser-data/
+*.orphan-*/
 
 # Maven 本地元数据
 .mvn/timing.properties

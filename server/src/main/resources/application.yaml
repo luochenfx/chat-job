@@ -4,7 +4,12 @@ spring:
   datasource:
     # 单机单文件。WAL + busy_timeout 是必须的：控制台读写与 Run 线程写日志会并发，
     # 不开 WAL 会直接抛 database is locked。
-    url: jdbc:sqlite:./data/chat-job.db?journal_mode=WAL&busy_timeout=5000&foreign_keys=on
+    #
+    # 路径必须经 chat-job.home 展开，不能写 ./data —— 相对路径的基准是 JVM 工作目录，
+    # 而工作目录会随启动方式变化（start.bat 在仓库根、spring-boot:run 在 server/、
+    # IDE 看运行配置），结果是同一台机器上出现两个库、各自静默工作。
+    # 详见 com.chatjob.config.ProjectHome。
+    url: jdbc:sqlite:${chat-job.home}/data/chat-job.db?journal_mode=WAL&busy_timeout=5000&foreign_keys=on
     driver-class-name: org.sqlite.JDBC
     hikari:
       maximum-pool-size: 8
@@ -39,20 +44,24 @@ logging:
     root: INFO
     com.chatjob: DEBUG
   file:
-    name: ./data/logs/chat-job.log
+    name: ${chat-job.home}/data/logs/chat-job.log
   logback:
     rollingpolicy:
       max-history: 14
       max-file-size: 10MB
 
 chat-job:
+  # 运行时数据的唯一锚点。默认由 ProjectHome 在启动时探测（<项目根>/server/target/... 反查），
+  # 命令行 -Dchat-job.home= 或环境变量 CHAT_JOB_HOME 可显式覆盖。
+  # 写成 ${user.dir} 只是兜底：没有 HomeEnvironmentPostProcessor 时（例如裸单测）不至于解析失败。
+  home: ${user.dir}
   driver:
     # patchright driver 目录，构建期由 scripts/install-patchright.mjs 生成
-    dir: ./build/patchright-driver
+    dir: ${chat-job.home}/build/patchright-driver
     # 找不到 driver 时拒绝启动任务（fail-closed），不得静默退回官方 driver
     fail-closed: true
   browser:
-    user-data-dir: ./browser-data
+    user-data-dir: ${chat-job.home}/browser-data
     slow-mo-ms: 50
     default-timeout-ms: 30000
     # auto = 按 chrome → msedge 探测本机已装的那个；也可写死 chrome / msedge。

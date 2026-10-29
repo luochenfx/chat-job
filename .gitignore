@@ -56,6 +56,9 @@ target/
 # 反检测浏览器的 Chrome profile：体积大、与本机登录态强绑定，绝不入库。
 # 首次运行会由 patchright 自动创建，无需保留目录骨架。
 /browser-data/
+# 归档的旧档案 / 旧数据目录（数据归位时留下，确认无用后手工删除）
+/browser-data.legacy-*/
+/server/data.orphan-*/
 
 # 运行时数据库 / 日志 / 备份：由 data/.gitignore 统一接管（保留目录占位）。
 /data/*
