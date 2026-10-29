@@ -90,7 +90,11 @@
       <div class="row" style="justify-content: space-between; align-items: flex-start">
         <div>
           <h2>未命中消息</h2>
-          <p class="hint">近 7 天没匹配到任何规则的消息。补规则就从这里开始，把高频说法变成关键词</p>
+          <p class="hint">
+            近 7 天没有回复出去的消息。AI 回复关闭时这里是「没匹配到规则」；
+            开启后变成 AI 主动不回、AI 调用失败、被出站校验拦下 —— 三种都值得看，
+            补规则就从这里开始，把高频说法变成关键词
+          </p>
         </div>
         <button class="btn sm" :disabled="busy" @click="loadUnmatched">刷新</button>
       </div>
@@ -99,13 +103,18 @@
         <thead>
           <tr>
             <th>收到的消息</th>
+            <th style="width: 170px">原因</th>
             <th style="width: 130px">时间</th>
             <th style="width: 110px"></th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="m in unmatched" :key="m.id">
-            <td>{{ m.incomingText }}</td>
+            <td>
+              {{ m.incomingText }}
+              <div v-if="m.reasonNote" class="hint-inline">{{ m.reasonNote }}</div>
+            </td>
+            <td class="hint-inline">{{ reasonText(m) }}</td>
             <td class="hint-inline">{{ (m.createdAt || '').replace('T', ' ').slice(0, 16) }}</td>
             <td>
               <button class="btn sm" @click="promote(m)">转为规则</button>
@@ -151,6 +160,43 @@ async function loadUnmatched() {
   } finally {
     busy.value = false
   }
+}
+
+/**
+ * 把落库动作翻成人话。原因码是枚举（NO_SUBSTANCE / SENSITIVE_TOPIC / ...），
+ * 直接显示给运营看等于让他去翻代码。
+ */
+const REASON_TEXT: Record<string, string> = {
+  NO_SUBSTANCE: '没什么可回的',
+  SENSITIVE_TOPIC: '话题敏感',
+  ALREADY_HANDLED: '已经聊过了',
+  LOW_CONFIDENCE: '没把握怎么说',
+  HUMAN_REQUIRED: '得人来定'
+}
+
+function reasonText(m: any) {
+  const action = m.action || ''
+  if (action === 'AI_SKIPPED') {
+    const why = REASON_TEXT[m.reasonCode] || m.reasonCode || '未给出原因'
+    return `AI 主动不回 · ${why}`
+  }
+  if (action === 'AI_FAILED') {
+    return 'AI 调用失败'
+  }
+  if (action.startsWith('BLOCKED_')) {
+    const kind = action.slice('BLOCKED_'.length)
+    const map: Record<string, string> = {
+      TONE: 'AI 味',
+      CONTACT: '联系方式',
+      SENSITIVE: '敏感词',
+      TOO_LONG: '太长'
+    }
+    return `出站拦截 · ${map[kind] || kind}`
+  }
+  if (action === 'UNMATCHED') {
+    return '未命中规则'
+  }
+  return action || '—'
 }
 
 async function addWord() {

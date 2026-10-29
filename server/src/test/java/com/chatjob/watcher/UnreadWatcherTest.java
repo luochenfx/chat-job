@@ -687,10 +687,19 @@ class UnreadWatcherTest {
         @Override
         public List<UnreadTaskEntity> findDueForRetry(String now, int limit) {
             return rows.stream()
-                    .filter(r -> "FAILED".equals(r.getStatus()))
-                    .filter(r -> r.getAttemptCount() < r.getMaxAttempts())
-                    .filter(r -> r.getNextRetryAt() != null && r.getNextRetryAt().compareTo(now) <= 0)
-                    .sorted(Comparator.comparing(UnreadTaskEntity::getNextRetryAt))
+                    .filter(r -> {
+                        // 与 UnreadTaskMapper 的 SQL 对齐：FAILED 按退避到期（时间缺失算到期），
+                        // PENDING 只认已排到期的那种（手动重试）
+                        if ("FAILED".equals(r.getStatus())) {
+                            return r.getAttemptCount() < r.getMaxAttempts()
+                                    && (r.getNextRetryAt() == null || r.getNextRetryAt().compareTo(now) <= 0);
+                        }
+                        return "PENDING".equals(r.getStatus())
+                                && r.getNextRetryAt() != null
+                                && r.getNextRetryAt().compareTo(now) <= 0;
+                    })
+                    .sorted(Comparator.comparing(
+                            r -> r.getNextRetryAt() == null ? r.getCreatedAt() : r.getNextRetryAt()))
                     .limit(limit)
                     .map(UnreadWatcherTest::copy)
                     .toList();

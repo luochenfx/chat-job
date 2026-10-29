@@ -2,6 +2,7 @@ package com.chatjob.watcher;
 
 import com.chatjob.evaluate.TextNormalizer;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
 
@@ -92,6 +93,18 @@ public final class ReplyGuard {
         SENSITIVE,
         TONE
     }
+
+    /**
+     * 落库用的拦截动作码：{@code BLOCKED_TOO_LONG} / {@code BLOCKED_CONTACT} 等。
+     *
+     * <p>由枚举名派生，不在别处再列一遍 —— 未命中列表要按这些码筛选，
+     * 两处各写一份的后果是「新增一种拦截，面板上永远看不到它」。
+     * {@code NONE} / {@code EMPTY} 不在这里：前者是放行，后者走重试而不是终态。
+     */
+    public static final List<String> BLOCKED_ACTIONS = Arrays.stream(Rejection.values())
+            .filter(r -> r != Rejection.NONE && r != Rejection.EMPTY)
+            .map(r -> "BLOCKED_" + r.name())
+            .toList();
 
     /**
      * @param allowed   是否允许发

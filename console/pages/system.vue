@@ -8,6 +8,10 @@
       <button class="btn" :disabled="busy" @click="load">刷新</button>
     </div>
 
+    <!-- 值守任务与告警放最前面：它是唯一能回答「有没有人漏掉」的地方，
+         排在 driver 自检后面会让人先看一堆绿色再去想有没有人没被回复 -->
+    <UnreadTasks />
+
     <div class="grid cols-2">
       <div class="card">
         <h2>patchright driver</h2>

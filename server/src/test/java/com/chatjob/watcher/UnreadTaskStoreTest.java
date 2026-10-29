@@ -158,8 +158,29 @@ class UnreadTaskStoreTest {
         UnreadTaskEntity reloaded = mapper.findById(fresh.getId());
         assertThat(reloaded.getStatus()).isEqualTo(UnreadTaskStore.Status.PENDING.name());
         assertThat(reloaded.getAttemptCount()).isZero();
-        assertThat(reloaded.getNextRetryAt()).isNull();
+        // 必须写到期时间而不是 null：这条会话的红点早没了，唯一能重新捡起它的入口是
+        // dueForRetry，而那道查询不认「PENDING + null」—— 留 null 会让按钮点了毫无反应
+        assertThat(reloaded.getNextRetryAt()).isNotNull();
         assertThat(reloaded.getLastAction()).isEqualTo(UnreadTaskStore.Action.MANUAL_RETRY);
+    }
+
+    @Test
+    void 手动重试后的任务下一轮能被捞出来() {
+        FakeMapper mapper = new FakeMapper();
+        UnreadTaskStore store = store(mapper);
+        UnreadTaskEntity task = store.openOrTouch(PLATFORM, KEY, 1L, 1, "aaaa");
+        store.markFailed(task, UnreadTaskStore.Action.AI_FAILED, null, "1");
+        store.markFailed(task, UnreadTaskStore.Action.AI_FAILED, null, "2");
+        store.markFailed(task, UnreadTaskStore.Action.AI_FAILED, null, "3");
+        // 放弃后再也不该出现在重试通道里
+        assertThat(store.dueForRetry(10)).isEmpty();
+
+        store.manualRetry(task.getId());
+
+        // 这是「手动重试」这个功能成立的唯一证据：点了之后真的会被捞起来重新处理
+        assertThat(store.dueForRetry(10))
+                .extracting(UnreadTaskEntity::getId)
+                .containsExactly(task.getId());
     }
 
     @Test
@@ -183,6 +204,11 @@ class UnreadTaskStoreTest {
         // 卡住的任务既不重试、也不会再出现在未读列表里，等于静默丢消息。
         mapper.rows.get(0).setNextRetryAt(null);
         assertThat(store.waitingForRetry(mapper.findById(task.getId()))).isFalse();
+        // 光「不等」不够：查询若要求 next_retry_at 非空，这条会既不被等、也捞不出来，
+        // 表现仍是永久卡住 —— 两个判据必须同时成立
+        assertThat(store.dueForRetry(10))
+                .extracting(UnreadTaskEntity::getId)
+                .containsExactly(task.getId());
     }
 
     @Test
@@ -239,10 +265,19 @@ class UnreadTaskStoreTest {
         @Override
         public List<UnreadTaskEntity> findDueForRetry(String now, int limit) {
             return rows.stream()
-                    .filter(r -> "FAILED".equals(r.getStatus()))
-                    .filter(r -> r.getAttemptCount() < r.getMaxAttempts())
-                    .filter(r -> r.getNextRetryAt() != null && r.getNextRetryAt().compareTo(now) <= 0)
-                    .sorted(Comparator.comparing(UnreadTaskEntity::getNextRetryAt))
+                    .filter(r -> {
+                        // 与 UnreadTaskMapper 的 SQL 逐条对齐：FAILED 按退避到期（时间缺失算到期），
+                        // PENDING 只认「已排到期」的那一种（手动重试），正常新建的 PENDING 不算
+                        if ("FAILED".equals(r.getStatus())) {
+                            return r.getAttemptCount() < r.getMaxAttempts()
+                                    && (r.getNextRetryAt() == null || r.getNextRetryAt().compareTo(now) <= 0);
+                        }
+                        return "PENDING".equals(r.getStatus())
+                                && r.getNextRetryAt() != null
+                                && r.getNextRetryAt().compareTo(now) <= 0;
+                    })
+                    .sorted(Comparator.comparing(
+                            r -> r.getNextRetryAt() == null ? r.getCreatedAt() : r.getNextRetryAt()))
                     .limit(limit)
                     .map(UnreadTaskStoreTest::copy)
                     .toList();

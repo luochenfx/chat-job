@@ -38,13 +38,25 @@ public interface UnreadTaskMapper {
     /**
      * 到点该重试的任务。时间是可比较的文本（yyyy-MM-dd'T'HH:mm:ss），字典序即时间序。
      *
-     * <p>只取 FAILED 且未耗尽次数：PENDING 是「还没开始」，PROCESSING 是「正在处理」，
-     * GAVE_UP 是「不再试」—— 三者都不该被重试捞出来。
+     * <p>两类会被捞出来：
+     * <ul>
+     *   <li>{@code FAILED} 且还没耗尽次数 —— 正常的退避重试。{@code next_retry_at} 为空时
+     *       也算到期（与 {@code waitingForRetry} 的「读不出时间就立即重试」一致）：
+     *       卡住的任务既不重试、又不会再出现在未读列表，等于静默丢消息；</li>
+     *   <li>{@code PENDING} 且 {@code next_retry_at} 已到期 —— <b>手动重试</b>专用。
+     *       人工把一条 {@code GAVE_UP} 放回 {@code PENDING} 并写了到期时间，
+     *       但它的红点在当初点开时就没了，永远不会再出现在未读列表里，
+     *       只能靠这条查询捞起来。少了这个分支，按钮点了等于没点。</li>
+     * </ul>
+     *
+     * <p>PENDING 这一支必须要求 {@code next_retry_at} 非空：正常新建的任务是 PENDING + null，
+     * 它属于「本轮还没开始处理」，归当轮流程管，不该被重试通道抢先捞走。
      */
     @Select("SELECT " + COLUMNS + " FROM unread_task "
-            + "WHERE status = 'FAILED' AND attempt_count < max_attempts "
-            + "AND next_retry_at IS NOT NULL AND next_retry_at <= #{now} "
-            + "ORDER BY next_retry_at LIMIT #{limit}")
+            + "WHERE (status = 'FAILED' AND attempt_count < max_attempts "
+            + "       AND (next_retry_at IS NULL OR next_retry_at <= #{now})) "
+            + "   OR (status = 'PENDING' AND next_retry_at IS NOT NULL AND next_retry_at <= #{now}) "
+            + "ORDER BY COALESCE(next_retry_at, created_at) LIMIT #{limit}")
     List<UnreadTaskEntity> findDueForRetry(@Param("now") String now, @Param("limit") int limit);
 
     @Insert("INSERT INTO unread_task(platform, platform_conversation_id, conversation_id, unread_count, "

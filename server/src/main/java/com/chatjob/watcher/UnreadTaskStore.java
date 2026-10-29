@@ -234,6 +234,11 @@ public class UnreadTaskStore {
      * <p>只改状态，不绕过校验 —— 它走的是同一条重试路径，精确匹配与摘要校验照旧生效。
      * 人工点击不构成「跳过安全检查」的理由。
      *
+     * <p><b>{@code next_retry_at} 必须写成当前时间，不能留 null。</b> 这条会话的红点在
+     * 当初被点开时就没了，它不会再出现在未读列表里，唯一能被重新捡起来的入口是
+     * {@code dueForRetry}。而那道查询要求 {@code next_retry_at} 非空且已到期 ——
+     * 留 null 会让按钮点了毫无反应，且没有任何报错。
+     *
      * @return 是否真的重置了（非 GAVE_UP 或任务不存在都返回 false，由调用方转 409 / 404）
      */
     public boolean manualRetry(Long id) {
@@ -243,7 +248,7 @@ public class UnreadTaskStore {
         }
         task.setStatus(Status.PENDING.name());
         task.setAttemptCount(0);
-        task.setNextRetryAt(null);
+        task.setNextRetryAt(ConfigStore.now());
         task.setLastAction(Action.MANUAL_RETRY);
         task.setUpdatedAt(ConfigStore.now());
         mapper.update(task);

@@ -54,7 +54,20 @@ public class ConfigStore {
     public static final int DEFAULT_AI_REPLY_MAX_PER_SWEEP = 5;
 
     /** 上限的合理区间。配成 100 等于关掉这道保护，所以留个天花板 */
-    public static final int MAX_AI_REPLY_MAX_PER_SWEEP = 20;
+    public static final int MAX_AI_REPLY_MAX_PER_SWEEP = 10;
+
+    /** skip 占比告警阈值默认值，与 V9 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_AI_REPLY_SKIP_ALERT_PCT = 60;
+
+    /** 告警最小样本数默认值。低于此数不判定，面板显示「样本不足」 */
+    public static final int DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE = 10;
+
+    /** 词表条数上限与单条字数上限。超长行是「误粘整段文本」的特征，直接丢弃而不是截断 */
+    public static final int MAX_TONE_TERMS = 200;
+    public static final int MAX_TONE_TERM_CHARS = 20;
+
+    /** 表达风格长度上限。超出截断保存 —— 宁可少一段约束，也不让一次误粘把 prompt 撑爆 */
+    public static final int MAX_AI_REPLY_STYLE_CHARS = 500;
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -205,6 +218,8 @@ public class ConfigStore {
         created.setAiReplyStyle("");
         created.setAiReplyTimeoutSeconds(DEFAULT_AI_REPLY_TIMEOUT_SECONDS);
         created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
+        created.setAiReplySkipAlertPct(DEFAULT_AI_REPLY_SKIP_ALERT_PCT);
+        created.setAiReplySkipAlertMinSample(DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE);
         created.setUpdatedAt(now());
         aiConfigMapper.insert(created);
         log.info("已创建 AI 配置默认值");
@@ -276,6 +291,79 @@ public class ConfigStore {
             }
         }
         return new ArrayList<>(seen);
+    }
+
+    /**
+     * 保存前的词表清洗：去空行、去首尾空白、去重（保序）、超 200 条截断。
+     *
+     * <p><b>超长行整行丢弃，不截断。</b> 一行 50 字基本是误粘的整段文本，截到 20 字会造出
+     * 半截词（「如有任何问题请随时联系我」→「如有任何问题请随时联系我」恰好 20 字，
+     * 但「感谢您的关注，期待与您共事」截断后就是个没人认识的碎片），既拦不住原意又可能误杀。
+     */
+    public static ToneTerms normalizeToneTerms(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return new ToneTerms("", 0, 0);
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        int dropped = 0;
+        for (String line : raw.split("\\R")) {
+            String term = line.strip();
+            if (term.isEmpty()) {
+                continue;
+            }
+            if (term.length() > MAX_TONE_TERM_CHARS) {
+                dropped++;
+                continue;
+            }
+            if (seen.size() >= MAX_TONE_TERMS) {
+                dropped++;
+                continue;
+            }
+            seen.add(term);
+        }
+        return new ToneTerms(String.join("\n", seen), seen.size(), dropped);
+    }
+
+    /** @param dropped 被丢弃的行数（超长或超出条数上限），控制台据此提示用户 */
+    public record ToneTerms(String text, int kept, int dropped) {
+    }
+
+    /** 风格长度截断。空串保留空串（= 用默认风格），不在这里填默认值 */
+    public static String clampStyle(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String style = raw.strip();
+        return style.length() > MAX_AI_REPLY_STYLE_CHARS
+                ? style.substring(0, MAX_AI_REPLY_STYLE_CHARS)
+                : style;
+    }
+
+    /**
+     * skip 占比告警阈值（%）。0 = 关闭告警，是合法值 —— 关闭状态必须在面板上显示出来，
+     * 不能因为「没配」就退化成默认 60，也不能因为关了就不显示任何东西。
+     */
+    public int skipAlertPct() {
+        return clampSkipAlertPct(aiConfig().getAiReplySkipAlertPct());
+    }
+
+    public static int clampSkipAlertPct(Integer configured) {
+        if (configured == null || configured < 0) {
+            return DEFAULT_AI_REPLY_SKIP_ALERT_PCT;
+        }
+        return Math.min(configured, 100);
+    }
+
+    /** 告警最小样本数。小于 1 会让「分母 0」也进入判定，直接按 1 兜住 */
+    public int skipAlertMinSample() {
+        return clampSkipAlertMinSample(aiConfig().getAiReplySkipAlertMinSample());
+    }
+
+    public static int clampSkipAlertMinSample(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE;
+        }
+        return Math.min(configured, 1000);
     }
 
     // ------------------------------------------------------------ AI 回复（P3）

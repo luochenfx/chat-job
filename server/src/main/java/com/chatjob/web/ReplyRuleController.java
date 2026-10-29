@@ -33,13 +33,16 @@ public class ReplyRuleController {
     private final ReplyRuleTextMapper textMapper;
     private final SensitiveWordMapper sensitiveMapper;
     private final ReplyStore replyStore;
+    private final ConfigStore configStore;
 
     public ReplyRuleController(ReplyRuleMapper ruleMapper, ReplyRuleTextMapper textMapper,
-                               SensitiveWordMapper sensitiveMapper, ReplyStore replyStore) {
+                               SensitiveWordMapper sensitiveMapper, ReplyStore replyStore,
+                               ConfigStore configStore) {
         this.ruleMapper = ruleMapper;
         this.textMapper = textMapper;
         this.sensitiveMapper = sensitiveMapper;
         this.replyStore = replyStore;
+        this.configStore = configStore;
     }
 
     // ---------------------------------------------------------------- 规则
@@ -176,11 +179,17 @@ public class ReplyRuleController {
 
     // ---------------------------------------------------------------- 未命中与日志
 
-    /** 未命中消息是规则库唯一的进化路径，所以它和规则配置在同一页 */
+    /**
+     * 未命中消息是规则库唯一的进化路径，所以它和规则配置在同一页。
+     *
+     * <p>口径随 AI 开关切换（spec 3.8.3）：关闭态只有 {@code UNMATCHED}，打开态换成
+     * {@code AI_SKIPPED} / {@code AI_FAILED} / {@code BLOCKED_*}。前端不需要知道这个规则，
+     * 由后端按开关判断 —— 让前端去猜「现在该看哪种」必然在两个页面上出现两种口径。
+     */
     @GetMapping("/unmatched")
     public List<ReplyLogEntity> unmatched(@RequestParam(defaultValue = "7") int days,
                                           @RequestParam(defaultValue = "100") int limit) {
-        return replyStore.unmatched(days, limit);
+        return replyStore.unmatched(days, limit, configStore.aiReplyEnabled());
     }
 
     @GetMapping("/logs")

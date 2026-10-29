@@ -32,5 +32,9 @@ public class AiConfigEntity {
     private Integer aiReplyTimeoutSeconds;
     /** 单轮值守最多调几次 AI。超出的任务退回 PENDING 等下一轮，不消耗重试预算 */
     private Integer aiReplyMaxPerSweep;
+    /** skip 占比告警阈值（%）。0 = 关闭告警，但面板要显示「已关闭」，不能装作一切正常 */
+    private Integer aiReplySkipAlertPct;
+    /** 告警最小样本数。低于此数显示「样本不足」，不判定 */
+    private Integer aiReplySkipAlertMinSample;
     private String updatedAt;
 }

@@ -547,6 +547,34 @@ P5 单独列出来的原因：前置条件自检时「真发送」没有验证�
 
 控制台这 4 项的运行时验证（2026-10-29）：改值保存 → 接口回读 → 数据库 → 刷新回显四处一致；风格清空保存后回读为空串（`aiReplyStyle()` 返回空 → `AiReplier` 用 `DEFAULT_STYLE`）；「填入默认」点了只改输入框、接口值不变；数字框清空后点保存被拦下且接口值不变；开关开→`true` / 关→`false` 往返一致。配置读取每次查库（`ConfigStore.aiConfig()` 无缓存），改完即生效，不用重启。
 
+**P4 实施记录（2026-10-29，已完成）**
+
+| 项 | 落地 |
+|---|---|
+| 迁移 | `V9__ai_reply_alert.sql`：`ai_config` 加 `ai_reply_skip_alert_pct`(60) / `ai_reply_skip_alert_min_sample`(10)。真实库已由 Flyway 应用到 v9 |
+| 判定 | 新增 `watcher/WatcherStats.java`：纯函数 `judge(total, skipped, thresholdPct, minSample)` → 四档 + `pct`，判定只在服务端做 |
+| 查询 | 新增 `store/mapper/WatcherStatsMapper.java`：两个 count（分母/分子）+ 按状态分组计数 + 任务列表（不返回摘要）。与 `UnreadTaskMapper` 分开：一个服务状态机，一个服务人看的聚合视图 |
+| 接口 | 新增 `web/WatcherController.java`：`GET /api/watcher/stats`、`GET /api/watcher/unread-tasks`、`POST /api/watcher/unread-tasks/{id}/retry`（404 / 409 / 200） |
+| 配置 | `AiConfigBody` 补齐 4 字段；`GET` 增加 `aiReplyToneTermsDefault` / `aiReplyToneTermsEffectiveCount`；风格按 500 字截断；词表清洗后落库并回 `toneTermsDropped` |
+| 面板 | 新增 `console/components/UnreadTasks.vue`，挂在 `system.vue` 最前面（在 driver 自检之前） |
+| 未命中列表 | `ReplyStore.unmatched(days, limit, includeAiOutcomes)` 按开关切换口径；`ReplyRules.vue` 增加原因列 |
+
+五处实施结论：
+
+1. **手动重试从 P1 起就是死的，这次才暴露。** `manualRetry` 把任务重置为 `PENDING` 并把 `next_retry_at` 设成 `null`，而 `findDueForRetry` 只捞 `FAILED` —— 两个条件永远碰不上。更要命的是这条路径不会有任何报错：按钮点了、接口返回 200、任务确实变成了 PENDING，然后永远躺在那里。P1 交付时没有按钮，所以没人发现；P4 一做按钮就撞上。修法：`manualRetry` 写 `next_retry_at = now`，`findDueForRetry` 增加「`PENDING` 且已到期」分支（`PENDING` + `null` 仍然不捞，那是当轮还没开始处理的新任务，不能被重试通道抢走）。两条判据都补了单测，并用真实 SQL 在库上对齐验证。
+2. **占比取整后判定，不用精确比值。** 精确比值会出现「面板显示 60%、判定 60.4% 超阈值」，让人指着屏幕问到底哪个是真的。取整后「显示什么就判什么」，代价是丢掉不到 0.5% 的精度 —— 换取面板自洽，值得。
+3. **`BLOCKED_ACTIONS` 由枚举名派生。** 原本 `UnreadWatcher.blockedAction()` 里手写四个 `BLOCKED_*` 字符串，未命中列表还要再列一遍来筛选。两处各写一份的后果是「新增一种拦截，面板上永远看不到它」。改为从 `Rejection` 派生，`blockedAction` 用 `default -> "BLOCKED_" + name()`。
+4. **超长词表行整行丢弃，不截断。** 一行 50 字基本是误粘的整段文本；截到 20 字会造出没人认识的碎片（既拦不住原意又可能误杀）。丢弃行数经 `toneTermsDropped` 回给前端，避免「粘了一大段却只看到已保存」。
+5. **口语词提示用「整行等于」判定。** 第一版用「行里包含」，结果默认词表里的「如有需要请随时」命中了「随时」，用户点「填入默认」就看到一条假警告 —— 会让人怀疑默认词表有问题。改成整行相等后只在用户单独加「感谢」这类词时才提示。
+
+运行时验证（2026-10-29，真实浏览器 + 真实库）：
+
+- 四档状态逐个实测：阈值 0 → `DISABLED`；样本 20 > 10 → `INSUFFICIENT`；阈值 100 → `OK`；阈值 60 / 70% → `ALERT`。面板底色分别是灰 / 灰 / 绿 / 黄，「样本不足」是灰不是绿。
+- 手动重试：404（不存在）/ 200（`GAVE_UP` → `PENDING`、`attempt_count=0`、`next_retry_at` 非空、`last_action=MANUAL_RETRY`）/ 409（重复点击）。confirm 文案「将重新给「X」3 次机会，可能向对方发出消息」。
+- 「重试后能被捞出来」用真实 SQL 在库上验过，同时确认正常新建的 `PENDING + null` 不会被误捞。
+- 词表：填入默认 → 31 条、`生效 31 条`；单独加「感谢」→ 只报「感谢」，不再牵连「随时」。
+- 测试数据（10 行 `reply_log` + 3 条 `unread_task`，均带 `__P4_VERIFY` 标记）验证后已按 GLOB 精确删除，`ai_config` 保持全默认。
+
 ### 4.3 测试
 - `ReplyRuleEngine` 现有单测必须全绿且**不改判定顺序**。
 - `ReplyGuard`：表驱动覆盖常规 6 类（正常、超长、手机号、微信、薪资、空串）+ AI 味三组 —— ① `DEFAULT_TONE_TERMS` 每条至少一个命中用例（31 条都要有，参数化生成，防止加词不测）；② 自定义词表整体替换默认（旧默认词不再命中）；③ `tone_check_enabled=0` 时套话直接放行。另加 3 条正常口语反例（含 `感谢`、`您好`、`我把简历发您看看`）必须通过，否则说明词表过宽。
@@ -554,7 +582,7 @@ P5 单独列出来的原因：前置条件自检时「真发送」没有验证�
   > 「我将简历发您」原本也列在这三条反例里，但它与 §3.7 默认词表中的 `我将` 直接冲突 —— 两者不可能同时成立。P2 实施时的裁决：**保留词表、把这句话记为已知误杀**（§3.7 已说明 `我将` 是留着观察的边界项），并单独一条用例断言它会被拦，等真实的 `BLOCKED_TONE` 样本决定删不删词。删词是安全的单向操作。
 - `AiReplier`：拆两半测 —— 纯逻辑（`parse` / `normalizeSkipReason` / `tail` / `render`）直接测；编排侧用 `UnreadWatcherTest` 里的 hand-written `FakeReplier` 覆盖「生成成功 / 主动 skip / 技术失败」三类结果。**没有**为 `HttpClient` 造 fake：网络层已收敛到 `ChatClient` 一处，再包一层 fake 只会测到 fake 自己。
 - `UnreadTaskStore`：覆盖「同会话重复落任务不堆积」「第 4 次失败不再重试」「DONE 后可再建新任务」「手动重试把 `attempt_count` 归零并回到 PENDING」「非 `GAVE_UP` 的重试被拒绝」。
-- `WatcherStatsTest`：四档状态的边界 —— 阈值 0 → `DISABLED`；总数 < min_sample → `INSUFFICIENT`（**不能是 `OK`**）；占比等于阈值 → `OK`（用 `>` 而非 `>=`）；占比超阈值 → `ALERT`。另测分母只计入 `reply_source='AI'`，混入 `TEMPLATE` 后占比不变。
+- `WatcherStatsTest`：四档状态的边界 —— 阈值 0 → `DISABLED`；总数 < min_sample → `INSUFFICIENT`（**不能是 `OK`**）；占比等于阈值 → `OK`（用 `>` 而非 `>=`）；占比超阈值 → `ALERT`。分母口径（只计 `reply_source='AI'`）在 SQL 里，纯函数测不到：改为运行时验证 —— 库里当时有 6 行历史 `NULL` 与 10 行 `AI`，接口返回 `total=10`，历史行确实没被计入。
 - `ConfigController`：风格超 500 字截断保存而不报错；词表去掉空行/重复/首尾空白后入库，超 200 条截断；阈值 >100 存 100、<0 存 0（配置类接口不该因为一个越界数字把整个表单打回）。
 - 端到端：`tools/precheck.mjs` 留作回归脚本，改选择器后必须重跑并保持 9 项通过。
 

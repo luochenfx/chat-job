@@ -8,6 +8,7 @@ import com.chatjob.store.entity.AiConfigEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.ProviderEntity;
 import com.chatjob.watcher.AiReplier;
+import com.chatjob.watcher.ReplyGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -115,7 +116,9 @@ public class ConfigController {
                                String templateGreeting, Integer jdMaxChars, Integer aiTimeoutSeconds,
                                Boolean collectEffectMetrics, Boolean aiReplyEnabled,
                                String aiReplyStyle, Integer aiReplyTimeoutSeconds,
-                               Integer aiReplyMaxPerSweep) {
+                               Integer aiReplyMaxPerSweep, Boolean aiReplyToneCheckEnabled,
+                               String aiReplyToneTerms, Integer aiReplySkipAlertPct,
+                               Integer aiReplySkipAlertMinSample) {
     }
 
     @GetMapping("/ai")
@@ -139,6 +142,18 @@ public class ConfigController {
         out.put("aiReplyStyleDefault", AiReplier.DEFAULT_STYLE);
         out.put("aiReplyTimeoutSeconds", ConfigStore.clampAiReplyTimeoutSeconds(entity.getAiReplyTimeoutSeconds()));
         out.put("aiReplyMaxPerSweep", ConfigStore.clampAiReplyMaxPerSweep(entity.getAiReplyMaxPerSweep()));
+        out.put("aiReplyToneCheckEnabled", entity.getAiReplyToneCheckEnabled() == null
+                || entity.getAiReplyToneCheckEnabled() == 1);
+        out.put("aiReplyToneTerms", entity.getAiReplyToneTerms() == null ? "" : entity.getAiReplyToneTerms());
+        // 只读默认词表与生效条数：控制台用它渲染 placeholder 和「留空则使用默认（31 条）」。
+        // 「生效条数」留空时是默认条数而不是 0 —— 只显示输入框为空会让人以为检查没在工作
+        out.put("aiReplyToneTermsDefault", String.join("\n", ReplyGuard.DEFAULT_TONE_TERMS));
+        List<String> configuredTerms = configStore.toneTerms();
+        out.put("aiReplyToneTermsEffectiveCount",
+                configuredTerms.isEmpty() ? ReplyGuard.DEFAULT_TONE_TERMS.size() : configuredTerms.size());
+        out.put("aiReplySkipAlertPct", ConfigStore.clampSkipAlertPct(entity.getAiReplySkipAlertPct()));
+        out.put("aiReplySkipAlertMinSample",
+                ConfigStore.clampSkipAlertMinSample(entity.getAiReplySkipAlertMinSample()));
         return out;
     }
 
@@ -162,7 +177,7 @@ public class ConfigController {
         // 同样「未传则保持原值」：清空风格是合法的（回落到 DEFAULT_STYLE），
         // 但「没提交这个字段」不等于「清空」—— 两者必须能区分，否则保存任何无关配置都会抹掉风格
         if (body.aiReplyStyle() != null) {
-            entity.setAiReplyStyle(body.aiReplyStyle().strip());
+            entity.setAiReplyStyle(ConfigStore.clampStyle(body.aiReplyStyle()));
         }
         if (body.aiReplyTimeoutSeconds() != null) {
             entity.setAiReplyTimeoutSeconds(ConfigStore.clampAiReplyTimeoutSeconds(body.aiReplyTimeoutSeconds()));
@@ -170,8 +185,29 @@ public class ConfigController {
         if (body.aiReplyMaxPerSweep() != null) {
             entity.setAiReplyMaxPerSweep(ConfigStore.clampAiReplyMaxPerSweep(body.aiReplyMaxPerSweep()));
         }
+        if (body.aiReplyToneCheckEnabled() != null) {
+            entity.setAiReplyToneCheckEnabled(body.aiReplyToneCheckEnabled() ? 1 : 0);
+        }
+        // 词表：清洗后落库，并把丢弃行数回给前端 —— 用户粘了一大段文本却只看到「已保存」，
+        // 会以为整段都生效了
+        int droppedTerms = 0;
+        if (body.aiReplyToneTerms() != null) {
+            ConfigStore.ToneTerms terms = ConfigStore.normalizeToneTerms(body.aiReplyToneTerms());
+            entity.setAiReplyToneTerms(terms.text());
+            droppedTerms = terms.dropped();
+        }
+        if (body.aiReplySkipAlertPct() != null) {
+            entity.setAiReplySkipAlertPct(ConfigStore.clampSkipAlertPct(body.aiReplySkipAlertPct()));
+        }
+        if (body.aiReplySkipAlertMinSample() != null) {
+            entity.setAiReplySkipAlertMinSample(
+                    ConfigStore.clampSkipAlertMinSample(body.aiReplySkipAlertMinSample()));
+        }
         configStore.saveAiConfig(entity);
-        return Map.of("ok", true);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("toneTermsDropped", droppedTerms);
+        return out;
     }
 
     // ---------------------------------------------------------------- 平台配置

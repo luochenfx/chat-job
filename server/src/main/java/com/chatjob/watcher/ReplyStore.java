@@ -171,13 +171,36 @@ public class ReplyStore {
         logMapper.insert(entity);
     }
 
-    public List<ReplyLogEntity> unmatched(int days, int limit) {
+    /**
+     * 未命中列表（spec 3.8.3）。口径随 AI 开关切换：
+     *
+     * <ul>
+     *   <li>关闭态：只显示 {@code UNMATCHED} —— 这就是改造前的行为，一眼可比；</li>
+     *   <li>打开态：{@code AI_SKIPPED}（带原因枚举）/ {@code AI_FAILED}（带失败类型）/
+     *       {@code BLOCKED_*}。这三种正是「发现了但没回」的全部形态，
+     *       而 {@code UNMATCHED} 在打开态已经不会再产生。</li>
+     * </ul>
+     *
+     * <p>刻意不含 {@code REPLIED} 与 {@code SKIP_*}：前者是成功，后者是「重复 / 冷却」这类
+     * 正常跳过，混进来会让「需要人补规则」的那批被噪声淹掉。
+     */
+    public List<ReplyLogEntity> unmatched(int days, int limit, boolean includeAiOutcomes) {
         String cutoff = LocalDateTime.now().minusDays(days).format(TS);
-        return logMapper.selectList(Wrappers.<ReplyLogEntity>lambdaQuery()
-                .eq(ReplyLogEntity::getAction, ReplyRuleEngine.Action.UNMATCHED.name())
+        var query = Wrappers.<ReplyLogEntity>lambdaQuery()
                 .ge(ReplyLogEntity::getCreatedAt, cutoff)
                 .orderByDesc(ReplyLogEntity::getId)
-                .last("LIMIT " + Math.max(1, limit)));
+                .last("LIMIT " + Math.max(1, limit));
+        if (includeAiOutcomes) {
+            List<String> actions = new ArrayList<>();
+            // 这两个常量在 UnreadTaskStore.Action 上：AI 分支的落库动作与任务状态机同源
+            actions.add(UnreadTaskStore.Action.AI_SKIPPED);
+            actions.add(UnreadTaskStore.Action.AI_FAILED);
+            actions.addAll(ReplyGuard.BLOCKED_ACTIONS);
+            query.in(ReplyLogEntity::getAction, actions);
+        } else {
+            query.eq(ReplyLogEntity::getAction, ReplyRuleEngine.Action.UNMATCHED.name());
+        }
+        return logMapper.selectList(query);
     }
 
     public List<ReplyLogEntity> recentLogs(int limit) {

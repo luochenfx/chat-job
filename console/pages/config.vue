@@ -225,6 +225,68 @@
         </div>
       </div>
 
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div>
+            <h2>出站校验与告警</h2>
+            <p class="hint">
+              发出去之前的最后一道闸。AI 味检查管「像不像人话」，告警管「它是不是一直在躲」
+            </p>
+          </div>
+          <span class="tag" :class="ai.aiReplyToneCheckEnabled ? 'ok' : 'danger'">
+            {{ ai.aiReplyToneCheckEnabled ? '检查中' : '已停止' }}
+          </span>
+        </div>
+
+        <label class="switch">
+          <input v-model="ai.aiReplyToneCheckEnabled" type="checkbox" />
+          <span>开启 AI 味检查（套话、客服腔、小标题一律拦下）</span>
+        </label>
+
+        <div class="field" style="margin-top: 16px">
+          <label>AI 味词表（一行一条）</label>
+          <textarea
+            v-model="ai.aiReplyToneTerms"
+            :placeholder="aiToneTermsDefault"
+            style="min-height: 160px"
+          />
+          <div class="desc">
+            <template v-if="ai.aiReplyToneTerms && ai.aiReplyToneTerms.trim()">
+              当前使用自定义词表，生效 {{ toneTermsEffective }} 条。整条回复里出现任一条就会被拦下
+            </template>
+            <template v-else>
+              留空则使用默认词表（{{ aiToneTermsEffectiveCount }} 条），内容已显示在输入框的灰字里。
+              自定义词表会<b>整体替换</b>默认词表，不是追加
+            </template>
+            <button class="btn sm" style="margin-left: 8px" @click="restoreToneTerms">填入默认</button>
+          </div>
+          <div v-if="riskyToneHits.length" class="desc" style="color: var(--warn)">
+            ⚠ 这几行是日常口语本身：{{ riskyToneHits.join('、') }}。
+            词表按「整条回复含该词就拦」匹配，加了它会连「感谢您的回复」「方便发份简历吗」一起拦掉，
+            建议删掉 —— 但仍可保存
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label>skip 占比告警阈值（%）</label>
+            <input v-model.number="ai.aiReplySkipAlertPct" type="number" min="0" max="100" />
+            <div class="desc">
+              近 7 天 AI 参与判定里，主动不回的比例超过它就在系统页提示。<b>填 0 = 关闭告警</b>，
+              关闭状态照样会显示出来，不会假装一切正常
+            </div>
+          </div>
+          <div class="field">
+            <label>告警最小样本数</label>
+            <input v-model.number="ai.aiReplySkipAlertMinSample" type="number" min="1" max="1000" />
+            <div class="desc">
+              判定次数低于此数就不下结论，面板显示「样本不足」。宁可说不知道怎么判，
+              也不把「还没法判断」渲染成「一切正常」
+            </div>
+          </div>
+        </div>
+      </div>
+
       <button class="btn primary" :disabled="saving" @click="saveAi">保存 AI 配置</button>
     </section>
 
@@ -416,12 +478,41 @@ const ai = reactive<any>({
   aiReplyEnabled: false,
   aiReplyStyle: '',
   aiReplyTimeoutSeconds: 8,
-  aiReplyMaxPerSweep: 5
+  aiReplyMaxPerSweep: 5,
+  aiReplyToneCheckEnabled: true,
+  aiReplyToneTerms: '',
+  aiReplySkipAlertPct: 60,
+  aiReplySkipAlertMinSample: 10
 })
 
-// 默认风格由后端提供唯一一份（AiReplier.DEFAULT_STYLE），前端只负责展示，
-// 不在前端复制文案 —— 两处各写一份必然漂移
+// 默认风格与默认词表都由后端提供唯一一份（AiReplier.DEFAULT_STYLE / ReplyGuard.DEFAULT_TONE_TERMS），
+// 前端只负责展示，不在前端复制文案 —— 两处各写一份必然漂移
 const aiStyleDefault = ref('')
+const aiToneTermsDefault = ref('')
+const aiToneTermsEffectiveCount = ref(0)
+
+/** 输入框为空时生效条数是默认条数，不是 0 —— 只显示「空」会让人以为检查没在工作 */
+const toneTermsEffective = computed(() => {
+  const text = (ai.aiReplyToneTerms || '').trim()
+  if (!text) return aiToneTermsEffectiveCount.value
+  return new Set(text.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)).size
+})
+
+/**
+ * 高频口语词。词表是「整条回复包含该词就拦」的匹配方式，所以单独把「感谢」加成一行，
+ * 会把所有含「感谢」的正常回复一起拦掉。
+ *
+ * <p>判据是<b>整行等于</b>该词，不是「行里包含」：默认词表里本来就有「如有需要请随时」，
+ * 用包含判定会让用户点了「填入默认」就看到一条假警告，进而怀疑默认词表有问题。
+ */
+const RISKY_TONE_TERMS = ['感谢', '您好', '你好', '好的', '方便', '可以', '稍等', '随时', '没问题']
+
+const riskyToneHits = computed(() => {
+  const text = (ai.aiReplyToneTerms || '').trim()
+  if (!text) return []
+  const lines = text.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)
+  return RISKY_TONE_TERMS.filter((word) => lines.includes(word))
+})
 
 const platform = reactive<any>({
   cities: [],
@@ -493,7 +584,10 @@ async function loadAll() {
     // 后端可能回 null（列可空）。textarea 绑 null 会渲染成空但状态不一致，
     // 统一归一化成空串 —— 空串的语义是「没配」，与「关闭」无关
     ai.aiReplyStyle = a?.aiReplyStyle ?? ''
+    ai.aiReplyToneTerms = a?.aiReplyToneTerms ?? ''
     aiStyleDefault.value = (a?.aiReplyStyleDefault ?? '').trim()
+    aiToneTermsDefault.value = (a?.aiReplyToneTermsDefault ?? '').trim()
+    aiToneTermsEffectiveCount.value = a?.aiReplyToneTermsEffectiveCount ?? 0
     Object.assign(platform, c || {})
     blacklist.value = b || []
     await loadDictionary()
@@ -602,11 +696,22 @@ function restoreStyle() {
   ai.aiReplyStyle = aiStyleDefault.value
 }
 
+/** 同上：只填框，由用户自己保存 */
+function restoreToneTerms() {
+  if (!aiToneTermsDefault.value) {
+    show('默认词表尚未加载，请刷新页面重试', true)
+    return
+  }
+  ai.aiReplyToneTerms = aiToneTermsDefault.value
+}
+
 async function saveAi() {
   // 数字框被清空时 v-model.number 会变成空串，直接 PUT 过去是 400。
   // 不去猜默认值填回去：空着就是用户没填，拦住并说清楚比静默改值诚实
   const timeout = Number(ai.aiReplyTimeoutSeconds)
   const maxPerSweep = Number(ai.aiReplyMaxPerSweep)
+  const alertPct = Number(ai.aiReplySkipAlertPct)
+  const minSample = Number(ai.aiReplySkipAlertMinSample)
   if (!Number.isInteger(timeout) || timeout < 1) {
     show('单次生成超时要填 ≥1 的整数', true)
     return
@@ -615,19 +720,36 @@ async function saveAi() {
     show('单轮 AI 回复上限要填 ≥1 的整数', true)
     return
   }
+  // 阈值 0 是合法值（= 关闭告警），所以这里不能用 `!alertPct` 判断
+  if (!Number.isInteger(alertPct) || alertPct < 0) {
+    show('告警阈值要填 0–100 的整数，0 表示关闭告警', true)
+    return
+  }
+  if (!Number.isInteger(minSample) || minSample < 1) {
+    show('告警最小样本数要填 ≥1 的整数', true)
+    return
+  }
 
   saving.value = true
   try {
-    await call('/config/ai', {
+    const res: any = await call('/config/ai', {
       method: 'PUT',
       body: {
         ...ai,
         aiReplyStyle: ai.aiReplyStyle ?? '',
+        aiReplyToneTerms: ai.aiReplyToneTerms ?? '',
         aiReplyTimeoutSeconds: timeout,
-        aiReplyMaxPerSweep: maxPerSweep
+        aiReplyMaxPerSweep: maxPerSweep,
+        aiReplySkipAlertPct: alertPct,
+        aiReplySkipAlertMinSample: minSample
       }
     })
-    show('AI 配置已保存')
+    // 后端会丢弃超长行（一行 50 字基本是误粘的整段文本）。不说一声，用户会以为整段都生效了
+    if (res?.toneTermsDropped > 0) {
+      show(`已保存，但有 ${res.toneTermsDropped} 行超过 20 字被丢弃`, true)
+    } else {
+      show('AI 配置已保存')
+    }
     // 回读一次：超时上限 120、回复上限 10 这类 clamp 在后端做，前端不该假装自己知道结果
     await loadAll()
   } catch (e: any) {

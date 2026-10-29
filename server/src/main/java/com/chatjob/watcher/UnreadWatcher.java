@@ -575,12 +575,10 @@ public class UnreadWatcher {
      */
     private static String blockedAction(ReplyGuard.Rejection rejection) {
         return switch (rejection) {
-            case CONTACT -> "BLOCKED_CONTACT";
-            case SENSITIVE -> "BLOCKED_SENSITIVE";
-            case TONE -> "BLOCKED_TONE";
-            case TOO_LONG -> "BLOCKED_TOO_LONG";
-            // EMPTY 已在调用处单独处理（要重试，不是终态）；NONE 不该走到这里
+            // EMPTY 已在调用处单独处理（要重试，不是终态）；NONE 不该走到这里。
+            // 其余四种由枚举名派生，与 ReplyGuard.BLOCKED_ACTIONS 同源，不再各写一份
             case EMPTY, NONE -> UnreadTaskStore.Action.AI_FAILED;
+            default -> "BLOCKED_" + rejection.name();
         };
     }
 
