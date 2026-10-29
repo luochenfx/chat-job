@@ -1,0 +1,69 @@
+# ============================================================
+# chat-job 仓库根 .gitignore
+#
+# 分层约定：
+#   根层  只放「跨目录通用」与「整棵子树出局」的规则
+#   console/.gitignore   Nuxt 前端产物
+#   server/.gitignore    Maven 后端产物与误跑数据目录
+#   data/.gitignore      运行时数据库（保留目录占位）
+#   build/.gitignore     构建期下载物
+#   tools/out/.gitignore 探测脚本输出
+# ============================================================
+
+# ---------- 操作系统 ----------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------- IDE ----------
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+*~
+
+# ---------- 本地环境变量（可能含密钥，绝不入库） ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 通用临时文件 ----------
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# ---------- 依赖与编译产物（任意层级兜底） ----------
+node_modules/
+target/
+*.class
+
+# ---------- 数据库文件（任意层级兜底） ----------
+# 活跃库由 /data/ 单独管理；这里防止库文件被放在别处时误入库。
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---------- 本仓库顶层运行时目录 ----------
+# 反检测浏览器的 Chrome profile：体积大、与本机登录态强绑定，绝不入库。
+# 首次运行会由 patchright 自动创建，无需保留目录骨架。
+/browser-data/
+
+# 运行时数据库 / 日志 / 备份：由 data/.gitignore 统一接管（保留目录占位）。
+/data/*
+!/data/.gitignore
+
+# 构建期从 npm 下载的 patchright driver 包（约数百个 JS 文件）。
+# 由 scripts/install-patchright.mjs 重新生成，规则写在 build/.gitignore。
+/build/patchright-driver/
+
+# ---------- 工具与助手产生的本地状态 ----------
+.workbuddy/

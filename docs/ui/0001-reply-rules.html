@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chat-job · 值守规则</title>
+<style>
+  :root{
+    --bg:#f6f6f7; --card:#ffffff; --line:#e7e7ea; --line-soft:#f0f0f2;
+    --ink:#17171a; --ink-2:#5b5b66; --ink-3:#8e8e99;
+    --accent:#1f6feb; --accent-soft:#eef4fe;
+    --warn:#b4530a; --warn-soft:#fdf3e7; --warn-line:#f2ddc2;
+    --ok:#0f7b53; --ok-soft:#eaf6f1;
+    --r:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.65 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{display:grid;grid-template-columns:196px 1fr;min-height:100vh}
+
+  /* ---------- sidebar ---------- */
+  .side{background:#fbfbfc;border-right:1px solid var(--line);padding:22px 14px;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:9px;padding:0 8px 22px}
+  .dot{width:9px;height:9px;border-radius:3px;background:var(--ink);transform:rotate(45deg)}
+  .brand b{font-size:14px;letter-spacing:.2px}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav a{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:7px 10px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-size:13.5px
+  }
+  .nav a:hover{background:#f1f1f3}
+  .nav a.on{background:#efeff2;color:var(--ink);font-weight:600}
+  .nav .grp{font-size:11px;letter-spacing:.8px;color:var(--ink-3);padding:16px 10px 6px;text-transform:uppercase}
+  .nav .sub{padding-left:22px;font-size:13px}
+
+  /* ---------- main ---------- */
+  .main{padding:34px 40px 90px;max-width:1000px}
+  .draft{
+    display:inline-flex;gap:8px;align-items:center;font-size:12px;color:var(--warn);
+    background:var(--warn-soft);border:1px solid var(--warn-line);padding:5px 10px;border-radius:999px;margin-bottom:18px
+  }
+  h1{font-size:24px;margin:0 0 6px;letter-spacing:-.3px}
+  .lede{color:var(--ink-2);margin:0 0 26px;max-width:640px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);margin-bottom:18px}
+  .card-h{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:18px 20px;border-bottom:1px solid var(--line-soft)}
+  .card-h h2{font-size:15px;margin:0 0 3px}
+  .card-h p{margin:0;font-size:12.5px;color:var(--ink-3)}
+  .card-b{padding:18px 20px}
+
+  /* switch */
+  .sw{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none;font-size:12.5px;color:var(--ink-2)}
+  .sw input{display:none}
+  .track{width:34px;height:19px;border-radius:999px;background:#d8d8dd;position:relative;transition:.18s}
+  .track::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+  .sw input:checked + .track{background:var(--ink)}
+  .sw input:checked + .track::after{left:17px}
+
+  /* chips */
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{
+    display:inline-flex;align-items:center;gap:6px;font-size:12.5px;
+    background:#f4f4f6;border:1px solid var(--line);border-radius:999px;padding:3px 5px 3px 10px;color:var(--ink)
+  }
+  .chip.veto{background:var(--warn-soft);border-color:var(--warn-line);color:var(--warn)}
+  .chip button{border:0;background:transparent;color:inherit;opacity:.45;cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:50%}
+  .chip button:hover{opacity:1;background:rgba(0,0,0,.06)}
+  .chip.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+
+  .adder{display:flex;gap:8px;margin-top:14px;max-width:420px}
+  .adder input{
+    flex:1;border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:13px;background:#fff;color:var(--ink);
+    outline:none;font-family:inherit
+  }
+  .adder input:focus{border-color:#c9c9d2;box-shadow:0 0 0 3px #f1f1f5}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 13px;font-size:13px;cursor:pointer;color:var(--ink);font-family:inherit}
+  .btn:hover{background:#f7f7f9}
+  .btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+  .btn.primary:hover{background:#000}
+  .btn.ghost{border-color:transparent;color:var(--ink-2);padding:6px 8px}
+  .btn.ghost:hover{background:#f4f4f6;color:var(--ink)}
+
+  /* rule rows */
+  .rule{padding:16px 20px;border-bottom:1px solid var(--line-soft);display:grid;grid-template-columns:1fr auto;gap:14px}
+  .rule:last-child{border-bottom:0}
+  .rule.off{opacity:.5}
+  .rule-t{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .rule-t b{font-size:13.5px}
+  .cnt{font-size:11.5px;color:var(--ink-3);background:#f4f4f6;border-radius:999px;padding:1px 7px}
+  .texts{margin:9px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+  .texts li{font-size:13px;color:var(--ink-2);padding-left:16px;position:relative}
+  .texts li::before{content:"";position:absolute;left:3px;top:9px;width:5px;height:5px;border-radius:50%;background:#d2d2d8}
+  .texts li.hit{color:var(--ink)}
+  .texts li.hit::before{background:var(--accent)}
+  .rnd{font-size:11px;color:var(--ink-3);margin-left:8px;font-weight:400}
+  .acts{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+
+  /* miss list */
+  .miss{display:flex;gap:14px;padding:13px 20px;border-bottom:1px solid var(--line-soft);align-items:flex-start}
+  .miss:last-child{border-bottom:0}
+  .miss .body{flex:1;min-width:0}
+  .miss q{quotes:none;display:block;font-size:13px;color:var(--ink);margin-bottom:3px}
+  .miss .meta{font-size:11.5px;color:var(--ink-3)}
+  .miss .btn{align-self:center;white-space:nowrap}
+
+  .hint{font-size:12.5px;color:var(--ink-3);margin:10px 0 0}
+  .inline{display:inline-flex;align-items:center;gap:6px}
+  .tag{font-size:11px;padding:1px 7px;border-radius:6px;background:var(--ok-soft);color:var(--ok)}
+  footer{margin-top:28px;display:flex;justify-content:flex-end;gap:10px}
+  .toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(10px);
+    background:var(--ink);color:#fff;font-size:12.5px;padding:9px 15px;border-radius:9px;opacity:0;transition:.2s;pointer-events:none
+  }
+  .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="dot"></span><b>chat-job</b></div>
+    <nav class="nav">
+      <a href="#">概览</a>
+      <a href="#">任务</a>
+      <a href="#">岗位 <span class="cnt">142</span></a>
+      <div class="grp">配置</div>
+      <a href="#" class="sub">模型提供商</a>
+      <a href="#" class="sub">AI 配置</a>
+      <a href="#" class="sub">平台</a>
+      <a href="#" class="sub on">值守规则</a>
+      <div class="grp">系统</div>
+      <a href="#" class="sub">登录与自检</a>
+      <a href="#" class="sub">数据清理</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <span class="draft">界面草案 · 用于确认信息结构，不是最终视觉稿</span>
+    <h1>值守规则</h1>
+    <p class="lede">HR 发来未读消息时，系统按这里的规则决定回不回、回什么。敏感词优先于关键词——命中敏感词的整条消息不会被回复。</p>
+
+    <!-- 敏感词 -->
+    <section class="card">
+      <div class="card-h">
+        <div>
+          <h2>敏感词</h2>
+          <p>命中即整条不回复。用于薪资、收费类等不该由机器回应的议题。</p>
+        </div>
+        <span class="inline"><span class="tag">10 个</span></span>
+      </div>
+      <div class="card-b">
+        <div class="chips" id="veto">
+          <span class="chip veto mono">薪资<button>×</button></span>
+          <span class="chip veto mono">工资<button>×</button></span>
+          <span class="chip veto mono">待遇<button>×</button></span>
+          <span class="chip veto mono">月薪<button>×</button></span>
+          <span class="chip veto mono">年薪<button>×</button></span>
+          <span class="chip veto mono">多少钱<button>×</button></span>
+          <span class="chip veto mono">期望薪资<button>×</button></span>
+          <span class="chip veto mono">收费<button>×</button></span>
+          <span class="chip veto mono">押金<button>×</button></span>
+          <span class="chip veto mono">培训费<button>×</button></span>
+        </div>
+        <div class="adder">
+          <input id="vetoInput" placeholder="添加敏感词，回车确认">
+          <button class="btn" onclick="addVeto()">添加</button>
+        </div>
+        <p class="hint">关键词匹配为子串包含、大小写不敏感、全角转半角。</p>
+      </div>
+    </section>
+
+    <!-- 回复规则 -->
+    <section class="card">
+      <div class="card-h">
+        <div>
+          <h2>回复规则</h2>
+          <p>命中任一关键词即回复。一条规则可挂多条文案，每次随机取一条，避免话术重样。</p>
+        </div>
+        <span class="inline"><span class="tag">7 条 · 6 条启用</span></span>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>约面试</b><span class="cnt">3 关键词</span><span class="cnt">3 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">面试<button>×</button></span>
+            <span class="chip mono">面谈<button>×</button></span>
+            <span class="chip mono">约面<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li class="hit">好的，我这边时间比较灵活，您方便约个具体时间吗？<span class="rnd">本次命中</span></li>
+            <li>收到，我随时可以安排，您定时间我来配合。</li>
+            <li>方便的，线上或线下都可以。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>简历索取</b><span class="cnt">3 关键词</span><span class="cnt">2 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">简历<button>×</button></span>
+            <span class="chip mono">发一份<button>×</button></span>
+            <span class="chip mono">看一下<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>简历已在沟通里发过，如果您需要更详细的版本我可以再整理一份。</li>
+            <li>可以的，我整理好发您，也可以先聊聊岗位的具体方向。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>到岗时间</b><span class="cnt">4 关键词</span><span class="cnt">2 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">到岗<button>×</button></span>
+            <span class="chip mono">入职时间<button>×</button></span>
+            <span class="chip mono">什么时候能来<button>×</button></span>
+            <span class="chip mono">离职状态<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>目前可以随时到岗，具体时间可以按您的安排协调。</li>
+            <li>随时可以入职，提前一周沟通就能安排好。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>到岗方式 / 出差</b><span class="cnt">2 关键词</span><span class="cnt">2 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">远程<button>×</button></span>
+            <span class="chip mono">出差<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>我接受远程协作，也可以按需到岗配合。</li>
+            <li>短期出差没问题，长期的话想了解一下频率。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>岗位仍在招</b><span class="cnt">2 关键词</span><span class="cnt">2 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">还招人吗<button>×</button></span>
+            <span class="chip mono">还在招<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>在的，我对这个岗位很感兴趣，方便的话可以进一步沟通。</li>
+            <li>还在关注，想了解一下目前团队的侧重点。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule">
+        <div>
+          <div class="rule-t"><b>婉拒 / 不合适</b><span class="cnt">3 关键词</span><span class="cnt">1 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">不合适<button>×</button></span>
+            <span class="chip mono">暂不需要<button>×</button></span>
+            <span class="chip mono">已招满<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>明白，感谢告知，祝招聘顺利。</li>
+          </ul>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox" checked><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="rule off">
+        <div>
+          <div class="rule-t"><b>礼貌收尾</b><span class="cnt">2 关键词</span><span class="cnt">1 文案</span></div>
+          <div class="chips">
+            <span class="chip mono">谢谢<button>×</button></span>
+            <span class="chip mono">收到<button>×</button></span>
+          </div>
+          <ul class="texts">
+            <li>感谢回复，期待进一步沟通。</li>
+          </ul>
+          <p class="hint">默认关闭：容易和 HR 的客套话形成无意义往返。</p>
+        </div>
+        <div class="acts">
+          <label class="sw"><input type="checkbox"><span class="track"></span>启用</label>
+          <button class="btn ghost">编辑</button>
+        </div>
+      </div>
+
+      <div class="card-b" style="border-top:1px solid var(--line-soft)">
+        <button class="btn primary" onclick="toast('草案：此处展开新增规则的编辑表单')">+ 新增规则</button>
+      </div>
+    </section>
+
+    <!-- 未命中 -->
+    <section class="card">
+      <div class="card-h">
+        <div>
+          <h2>未命中的消息</h2>
+          <p>近 7 天里没有匹配到任何规则、也未被敏感词拦下的消息。规则库靠这里长出来。</p>
+        </div>
+        <span class="inline"><span class="tag">4 条待处理</span></span>
+      </div>
+
+      <div class="miss">
+        <div class="body">
+          <q>你这边 Golang 写过多少年？我们后端主要是 Go。</q>
+          <div class="meta">宁德时代新能源 · 资深后端工程师 · 昨天 16:42</div>
+        </div>
+        <button class="btn" onclick="toast('草案：会以这条消息为关键词起点新建规则')">转为规则</button>
+      </div>
+      <div class="miss">
+        <div class="body">
+          <q>方便这周来一趟公司聊聊吗，地点在软件园二期。</q>
+          <div class="meta">厦门某某科技 · Java 开发 · 昨天 11:08</div>
+        </div>
+        <button class="btn" onclick="toast('草案：会以这条消息为关键词起点新建规则')">转为规则</button>
+      </div>
+      <div class="miss">
+        <div class="body">
+          <q>我们这边有加班，能接受吗？大概每周两次到九点。</q>
+          <div class="meta">福州云智 · 后端开发工程师 · 10 月 26 日</div>
+        </div>
+        <button class="btn" onclick="toast('草案：会以这条消息为关键词起点新建规则')">转为规则</button>
+      </div>
+      <div class="miss">
+        <div class="body">
+          <q>简历里说做过 Flutter，是独立完成的吗？</q>
+          <div class="meta">广州千寻 · 全栈工程师 · 10 月 25 日</div>
+        </div>
+        <button class="btn" onclick="toast('草案：会以这条消息为关键词起点新建规则')">转为规则</button>
+      </div>
+    </section>
+
+    <footer>
+      <button class="btn" onclick="toast('草案：放弃未保存的修改')">取消</button>
+      <button class="btn primary" onclick="toast('草案：保存后下次值守生效，无需重启任务')">保存</button>
+    </footer>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+  function toast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('on');
+    clearTimeout(window.__t); window.__t = setTimeout(()=>t.classList.remove('on'), 1900);
+  }
+  function addVeto(){
+    const input = document.getElementById('vetoInput');
+    const v = input.value.trim();
+    if(!v) return;
+    const chip = document.createElement('span');
+    chip.className = 'chip veto mono';
+    chip.innerHTML = v + '<button>×</button>';
+    document.getElementById('veto').appendChild(chip);
+    input.value = ''; toast('已添加敏感词：' + v);
+  }
+  document.getElementById('vetoInput').addEventListener('keydown', e => { if(e.key === 'Enter') addVeto(); });
+  document.addEventListener('click', e => {
+    if(e.target.tagName === 'BUTTON' && e.target.parentElement.classList.contains('chip')){
+      e.target.parentElement.remove();
+    }
+  });
+</script>
+</body>
+</html>

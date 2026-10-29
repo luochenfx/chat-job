@@ -1,0 +1,194 @@
+package com.chatjob.watcher;
+
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.chatjob.store.ConfigStore;
+import com.chatjob.store.entity.ConversationEntity;
+import com.chatjob.store.entity.ReplyLogEntity;
+import com.chatjob.store.entity.ReplyRuleEntity;
+import com.chatjob.store.entity.ReplyRuleTextEntity;
+import com.chatjob.store.mapper.ConversationMapper;
+import com.chatjob.store.mapper.ReplyLogMapper;
+import com.chatjob.store.mapper.ReplyRuleMapper;
+import com.chatjob.store.mapper.ReplyRuleTextMapper;
+import com.chatjob.store.mapper.SensitiveWordMapper;
+import com.chatjob.store.entity.SensitiveWordEntity;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/** 值守规则的读写与会话游标。 */
+@Slf4j
+@Component
+public class ReplyStore {
+
+    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+    /** 同会话回复冷却：3 分钟 */
+    public static final int REPLY_COOLDOWN_MINUTES = 3;
+
+    private final ReplyRuleMapper ruleMapper;
+    private final ReplyRuleTextMapper textMapper;
+    private final SensitiveWordMapper sensitiveMapper;
+    private final ReplyLogMapper logMapper;
+    private final ConversationMapper conversationMapper;
+
+    public ReplyStore(ReplyRuleMapper ruleMapper,
+                      ReplyRuleTextMapper textMapper,
+                      SensitiveWordMapper sensitiveMapper,
+                      ReplyLogMapper logMapper,
+                      ConversationMapper conversationMapper) {
+        this.ruleMapper = ruleMapper;
+        this.textMapper = textMapper;
+        this.sensitiveMapper = sensitiveMapper;
+        this.logMapper = logMapper;
+        this.conversationMapper = conversationMapper;
+    }
+
+    public List<ReplyRuleEntity> rules() {
+        return ruleMapper.selectList(Wrappers.<ReplyRuleEntity>lambdaQuery()
+                .orderByAsc(ReplyRuleEntity::getSortOrder)
+                .orderByAsc(ReplyRuleEntity::getId));
+    }
+
+    public List<ReplyRuleTextEntity> textsOf(Long ruleId) {
+        return textMapper.selectList(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
+                .eq(ReplyRuleTextEntity::getRuleId, ruleId)
+                .orderByAsc(ReplyRuleTextEntity::getSortOrder));
+    }
+
+    public List<String> sensitiveWords() {
+        return sensitiveMapper.selectList(Wrappers.emptyWrapper()).stream()
+                .map(SensitiveWordEntity::getWord)
+                .filter(w -> w != null && !w.isBlank())
+                .toList();
+    }
+
+    /** 从库构建引擎。规则库很小（几十条），每次重建的代价可以忽略 */
+    public ReplyRuleEngine engine() {
+        List<ReplyRuleEngine.Rule> rules = new ArrayList<>();
+        for (ReplyRuleEntity rule : rules()) {
+            String rawKeywords = rule.getKeywords() == null ? "" : rule.getKeywords();
+            List<String> keywords = Arrays.stream(rawKeywords.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+            List<String> texts = textsOf(rule.getId()).stream()
+                    .map(ReplyRuleTextEntity::getText)
+                    .filter(t -> t != null && !t.isBlank())
+                    .toList();
+            rules.add(new ReplyRuleEngine.Rule(rule.getId(), rule.getName(), keywords, texts,
+                    rule.getEnabled() != null && rule.getEnabled() == 1));
+        }
+        return new ReplyRuleEngine(rules, sensitiveWords());
+    }
+
+    // ------------------------------------------------------------ 会话
+
+    public ConversationEntity upsertConversation(String platform, String conversationKey, Long jobPostingId) {
+        ConversationEntity existing = findConversation(platform, conversationKey);
+        String now = ConfigStore.now();
+        if (existing == null) {
+            ConversationEntity entity = new ConversationEntity();
+            entity.setPlatform(platform);
+            entity.setPlatformConversationId(conversationKey);
+            entity.setJobPostingId(jobPostingId);
+            entity.setLastCheckedAt(now);
+            entity.setHrReplyCount(0);
+            entity.setCreatedAt(now);
+            conversationMapper.insert(entity);
+            return entity;
+        }
+        existing.setLastCheckedAt(now);
+        if (jobPostingId != null) {
+            existing.setJobPostingId(jobPostingId);
+        }
+        conversationMapper.updateById(existing);
+        return existing;
+    }
+
+    public ConversationEntity findConversation(String platform, String conversationKey) {
+        return conversationMapper.selectOne(Wrappers.<ConversationEntity>lambdaQuery()
+                .eq(ConversationEntity::getPlatform, platform)
+                .eq(ConversationEntity::getPlatformConversationId, conversationKey));
+    }
+
+    /**
+     * 按主键取会话。重试路径上只拿得到 {@code unread_task.conversation_id}，
+     * 拿不到平台会话 id（那玩意儿就是 HR 标题，任务表里存的是同一个值，但语义不同，不要混用）。
+     */
+    public ConversationEntity findById(Long conversationId) {
+        return conversationId == null ? null : conversationMapper.selectById(conversationId);
+    }
+
+    public boolean inCooldown(ConversationEntity conversation) {
+        if (conversation == null || conversation.getLastOwnReplyAt() == null) {
+            return false;
+        }
+        try {
+            return LocalDateTime.parse(conversation.getLastOwnReplyAt(), TS)
+                    .isAfter(LocalDateTime.now().minusMinutes(REPLY_COOLDOWN_MINUTES));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public void markOwnReply(ConversationEntity conversation) {
+        conversation.setLastOwnReplyAt(ConfigStore.now());
+        conversationMapper.updateById(conversation);
+    }
+
+    /** 效果采集（可开关）：只记首响时间与条数，不参与任何自动决策 */
+    public void recordHrMessage(ConversationEntity conversation) {
+        String now = ConfigStore.now();
+        conversation.setLastHrMessageAt(now);
+        if (conversation.getFirstHrReplyAt() == null) {
+            conversation.setFirstHrReplyAt(now);
+        }
+        conversation.setHrReplyCount((conversation.getHrReplyCount() == null ? 0 : conversation.getHrReplyCount()) + 1);
+        conversationMapper.updateById(conversation);
+    }
+
+    // ------------------------------------------------------------ 日志
+
+    public boolean wasProcessed(Long conversationId, String messageId) {
+        if (conversationId == null || messageId == null) {
+            return false;
+        }
+        Long count = logMapper.selectCount(Wrappers.<ReplyLogEntity>lambdaQuery()
+                .eq(ReplyLogEntity::getConversationId, conversationId)
+                .eq(ReplyLogEntity::getPlatformMessageId, messageId));
+        return count != null && count > 0;
+    }
+
+    public void log(ReplyLogEntity entity) {
+        if (entity.getCreatedAt() == null) {
+            entity.setCreatedAt(ConfigStore.now());
+        }
+        logMapper.insert(entity);
+    }
+
+    public List<ReplyLogEntity> unmatched(int days, int limit) {
+        String cutoff = LocalDateTime.now().minusDays(days).format(TS);
+        return logMapper.selectList(Wrappers.<ReplyLogEntity>lambdaQuery()
+                .eq(ReplyLogEntity::getAction, ReplyRuleEngine.Action.UNMATCHED.name())
+                .ge(ReplyLogEntity::getCreatedAt, cutoff)
+                .orderByDesc(ReplyLogEntity::getId)
+                .last("LIMIT " + Math.max(1, limit)));
+    }
+
+    public List<ReplyLogEntity> recentLogs(int limit) {
+        return logMapper.selectList(Wrappers.<ReplyLogEntity>lambdaQuery()
+                .orderByDesc(ReplyLogEntity::getId)
+                .last("LIMIT " + Math.max(1, limit)));
+    }
+
+    public void deleteLogOlderThan(int days) {
+        String cutoff = LocalDateTime.now().minusDays(days).format(TS);
+        logMapper.delete(Wrappers.<ReplyLogEntity>lambdaQuery()
+                .lt(ReplyLogEntity::getCreatedAt, cutoff));
+    }
+}

@@ -1,0 +1,30 @@
+# ============================================================
+# console/ —— Nuxt 3 控制台前端
+# 只保留源码：app.vue / pages / components / composables / assets
+#              以及 nuxt.config.ts、package.json、package-lock.json
+# ============================================================
+
+# 依赖
+node_modules/
+
+# Nuxt 构建期缓存与产物
+.nuxt/
+.output/
+.nitro/
+.cache/
+.data/
+
+# dist 是指向 .output/public 的符号链接（由构建期产生），不入库
+dist
+
+# 包管理器调试日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 前端本地环境变量
+.env
+.env.*
+!.env.example

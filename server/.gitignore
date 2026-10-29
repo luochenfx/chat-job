@@ -1,0 +1,27 @@
+# ============================================================
+# server/ —— Spring Boot 后端（Maven）
+# 只保留源码：pom.xml + src/{main,test}
+# ============================================================
+
+# Maven 构建输出
+target/
+*.class
+*.jar
+*.war
+
+# 误跑产生的运行时目录。
+# application.yaml 里的 ./data、./browser-data 都相对「工作目录」解析：
+# 从仓库根启动（start.bat / dev.bat）时会落到 /data 与 /browser-data；
+# 若直接在 server/ 下跑 spring-boot:run，就会在这里多出一份，必须出局。
+data/
+browser-data/
+
+# Maven 本地元数据
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# 后端本地环境变量
+.env
+.env.*
+!.env.example
+*.log

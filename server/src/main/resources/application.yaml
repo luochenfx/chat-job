@@ -1,0 +1,68 @@
+spring:
+  application:
+    name: chat-job
+  datasource:
+    # 单机单文件。WAL + busy_timeout 是必须的：控制台读写与 Run 线程写日志会并发，
+    # 不开 WAL 会直接抛 database is locked。
+    url: jdbc:sqlite:./data/chat-job.db?journal_mode=WAL&busy_timeout=5000&foreign_keys=on
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 8
+      connection-test-query: SELECT 1
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  # 只绑本机回环，绝不对外监听（C1）
+  address: 127.0.0.1
+  port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,text/plain,text/event-stream
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+logging:
+  level:
+    root: INFO
+    com.chatjob: DEBUG
+  file:
+    name: ./data/logs/chat-job.log
+  logback:
+    rollingpolicy:
+      max-history: 14
+      max-file-size: 10MB
+
+chat-job:
+  driver:
+    # patchright driver 目录，构建期由 scripts/install-patchright.mjs 生成
+    dir: ./build/patchright-driver
+    # 找不到 driver 时拒绝启动任务（fail-closed），不得静默退回官方 driver
+    fail-closed: true
+  browser:
+    user-data-dir: ./browser-data
+    slow-mo-ms: 50
+    default-timeout-ms: 30000
+    # auto = 按 chrome → msedge 探测本机已装的那个；也可写死 chrome / msedge。
+    # 解析结果会显示在控制台"系统"页，不做静默降级。
+    channel: auto
+    # 显式指定浏览器可执行文件，优先级高于 channel
+    executable-path: ""
+  self-check:
+    # 启动自检页：用 data URL 断言 navigator.webdriver 等指纹
+    enabled: true
+  notify-config:
+    wecom-webhook: ""
+    throttle-window-seconds: 300

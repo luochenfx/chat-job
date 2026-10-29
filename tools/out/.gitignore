@@ -1,0 +1,12 @@
+# ============================================================
+# tools/out/ —— 探测脚本的默认输出目录（--out）
+#
+# 内容均为一次性快照，可重复生成：
+#   platform-option-dict.json / message-kinds.json / precheck.json
+#   boss-blacklist-sample.json
+#   V2、V3 种子 SQL（已固化进 server/src/main/resources/db/migration）
+#   dryrun-*.png
+# ============================================================
+
+*
+!.gitignore
