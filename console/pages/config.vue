@@ -351,13 +351,14 @@
       <div class="card">
         <h2>配额与节奏</h2>
         <p class="hint">
-          投递配额决定主动沟通多少岗位，评估上限决定查看多少岗位
+          主动投递配额决定主动沟通多少岗位，评估上限决定查看多少岗位
           配额用完只是今天不再找岗位，HR 的消息照常回。
         </p>
         <div class="grid cols-3">
           <div class="field">
-            <label>日投递配额</label>
+            <label>日主动投递配额</label>
             <input v-model.number="platform.dailyDeliveryQuota" type="number" min="1" max="200" />
+            <div class="desc">只含扫描侧发起的投递；值守里应对方索要发的简历不计入</div>
           </div>
           <div class="field">
             <label>日评估上限</label>

@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>岗位</h1>
-        <p>扫到的岗位与每次投递尝试。失败不自动无限重试：同一岗位连发三次可能导致封号</p>
+        <p>扫到的岗位与每次主动投递尝试。失败不自动无限重试：同一岗位连发三次可能导致封号</p>
       </div>
       <div class="row">
         <select v-model="filter" style="width: 140px">

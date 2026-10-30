@@ -62,7 +62,7 @@
         <li>会真的浏览平台：打开搜索、滚动卡片、抓取岗位详情，与正常模式一样。</li>
         <li>会真的调用 AI 判定并写招呼语，消耗 token，并计入当天的评估上限。</li>
         <li>值守会真的点开会话读消息。<b>点开会话即清红点，平台无法标回未读</b> —— 这些消息之后不会再出现在未读列表里，正常运行也不会回复它们。</li>
-        <li>不受值守时段限制，任何时间都能跑；当天的投递配额与评估上限照常生效。</li>
+        <li>不受值守时段限制，任何时间都能跑；当天的主动投递配额与评估上限照常生效。</li>
       </ul>
       <p class="notice-foot">
         演练的结论只落在运行日志里（「本会投递」「本会回复」），控制台计数不会因此增加，也不会显示成已发送。
@@ -92,7 +92,7 @@
             <div class="num">组合 {{ (run?.combinationIndex ?? 0) + 1 }} / 卡片 {{ run?.lastCardIndex ?? 0 }}</div>
           </div>
           <div>
-            <div class="hint-inline">投递 / 评估</div>
+            <div class="hint-inline">主动投递 / 评估</div>
             <!-- 演练下投递恒为 0：显示 0 会被读成「投了但全失败」，用 — 表示「没有发生」 -->
             <div class="num">{{ runIsDryRun ? '—' : (run?.deliveredCount ?? 0) }} / {{ run?.evaluatedCount ?? 0 }}</div>
           </div>
@@ -124,7 +124,7 @@
               <th>城市 / 关键词</th>
               <th style="width: 80px">状态</th>
               <th style="width: 60px">卡片</th>
-              <th style="width: 60px">投递</th>
+              <th style="width: 84px">主动投递</th>
             </tr>
           </thead>
           <tbody>
@@ -284,7 +284,7 @@ function time(at: number) {
 
 // 事件里的 reason 是枚举，界面上要变成一句人话
 function stopReasonText(reason: string) {
-  return ({ QUOTA: '今日投递配额已用完', EVAL_LIMIT: '今日评估已达上限', COMBOS_EXHAUSTED: '搜索组合已扫完' } as any)[reason] || reason
+  return ({ QUOTA: '今日主动投递配额已用完', EVAL_LIMIT: '今日评估已达上限', COMBOS_EXHAUSTED: '搜索组合已扫完' } as any)[reason] || reason
 }
 
 function rescanReasonText(reason: string) {
@@ -303,7 +303,7 @@ function describe(e: { type: string; data: any }) {
         ? `值守时段已结束（${d.window}，${d.at}），已挂起；值守期未结束`
         : `不在值守时段（${d.window}，${d.at}），已挂起等待`
     case 'run.standby':
-      return `扫描结束（${stopReasonText(d.reason)}），转入值守待命：投递 ${d.delivered} / 评估 ${d.evaluated}`
+      return `扫描结束（${stopReasonText(d.reason)}），转入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
     case 'run.rescan':
       return `恢复扫描：${rescanReasonText(d.reason)}`
     case 'run.awakened':
@@ -327,7 +327,7 @@ function describe(e: { type: string; data: any }) {
     case 'circuit.opened':
       return `熔断：${d.kind} — ${d.message}`
     case 'run.finished':
-      return `任务结束：${d.status}（投递 ${d.delivered}，评估 ${d.evaluated}）`
+      return `任务结束：${d.status}（主动投递 ${d.delivered}，评估 ${d.evaluated}）`
     default:
       return e.type
   }

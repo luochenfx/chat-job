@@ -15,6 +15,7 @@ import com.chatjob.store.entity.SensitiveWordEntity;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -207,6 +208,23 @@ public class ReplyStore {
         return logMapper.selectList(Wrappers.<ReplyLogEntity>lambdaQuery()
                 .orderByDesc(ReplyLogEntity::getId)
                 .last("LIMIT " + Math.max(1, limit)));
+    }
+
+    /**
+     * 「值守发简历数」：今日 {@code REPLY_RESUME} 的条数（ADR-0004 第 4 条）。
+     *
+     * <p>刻意与 {@code RunStore.deliveredToday()} 分开：那个数主动投递（扫描侧发起的沟通），
+     * 这个数值守里应对方索要而发出的简历。两件事风控语义相反，一旦合并成一个数字，
+     * 被动应答就会吃掉主动外呼的配额。
+     *
+     * <p>边界按本地自然日、左闭右开：昨天 23:59:59 那一份不该出现在今天的计数里，
+     * 今天 00:00:00 的那一份必须算今天。
+     */
+    public int resumeOnRequestToday(String platform) {
+        LocalDate day = LocalDate.now();
+        String from = day.atStartOfDay().format(TS);
+        String to = day.plusDays(1).atStartOfDay().format(TS);
+        return (int) logMapper.countResumeOnRequest(platform, from, to);
     }
 
     public void deleteLogOlderThan(int days) {

@@ -14,11 +14,18 @@
       </div>
     </div>
 
-    <div class="grid cols-4" style="margin-bottom: 20px">
+    <div class="grid cols-5" style="margin-bottom: 20px">
       <div class="metric">
-        <div class="label">今日投递</div>
+        <div class="label">今日主动投递</div>
         <div class="value">{{ status?.deliveredToday ?? 0 }}<span style="font-size: 14px; color: var(--muted)"> / {{ quota }}</span></div>
         <div class="sub">配额达到即中止扫描，值守继续</div>
+      </div>
+      <!-- 与左边分开显示：一个是我们主动外呼，一个是对方先开口后我们才发简历。
+           合成一个数字会让人以为今天被动的那些也吃掉了配额 -->
+      <div class="metric">
+        <div class="label">值守发简历</div>
+        <div class="value">{{ status?.resumeOnRequestToday ?? 0 }}</div>
+        <div class="sub">应对方索要而发，不占投递配额</div>
       </div>
       <div class="metric">
         <div class="label">今日评估</div>
@@ -76,7 +83,7 @@
               <th style="width: 40px">#</th>
               <th>城市 / 关键词</th>
               <th style="width: 92px">状态</th>
-              <th style="width: 72px">投递</th>
+              <th style="width: 92px">主动投递</th>
             </tr>
           </thead>
           <tbody>
@@ -108,7 +115,7 @@
           </div>
         </div>
         <div>
-          <div class="hint-inline">投递 / 评估</div>
+          <div class="hint-inline">主动投递 / 评估</div>
           <!-- 演练那条 Run 一条都没投，显示 0 会被读成「投了但全失败」 -->
           <div class="num">{{ run.mode === 'DRY_RUN' ? '—' : run.deliveredCount }} / {{ run.evaluatedCount }}</div>
         </div>

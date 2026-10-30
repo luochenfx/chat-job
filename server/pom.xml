@@ -97,6 +97,12 @@
     </dependencies>
 
     <build>
+        <!--
+          jar 名固定成 chat-job.jar：版本号只在 pom 里随迭代 bump，启动脚本
+          （start.bat / build.bat）与文档不该被版本变更牵着改。分发包内同样是
+          app/chat-job.jar（scripts/build-dist.mjs 用固定名拷贝），两处保持一致。
+        -->
+        <finalName>chat-job</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

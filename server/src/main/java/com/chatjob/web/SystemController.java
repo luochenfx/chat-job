@@ -75,8 +75,11 @@ public class SystemController {
         out.put("browserResolved", channel.resolved());
         out.put("browserReady", session.isReady());
         out.put("running", runService.isRunning());
+        // 两个数字口径不同，一个都不能省（ADR-0004）：deliveredToday 只数主动投递，
+        // resumeOnRequestToday 只数值守里应对方索要发出的简历。合并会让被动应答吃掉主动配额
         out.put("deliveredToday", runStore.deliveredToday(adapter.platform()));
         out.put("evaluatedToday", runStore.evaluatedToday(adapter.platform()));
+        out.put("resumeOnRequestToday", replyStore.resumeOnRequestToday(adapter.platform()));
         out.put("dictionaryTotal", optionStore.total());
         out.put("sseSubscribers", 0);
         out.put("serverTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
@@ -142,6 +145,7 @@ public class SystemController {
         out.put("day", RunStore.today());
         out.put("delivered", runStore.deliveredToday(adapter.platform()));
         out.put("evaluated", runStore.evaluatedToday(adapter.platform()));
+        out.put("resumeOnRequest", replyStore.resumeOnRequestToday(adapter.platform()));
         return out;
     }
 }

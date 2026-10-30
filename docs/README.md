@@ -43,6 +43,7 @@
 - 同名 HR 无法区分（平台会话无稳定 id），靠精确标题匹配 + 摘要二次校验，多命中即放弃，见 [`spec/0002-ai-reply.md`](spec/0002-ai-reply.md) §5.3。
 - `QUOTA_REACHED` **V12 之后不再产生**，枚举保留只为让历史数据在界面上仍可读；配额命中的新出口是 `STANDBY`。
 - 服务重启不自动接管进行中的 Run（`RUNNING` / `STANDBY` 一律标 `FAILED / SERVICE_RESTART`），`WAITING_DUTY` 挂起态跨重启保留 —— 这是 [`spec/0003-run-standby.md`](spec/0003-run-standby.md) 明确的非目标之一。
+- **「今日主动投递」与「值守发简历」是两个口径，不能相加也不能互相顶替**（[ADR-0004](adr/0004-delivery-vs-resume-on-request.md)）：前者只读 `daily_counter.delivered`，由扫描侧在确认送达后累加，决定投递配额；后者只数 `reply_log` 里当日的 `REPLY_RESUME`，是值守里应对方索要发出去的简历，不占配额。守卫见 `RunStoreDeliveredTodayTest`。
 
 ## 技术栈与分层
 
@@ -106,7 +107,7 @@ web ── orchestrator ── evaluate ── platform(boss) ── driver(patc
 `start.bat` 会创建 `data/`、`data/logs/`，检查 driver 与 jar 是否存在，然后：
 
 ```
-java -jar server\target\chat-job-0.1.0-SNAPSHOT.jar --server.address=127.0.0.1 --server.port=8080
+java -jar server\target\chat-job.jar --server.address=127.0.0.1 --server.port=8080
 ```
 
 **浏览器会自动打开 <http://127.0.0.1:8080/>** —— 不是硬等固定秒数，而是由 `scripts/open-when-ready.mjs` 在后台轮询 `/api/system/status`，确认应答的确实是 chat-job 后才调 `start`。因此：JVM/Flyway 慢只会晚开一会儿；端口被别的程序占着时窗口里会留一行 `[open] port 8080 answers, but it is NOT chat-job (occupied?)`，**不会**把你带到别人的页面上。不想自动开就删掉 bat 里那行 `start "" /b node ...`，手动访问即可。启动日志首行横幅会打印工作目录、数据目录、profile、浏览器与 driver 状态。
@@ -271,10 +272,14 @@ cd console && npm run build
 | [`spec/0001-chat-job-mvp.md`](spec/0001-chat-job-mvp.md) | 主需求：扫描、判定、投递、批处理边界 |
 | [`spec/0002-ai-reply.md`](spec/0002-ai-reply.md) | 值守 AI 回复与实施记录（含出站四重校验） |
 | [`spec/0003-run-standby.md`](spec/0003-run-standby.md) | 值守期：扫描收工后值守继续 + 可见的运行态 |
+| [`spec/0004-zhaopin-parallel.md`](spec/0004-zhaopin-parallel.md) | 智联接入与多平台并行：阶段划分与实现顺序 |
 | [`adr/0001-patchright-as-playwright-driver.md`](adr/0001-patchright-as-playwright-driver.md) | 为什么用 patchright 当 playwright 的 driver |
 | [`adr/0002-standby-instead-of-finish.md`](adr/0002-standby-instead-of-finish.md) | 配额用完不结束，改为值守待命 |
+| [`adr/0003-parallel-platforms.md`](adr/0003-parallel-platforms.md) | 每个平台一条独立流水线，并行运行 |
+| [`adr/0004-delivery-vs-resume-on-request.md`](adr/0004-delivery-vs-resume-on-request.md) | 投递只算主动投递，应对方要求发的简历不进投递表 |
 | [`tech/0001-reference-get-jobs.md`](tech/0001-reference-get-jobs.md) | 参考实现与未闭环事实 |
 | [`tech/0002-ai-reply-research.md`](tech/0002-ai-reply-research.md) | 值守 AI 回复调研 |
+| [`tech/0003-zhaopin-research.md`](tech/0003-zhaopin-research.md) | 智联接入依据：页面实测事实、与 get_jobs 的交叉验证、并行评估 |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案 |
 
 ## 接口速查

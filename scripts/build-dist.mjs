@@ -147,7 +147,9 @@ log(`    ok  ${mb(sizeOf(driverSrc))}`)
 
 // ---------------------------------------------------------------- 2. jar
 step(2, 6, '准备后端 jar（含控制台静态产物）')
-const jarName = `chat-job-${version}.jar`
+// 固定名：server/pom.xml 里 <finalName>chat-job</finalName>，与启动脚本同源，
+// 不随版本号变化（version 只用于 dist 目录名与 build-info.txt）。
+const jarName = 'chat-job.jar'
 const jarSrc = join(root, 'server', 'target', jarName)
 if (rebuild || !existsSync(jarSrc)) {
   if (!existsSync(join(consolePublic, 'index.html'))) {

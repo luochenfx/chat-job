@@ -97,14 +97,19 @@
     <div class="card">
       <h2>当日计数</h2>
       <p class="hint">配额与评估上限都读这里，重启不归零</p>
-      <div class="grid cols-3">
+      <div class="grid cols-2">
         <div>
           <div class="hint-inline">日期</div>
           <div>{{ status?.serverTime }}</div>
         </div>
         <div>
-          <div class="hint-inline">今日投递 / 评估</div>
+          <div class="hint-inline">今日主动投递 / 评估</div>
           <div class="num">{{ status?.deliveredToday }} / {{ status?.evaluatedToday }}</div>
+        </div>
+        <div>
+          <div class="hint-inline">值守发简历</div>
+          <!-- 数据源是 reply_log 的 REPLY_RESUME，与上面的主动投递不是一个口径 -->
+          <div class="num">{{ status?.resumeOnRequestToday }}</div>
         </div>
         <div>
           <div class="hint-inline">字典条目</div>

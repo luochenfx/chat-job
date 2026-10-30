@@ -28,7 +28,7 @@ if errorlevel 1 (
   exit /b 1
 )
 set "__url=http://127.0.0.1:%__port%/"
-set "__jar=server\target\chat-job-0.1.0-SNAPSHOT.jar"
+set "__jar=server\target\chat-job.jar"
 
 if not exist data mkdir data
 if not exist data\logs mkdir data\logs

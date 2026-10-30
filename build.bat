@@ -12,7 +12,7 @@ rem ---------------------------------------------------------------------------
 setlocal enableextensions
 cd /d "%~dp0"
 
-set "__jar=server\target\chat-job-0.1.0-SNAPSHOT.jar"
+set "__jar=server\target\chat-job.jar"
 set "__step=»·¾³¼ì²é"
 
 call :need node.exe "Node.js"

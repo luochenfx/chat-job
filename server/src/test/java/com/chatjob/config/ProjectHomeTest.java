@@ -22,7 +22,7 @@ class ProjectHomeTest {
     @Test
     void 从jar运行时反查出项目根(@TempDir Path root) throws IOException {
         Path target = Files.createDirectories(root.resolve("server").resolve("target"));
-        Path jar = Files.createFile(target.resolve("chat-job-0.1.0-SNAPSHOT.jar"));
+        Path jar = Files.createFile(target.resolve("chat-job.jar"));
         Files.createFile(root.resolve("start.bat"));
 
         assertThat(ProjectHome.resolveFrom(jar, root.resolve("server"), null)).isEqualTo(root);

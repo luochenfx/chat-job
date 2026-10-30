@@ -384,7 +384,7 @@ public class RunService {
                 String why = newDay ? "已跨自然日（" + RunStore.today() + "），恢复扫描"
                         : reason == StandbyGate.StopReason.EVAL_LIMIT
                         ? "评估上限已回升（" + evaluated + "/" + evalLimit(cfg) + "），恢复扫描"
-                        : "投递配额已回升（" + delivered + "/" + quota(cfg) + "），恢复扫描";
+                        : "主动投递配额已回升（" + delivered + "/" + quota(cfg) + "），恢复扫描";
                 log(run, "INFO", why);
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("reason", code);
@@ -428,7 +428,7 @@ public class RunService {
         int evaluated = runStore.evaluatedToday(run.getPlatform());
         StandbyGate.StopReason why0 = reason == null ? StandbyGate.StopReason.COMBOS_EXHAUSTED : reason;
         String why = switch (why0) {
-            case QUOTA -> "今日投递配额已用完（" + delivered + "/" + quota(cfg) + "）";
+            case QUOTA -> "今日主动投递配额已用完（" + delivered + "/" + quota(cfg) + "）";
             case EVAL_LIMIT -> "今日评估已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
             case COMBOS_EXHAUSTED -> "搜索组合已全部扫完";
         };
@@ -544,7 +544,7 @@ public class RunService {
 
     private static String stopLabel(StandbyGate.StopReason reason) {
         return switch (reason) {
-            case QUOTA -> "今日投递配额";
+            case QUOTA -> "今日主动投递配额";
             case EVAL_LIMIT -> "今日评估上限";
             case COMBOS_EXHAUSTED -> "组合耗尽";
         };
@@ -559,7 +559,7 @@ public class RunService {
     private void finishDryRun(RunEntity run, StandbyGate.StopReason stop) {
         switch (stop == null ? StandbyGate.StopReason.COMBOS_EXHAUSTED : stop) {
             case QUOTA -> finish(run, RunStatus.COMPLETED, "QUOTA_REACHED",
-                    "演练模式：今日投递配额已用完，演练结束（不进入待命）");
+                    "演练模式：今日主动投递配额已用完，演练结束（不进入待命）");
             case EVAL_LIMIT -> finish(run, RunStatus.COMPLETED, "EVAL_LIMIT_REACHED",
                     "演练模式：今日评估已达上限，演练结束（不进入待命）");
             case COMBOS_EXHAUSTED -> finish(run, RunStatus.COMPLETED, "COMPLETED", "组合队列已跑完");
@@ -660,7 +660,7 @@ public class RunService {
             // 要么已经发完，是唯一可靠的断点。命中后只中止扫描：值守照旧（spec 0003 3.2）。
             int delivered = runStore.deliveredToday(run.getPlatform());
             if (delivered >= quota(cfg)) {
-                log(run, "INFO", "今日投递已达配额 " + quota(cfg) + "（" + delivered + "），中止扫描；值守继续");
+                log(run, "INFO", "今日主动投递已达配额 " + quota(cfg) + "（" + delivered + "），中止扫描；值守继续");
                 return StandbyGate.StopReason.QUOTA;
             }
             int evaluated = runStore.evaluatedToday(run.getPlatform());

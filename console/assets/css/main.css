@@ -184,10 +184,23 @@ h3 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+/* 概览有五个指标：主动投递 / 值守发简历 / 评估 / 本次运行 / 字典。
+   挤成四列会让「主动投递」和「值守发简历」这两个必须并排比较的数字隔行 */
+.grid.cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .grid.cols-5 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 980px) {
   .grid.cols-2,
   .grid.cols-3,
-  .grid.cols-4 {
+  .grid.cols-4,
+  .grid.cols-5 {
     grid-template-columns: 1fr;
   }
 
