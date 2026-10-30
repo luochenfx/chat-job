@@ -1,25 +1,83 @@
 @echo off
-rem chat-job å¯åŠ¨è„šæœ¬ï¼ˆWindowsï¼‰
-rem ç«¯å£æ˜¾å¼æŒ‡å®šï¼šå®¿ä¸»ç¯å¢ƒå¯èƒ½æ³¨å…¥ SERVER_PORT / SERVER__PORTï¼Œ
-rem é‚£ä¼šè¦†ç›– application.yaml é‡Œçš„ 8080ï¼Œè¡¨ç°ä¸º"é…ç½®æ˜æ˜å†™äº†å´æ²¡ç”Ÿæ•ˆ"ã€‚
-setlocal
+rem ---------------------------------------------------------------------------
+rem chat-job Æô¶¯½Å±¾£¨Windows£¬Éú²úÊ½£ºjava -jar£©
+rem
+rem ±àÂëÔ¼¶¨£¨Îğ¸Ä£©£º±¾ÎÄ¼ş±ØĞë±£´æÎª GBK/ANSI + CRLF¡£
+rem ´æ³É UTF-8 Ê±£¬cp936 ¿ØÖÆÌ¨°´¡¸Á½×Ö½ÚÒ»¸ö×Ö¡¹½âÂë£¬»á°ÑĞĞÎ²»»ĞĞÒ»Æğ³Ôµô£¬
+rem ÓÚÊÇ rem ×¢ÊÍÀïµÄ°ë½ØÎÄ×Ö±»µ±³ÉÃüÁîÖ´ĞĞ£¬±¨´íĞÎÈç
+rem   'ion.yaml' ²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî
+rem ¸ÄÍêÓÃ cmd Ë«»÷ÅÜÒ»±é£¬È·ÈÏÃ»ÓĞÈÎºÎ¡¸²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî¡¹²ÅËãÊı¡£
+rem ---------------------------------------------------------------------------
+setlocal enableextensions
 cd /d "%~dp0"
+
+rem ---- ¶Ë¿Ú£ºÈ«²Ö¿âÎ¨Ò»À´Ô´¾ÍÊÇÏÂÃæÕâÒ»ĞĞ ----
+rem ±¾½Å±¾°Ñ --server.port ÏÔÊ½´«¸ø Spring¡£ÃüÁîĞĞ²ÎÊıÓÅÏÈ¼¶×î¸ß£¬Ñ¹µÃ×¡
+rem application.yaml Óë»·¾³±äÁ¿ÀïµÄ SERVER_PORT / SERVER__PORT£¬
+rem ËùÒÔ¡¸¸Ä yaml µÄ server.port¡¹ÆäÊµ²»ÉúĞ§¡ª¡ª»»¶Ë¿ÚÖ»¸ÄÕâÀï¡£
+rem ÁÙÊ±»»¶Ë¿Ú£¨²»¸ÄÎÄ¼ş£©£ºstart.bat 8081    »ò    set CHAT_JOB_PORT=8081 ºóÔÙÅÜ
+rem ×Ô¶¯´ò¿ªµÄÒ³ÃæÓÃÍ¬Ò»¸ö±äÁ¿Æ´³öÀ´£¬²»»á³öÏÖ¡¸¿ªÁË 8080 ÆäÊµÅÜÔÚ 8081¡¹¡£
+set "__port=8080"
+if defined CHAT_JOB_PORT set "__port=%CHAT_JOB_PORT%"
+if not "%~1"=="" set "__port=%~1"
+echo %__port%|findstr /r /c:"^[0-9][0-9]*$" >nul
+if errorlevel 1 (
+  echo [x] ¶Ë¿Ú "%__port%" ²»ÊÇ´¿Êı×Ö¡£¸Ä³É 8080 ÕâÑùµÄÊıÔÙÊÔ¡£
+  echo.
+  pause
+  exit /b 1
+)
+set "__url=http://127.0.0.1:%__port%/"
+set "__jar=server\target\chat-job-0.1.0-SNAPSHOT.jar"
 
 if not exist data mkdir data
 if not exist data\logs mkdir data\logs
 
-if not exist "build\patchright-driver\package\cli.js" (
-  echo [!] æœªæ‰¾åˆ° patchright driverï¼Œåæ£€æµ‹èƒ½åŠ›å°†ä¸å¯ç”¨ï¼Œä»»åŠ¡ä¼šè¢«æ‹’ç»å¯åŠ¨ã€‚
-  echo     è¯·å…ˆæ‰§è¡Œ: node scripts\install-patchright.mjs
+where java.exe >nul 2>nul
+if errorlevel 1 (
+  echo [x] Î´ÕÒµ½ java£¬ÇëÏÈ°²×° JDK 21 ²¢È·±£ËüÔÚ PATH Àï¡£
   echo.
-)
-
-if not exist "server\target\chat-job-0.1.0-SNAPSHOT.jar" (
-  echo [!] æœªæ‰¾åˆ°åç«¯ jarï¼Œè¯·å…ˆæ‰§è¡Œ build.bat
   pause
   exit /b 1
 )
 
-rem åªç»‘æœ¬æœºå›ç¯ï¼Œç»ä¸å¯¹å¤–ç›‘å¬
-java -jar "server\target\chat-job-0.1.0-SNAPSHOT.jar" --server.address=127.0.0.1 --server.port=8080
-endlocal
+if not exist "build\patchright-driver\package\cli.js" (
+  echo [!] Î´ÕÒµ½ patchright driver£¬·´¼ì²âÄÜÁ¦½«²»¿ÉÓÃ£¬ÈÎÎñ»á±»¾Ü¾øÆô¶¯¡£
+  echo     ÇëÏÈÖ´ĞĞ£ºnode scripts\install-patchright.mjs
+  echo.
+)
+
+if not exist "%__jar%" (
+  echo [x] Î´ÕÒµ½ºó¶Ë jar£º%__jar%
+  echo     ÇëÏÈÖ´ĞĞ build.bat
+  echo.
+  pause
+  exit /b 1
+)
+
+echo ¿ØÖÆÌ¨µØÖ·£º%__url%
+echo ·şÎñÄÜÓ¦´ğÖ®ºó»á×Ô¶¯´ò¿ªä¯ÀÀÆ÷£¨ÓÉ scripts\open-when-ready.mjs ÂÖÑ¯´¥·¢£©¡£
+echo ÈÕÖ¾Ê×ĞĞ»á´òÓ¡¡¸ÔËĞĞÊ±Êı¾İÎ»ÖÃ¡¹£¬ºË¶ÔÊı¾İ¿âÂ·¾¶¡£
+echo Ö»°ó±¾»ú»Ø»·£¬²»¶ÔÍâ¼àÌı¡£
+echo.
+
+rem ºóÌ¨ÆğÒ»¸öÌ½²â½ø³Ì£ºËü×Ô¼ºÂÖÑ¯ /api/system/status£¬È·ÈÏ¶ÔÃæÈ·ÊµÊÇ chat-job ²Å¿ªä¯ÀÀÆ÷¡£
+rem ¶Ë¿Ú±»±ğµÄ³ÌĞòÕ¼×ÅÊ±Ëü²»»á¿ªÒ³Ãæ£¬Ö»ÔÚ´°¿ÚÀïÁôÒ»ĞĞÌáÊ¾¡£
+where node.exe >nul 2>nul
+if errorlevel 1 (
+  echo [!] Î´ÕÒµ½ node£¬ÎŞ·¨×Ô¶¯´ò¿ª¿ØÖÆÌ¨Ò³Ãæ¡£¾ÍĞ÷ºóÇëÊÖ¶¯·ÃÎÊ %__url%
+  echo.
+) else (
+  start "" /b node "scripts\open-when-ready.mjs" %__port%
+)
+
+java -jar "%__jar%" --server.address=127.0.0.1 --server.port=%__port%
+set "__rc=%errorlevel%"
+
+if not "%__rc%"=="0" (
+  echo.
+  echo [x] ·şÎñÒÑÍË³ö£¬ÍË³öÂë %__rc%¡£ÍùÉÏ·­ÈÕÖ¾¿´Ô­Òò¡£
+  echo.
+  pause
+)
+exit /b %__rc%

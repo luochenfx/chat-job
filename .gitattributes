@@ -1,0 +1,3 @@
+# .bat 必须保留 CRLF：cmd.exe 对 LF-only 的批处理在含中文/括号块时解析会错乱。
+# 内容本身是 GBK/ANSI 编码，git 不做编码转换，只固定行尾。
+*.bat text eol=crlf

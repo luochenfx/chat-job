@@ -1,24 +1,80 @@
 @echo off
-rem å¼€å‘æ¨¡å¼å¯åŠ¨ï¼šç›´æ¥ä»æºç è·‘ï¼Œæ”¹å®Œ java é‡å¯å³å¯ï¼Œä¸ç”¨æ‰“åŒ…ã€‚
+rem ---------------------------------------------------------------------------
+rem ¿ª·¢Ä£Ê½Æô¶¯£ºÖ±½Ó´ÓÔ´ÂëÅÜ£¬¸ÄÍê java ÖØÆô¼´¿É£¬²»ÓÃ´ò°ü¡£
 rem
-rem ä¸‰ä¸ªå¿…é¡»æ˜¾å¼å¤„ç†çš„å‘ï¼š
-rem   1) å·¥ä½œç›®å½•ã€‚spring-boot:run çš„ workingDirectory æ˜¯ File ç±»å‹å‚æ•°ï¼ŒMaven ä¼š
-rem      ã€ŒæŒ‰æ¨¡å— basedirï¼ˆserver/ï¼‰è§£æç›¸å¯¹è·¯å¾„ã€â€”â€”æ‰€ä»¥å†™ workingDirectory=. å¾—åˆ°çš„æ˜¯
-rem      server/ï¼Œè€Œä¸æ˜¯ä»“åº“æ ¹ã€‚æ›¾ç»å› æ­¤æŠŠæ•°æ®åº“å†™åˆ° server/dataï¼Œä¸ start.bat çš„ /data
-rem      åˆ†æˆä¸¤ä»½ï¼Œè¡¨ç°ä¸ºã€Œé…ç½®æ”¹äº†æ²¡ç”Ÿæ•ˆã€ã€ŒæŠ•é€’è®°å½•ä¸è§äº†ã€ã€‚è¿™é‡Œä¼ ç»å¯¹è·¯å¾„ã€‚
-rem      æ•°æ®è½ç‚¹æœ¬èº«å·²ç”± chat-job.home é”šå®šï¼ˆè§ ProjectHomeï¼‰ï¼Œcwd ä¸å†å½±å“å®ƒï¼›
-rem      è¿™æ¡åªä¸ºè®©è¿›ç¨‹çš„å½“å‰ç›®å½•ä¸ start.bat ä¿æŒä¸€è‡´ã€‚
-rem   2) ç«¯å£ã€‚å®¿ä¸»/IDE ç¯å¢ƒå¯èƒ½æ³¨å…¥ SERVER__PORTï¼ˆSpring çš„å®½æ¾ç»‘å®šä¼šæŠŠå®ƒå½“æˆ server.portï¼‰ï¼Œ
-rem      è¦†ç›– yaml é‡Œçš„ 8080ï¼Œè¡¨ç°ä¸ºã€Œé…äº† 8080 å´ç›‘å¬åˆ°éšæœºç«¯å£ã€ã€‚è¿™é‡Œæ˜¾å¼ä¼ å‚å‹ä½ã€‚
-rem   3) å¯åŠ¨åè¯·çœ‹æ—¥å¿—é¦–è¡Œçš„ã€Œè¿è¡Œæ—¶æ•°æ®ä½ç½®ã€ï¼Œå®ƒæ‰“å°æ•°æ®åº“çš„ç»å¯¹è·¯å¾„ã€‚å‘ç°ä¸¤è¡Œä¸åŒçš„
-rem      è·¯å¾„å°±æ˜¯åˆè·‘åäº†ï¼Œä¸è¦é çŒœã€‚
-setlocal
+rem ±àÂëÔ¼¶¨£¨Îğ¸Ä£©£º±¾ÎÄ¼ş±ØĞë±£´æÎª GBK/ANSI + CRLF¡£
+rem ´æ³É UTF-8 Ê±£¬cp936 ¿ØÖÆÌ¨»á°ÑÖĞÎÄ°´Á½×Ö½Ú²ğ·Ö²¢³ÔµôĞĞÎ²»»ĞĞ£¬
+rem ±íÏÖÎª×¢ÊÍÀïµÄ°ë½ØÎÄ×Ö±»µ±³ÉÃüÁîÖ´ĞĞ¡£¸ÄÍêÎñ±ØË«»÷ÅÜÒ»±éÈ·ÈÏÎŞ±¨´í¡£
+rem
+rem ËÄ¸ö±ØĞëÏÔÊ½´¦ÀíµÄ¿Ó£º
+rem   1) ¹¤×÷Ä¿Â¼¡£spring-boot:run µÄ workingDirectory ÊÇ File ÀàĞÍ²ÎÊı£¬Maven »á
+rem      ¡¸°´Ä£¿é basedir£¨server/£©½âÎöÏà¶ÔÂ·¾¶¡¹¡ª¡ªËùÒÔĞ´ workingDirectory=. µÃµ½µÄÊÇ
+rem      server/£¬¶ø²»ÊÇ²Ö¿â¸ù¡£Ôø¾­Òò´Ë°ÑÊı¾İ¿âĞ´µ½ server/data£¬Óë start.bat µÄ /data
+rem      ·Ö³ÉÁ½·İ£¬±íÏÖÎª¡¸ÅäÖÃ¸ÄÁËÃ»ÉúĞ§¡¹¡¸Í¶µİ¼ÇÂ¼²»¼ûÁË¡¹¡£ÕâÀï´«¾ø¶ÔÂ·¾¶¡£
+rem      Êı¾İÂäµã±¾ÉíÒÑÓÉ chat-job.home Ãª¶¨£¨¼û ProjectHome£©£¬cwd ²»ÔÙÓ°ÏìËü£»
+rem      ÕâÌõÖ»ÎªÈÃ½ø³ÌµÄµ±Ç°Ä¿Â¼Óë start.bat ±£³ÖÒ»ÖÂ¡£
+rem   2) ¶Ë¿Ú¡£ËŞÖ÷/IDE »·¾³¿ÉÄÜ×¢Èë SERVER__PORT£¨Spring µÄ¿íËÉ°ó¶¨»á°ÑËüµ±³É
+rem      server.port£©£¬¸²¸Ç yaml ÀïµÄ 8080£¬±íÏÖÎª¡¸ÅäÁË 8080 È´¼àÌıµ½Ëæ»ú¶Ë¿Ú¡¹¡£
+rem      ÕâÀïÏÔÊ½´«²ÎÑ¹×¡£¬¶Ë¿ÚÖµÍ¬ÑùÖ»ÈÏ±¾ÎÄ¼şµÄ __port£¬Óë start.bat ±£³ÖÒ»ÖÂ¡£
+rem   3) Æô¶¯ºóÇë¿´ÈÕÖ¾Ê×ĞĞµÄ¡¸ÔËĞĞÊ±Êı¾İÎ»ÖÃ¡¹£¬Ëü´òÓ¡Êı¾İ¿âµÄ¾ø¶ÔÂ·¾¶¡£·¢ÏÖÁ½ĞĞ
+rem      ²»Í¬µÄÂ·¾¶¾ÍÊÇÓÖÅÜÆ«ÁË£¬²»Òª¿¿²Â¡£
+rem   4) ¿ØÖÆÌ¨Ò³ÃæÍ¬Ñù×Ô¶¯´ò¿ª£¬»úÖÆ¼û scripts\open-when-ready.mjs¡£
+rem ---------------------------------------------------------------------------
+setlocal enableextensions
 cd /d "%~dp0"
+
+rem ---- ¶Ë¿Ú£ºÓë start.bat Í¬Ò»Ì×¹æÔò£¨¸Ä¶Ë¿ÚÁ½´¦¶¼Òª¸Ä£©----
+set "__port=8080"
+if defined CHAT_JOB_PORT set "__port=%CHAT_JOB_PORT%"
+if not "%~1"=="" set "__port=%~1"
+echo %__port%|findstr /r /c:"^[0-9][0-9]*$" >nul
+if errorlevel 1 (
+  echo [x] ¶Ë¿Ú "%__port%" ²»ÊÇ´¿Êı×Ö¡£¸Ä³É 8080 ÕâÑùµÄÊıÔÙÊÔ¡£
+  echo.
+  pause
+  exit /b 1
+)
+set "__url=http://127.0.0.1:%__port%/"
 
 if not exist data mkdir data
 if not exist data\logs mkdir data\logs
 
+where mvn.cmd >nul 2>nul
+if errorlevel 1 (
+  echo [x] Î´ÕÒµ½ mvn£¬ÇëÏÈ°²×° Maven ²¢È·±£ËüÔÚ PATH Àï¡£
+  echo.
+  pause
+  exit /b 1
+)
+where java.exe >nul 2>nul
+if errorlevel 1 (
+  echo [x] Î´ÕÒµ½ java£¬ÇëÏÈ°²×° JDK 21 ²¢È·±£ËüÔÚ PATH Àï¡£
+  echo.
+  pause
+  exit /b 1
+)
+
+echo ¿ª·¢Ä£Ê½Æô¶¯£¬¿ØÖÆÌ¨µØÖ·£º%__url%
+echo ·şÎñÄÜÓ¦´ğÖ®ºó»á×Ô¶¯´ò¿ªä¯ÀÀÆ÷£¨ÓÉ scripts\open-when-ready.mjs ÂÖÑ¯´¥·¢£©¡£
+echo.
+
+where node.exe >nul 2>nul
+if errorlevel 1 (
+  echo [!] Î´ÕÒµ½ node£¬ÎŞ·¨×Ô¶¯´ò¿ª¿ØÖÆÌ¨Ò³Ãæ¡£¾ÍĞ÷ºóÇëÊÖ¶¯·ÃÎÊ %__url%
+  echo.
+) else (
+  start "" /b node "scripts\open-when-ready.mjs" %__port% 180
+)
+
 call mvn -B -f server\pom.xml spring-boot:run ^
   -Dspring-boot.run.workingDirectory=%~dp0. ^
-  -Dspring-boot.run.arguments="--server.address=127.0.0.1 --server.port=8080"
-endlocal
+  -Dspring-boot.run.arguments="--server.address=127.0.0.1 --server.port=%__port%"
+set "__rc=%errorlevel%"
+
+if not "%__rc%"=="0" (
+  echo.
+  echo [x] ½ø³ÌÒÑÍË³ö£¬ÍË³öÂë %__rc%¡£ÍùÉÏ·­ÈÕÖ¾¿´Ô­Òò¡£
+  echo.
+  pause
+)
+exit /b %__rc%

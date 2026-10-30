@@ -60,9 +60,10 @@ web ── orchestrator ── evaluate ── platform(boss) ── driver(patc
 | 路径 | 作用 |
 |---|---|
 | `build.bat` | 一键构建：装配 patchright driver → 生成控制台 → 打包后端 jar |
-| `start.bat` | 生产式启动：`java -jar`，显式绑定 `127.0.0.1:8080` |
+| `start.bat` | 生产式启动：`java -jar`，显式绑定 `127.0.0.1:8080`，服务就绪后自动打开控制台 |
 | `dev.bat` | 开发启动：`spring-boot:run`，改 Java 重启即可，不打 jar |
 | `scripts/install-patchright.mjs` | 用 `npm pack` 装配 driver 到 `build/patchright-driver/package/cli.js` |
+| `scripts/open-when-ready.mjs` | 轮询 `/api/system/status`，确认服务真的起来了再 `start` 浏览器；端口被别的程序占着时**不开**页面 |
 | `server/` | Spring Boot 后端；迁移脚本在 `src/main/resources/db/migration/` |
 | `console/` | Nuxt 控制台；静态产物 `console/.output/public`（`console/dist` 是它的软链） |
 | `data/` | **活跃运行时数据**：`chat-job.db`（WAL）、`logs/chat-job.log`、备份（不入库） |
@@ -86,7 +87,7 @@ web ── orchestrator ── evaluate ── platform(boss) ── driver(patc
 6. 可选：企业微信群机器人 Webhook（填在 `chat-job.notify-config.wecom-webhook`，不填则通知被跳过）。
 
 > **只从仓库根启动。** `application.yaml` 中路径经 `chat-job.home` 锚定，启动横幅会打印实际数据目录；从 `server/` 直接跑曾产生过两份互不相同的库，表现为「配置改了没生效」「投递记录不见了」。
-> **端口显式传参**：宿主环境可能注入 `SERVER_PORT` / `SERVER__PORT`，Spring 宽松绑定会覆盖 yaml 里的 8080，两个 `.bat` 都已显式压住。
+> **端口只认 `.bat` 里的 `__port`。** 宿主环境可能注入 `SERVER_PORT` / `SERVER__PORT`，Spring 宽松绑定会覆盖 yaml 里的 8080，所以两个 `.bat` 都显式传了 `--server.port`（命令行参数优先级最高）。后果是**改 `application.yaml` 的 `server.port` 不生效**：换端口改 bat 顶部那一行，或临时 `start.bat 8081` / `set CHAT_JOB_PORT=8081` 再跑。自动打开的页面用同一个变量拼出来，不会出现「开了 8080 其实跑在 8081」。
 
 ---
 
@@ -108,7 +109,13 @@ start.bat
 java -jar server\target\chat-job-0.1.0-SNAPSHOT.jar --server.address=127.0.0.1 --server.port=8080
 ```
 
-浏览器打开 **http://127.0.0.1:8080** 。启动日志首行横幅会打印工作目录、数据目录、profile、浏览器与 driver 状态。
+**浏览器会自动打开 http://127.0.0.1:8080/** —— 不是硬等固定秒数，而是由 `scripts/open-when-ready.mjs` 在后台轮询 `/api/system/status`，确认应答的确实是 chat-job 后才调 `start`。因此：JVM/Flyway 慢只会晚开一会儿；端口被别的程序占着时窗口里会留一行 `[open] port 8080 answers, but it is NOT chat-job (occupied?)`，**不会**把你带到别人的页面上。不想自动开就删掉 bat 里那行 `start "" /b node ...`，手动访问即可。启动日志首行横幅会打印工作目录、数据目录、profile、浏览器与 driver 状态。
+
+两个脚本结束时都会停住等你按键：构建成功与否、失败中断在哪一步、退出码多少，都直接印在窗口里，不会再「一闪而过」。
+失败时窗口里最后一句通常是 `[x] 构建失败，中断于：<步骤名>`，往上翻最近一段报错即根因。
+
+> **`.bat` 必须存成 GBK/ANSI + CRLF。** 存成 UTF-8 时，cp936 控制台按「两字节一个字」解码，会把行尾换行也吃掉，于是 `rem` 注释里的半截文字被当成命令执行，出现一堆莫名其妙的
+> `'ion.yaml' 不是内部或外部命令` / `'鍏堟墽琛?build.bat' 不是内部或外部命令`。改完脚本请双击跑一遍，窗口里不该有任何「不是内部或外部命令」。
 
 ### 5.2 开发模式（改代码后不用重新打包）
 

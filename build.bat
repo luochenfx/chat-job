@@ -1,31 +1,94 @@
 @echo off
-rem ä¸€é”®æž„å»ºï¼šè£…é… patchright driver â†’ æž„å»ºæŽ§åˆ¶å° â†’ æ‰“åŒ…åŽç«¯
-setlocal
+rem ---------------------------------------------------------------------------
+rem Ò»¼ü¹¹½¨£º×°Åä patchright driver -> ¹¹½¨¿ØÖÆÌ¨£¨Nuxt£©-> ´ò°üºó¶Ë jar
+rem
+rem ±àÂëÔ¼¶¨£¨Îð¸Ä£©£º±¾ÎÄ¼þ±ØÐë±£´æÎª GBK/ANSI + CRLF¡£
+rem ´æ³É UTF-8 Ê±£¬cp936 ¿ØÖÆÌ¨°´¡¸Á½×Ö½ÚÒ»¸ö×Ö¡¹½âÂë£¬»á°ÑÐÐÎ²»»ÐÐÒ»Æð³Ôµô£¬
+rem ÓÚÊÇ rem ×¢ÊÍÀïµÄ°ë½ØÎÄ×Ö±»µ±³ÉÃüÁîÖ´ÐÐ£¬±¨´íÐÎÈç
+rem   'ion.yaml' ²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî
+rem   'å…ˆæ‰§è¡?build.bat' ²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî
+rem ¸ÄÍêÓÃ cmd Ë«»÷ÅÜÒ»±é£¬È·ÈÏÃ»ÓÐÈÎºÎ¡¸²»ÊÇÄÚ²¿»òÍâ²¿ÃüÁî¡¹²ÅËãÊý¡£
+rem ---------------------------------------------------------------------------
+setlocal enableextensions
 cd /d "%~dp0"
 
-echo [1/3] è£…é… patchright driver
+set "__jar=server\target\chat-job-0.1.0-SNAPSHOT.jar"
+set "__step=»·¾³¼ì²é"
+
+call :need node.exe "Node.js"
+if errorlevel 1 goto :fail
+call :need npm.cmd "npm£¨Ëæ Node.js Ò»Æð°²×°£©"
+if errorlevel 1 goto :fail
+call :need mvn.cmd "Maven"
+if errorlevel 1 goto :fail
+call :need java.exe "JDK 21"
+if errorlevel 1 goto :fail
+
+echo [1/3] ×°Åä patchright driver
+set "__step=1/3 ×°Åä patchright driver"
 node scripts\install-patchright.mjs
 if errorlevel 1 goto :fail
 
-echo [2/3] æž„å»ºæŽ§åˆ¶å°ï¼ˆNuxt é™æ€äº§ç‰©ï¼‰
+echo.
+echo [2/3] ¹¹½¨¿ØÖÆÌ¨£¨Nuxt ¾²Ì¬²úÎï£©
+set "__step=2/3 ¹¹½¨¿ØÖÆÌ¨"
 pushd console
 if not exist node_modules (
+  echo     Î´·¢ÏÖ node_modules£¬ÏÈÖ´ÐÐ npm install£¨Ê×´Î±È½ÏÂý£¬ÊôÕý³££©
   call npm install
-  if errorlevel 1 goto :fail
+  if errorlevel 1 (
+    set "__rc=%errorlevel%"
+    set "__step=2/3 npm install£¨console£©"
+    popd
+    goto :fail
+  )
 )
 call npm run build
-if errorlevel 1 goto :fail
+if errorlevel 1 (
+  set "__rc=%errorlevel%"
+  set "__step=2/3 npm run build£¨console£©"
+  popd
+  goto :fail
+)
 popd
 
-echo [3/3] æ‰“åŒ…åŽç«¯
+echo.
+echo [3/3] ´ò°üºó¶Ë
+set "__step=3/3 ´ò°üºó¶Ë£¨mvn package£©"
 call mvn -B -f server\pom.xml -DskipTests package
 if errorlevel 1 goto :fail
 
 echo.
-echo æž„å»ºå®Œæˆã€‚åŒå‡» start.bat å¯åŠ¨ï¼Œæµè§ˆå™¨æ‰“å¼€ http://127.0.0.1:8080
+echo [OK] ¹¹½¨Íê³É¡£
+if exist "%__jar%" (
+  echo      ²úÎï£º%__jar%
+) else (
+  echo      [!] Î´ÕÒµ½Ô¤ÆÚ²úÎï %__jar%£¬Çë¼ì²é server\pom.xml ÊÇ·ñ¸Ä¹ý finalName
+)
+echo      ÏÂÒ»²½£ºË«»÷ start.bat Æô¶¯£¬ä¯ÀÀÆ÷´ò¿ª http://127.0.0.1:8080
+echo.
+call :hold
 exit /b 0
 
 :fail
+if not defined __rc set "__rc=%errorlevel%"
 echo.
-echo [!] æž„å»ºå¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šæ–¹è¾“å‡º
-exit /b 1
+echo [x] ¹¹½¨Ê§°Ü£¬ÖÐ¶ÏÓÚ£º%__step%
+echo     ÍË³öÂë£º%__rc%
+echo     ÇëÍùÉÏ¿´×î½üµÄÒ»¶Î±¨´í£¬ÄÇ²ÅÊÇÕæÕýÔ­Òò¡£
+echo.
+call :hold
+exit /b %__rc%
+
+:need
+where %~1 >nul 2>nul
+if errorlevel 1 (
+  echo [x] Î´ÕÒµ½ %~1£¬ÇëÏÈ°²×° %~2 ²¢È·±£ËüÔÚ PATH Àï¡£
+  exit /b 1
+)
+exit /b 0
+
+:hold
+echo °´ÈÎÒâ¼ü¹Ø±Õ´°¿Ú...
+pause >nul
+exit /b 0
