@@ -680,7 +680,22 @@ public class RunService {
                 continue;
             }
 
+            // 组合维度的账以前没人记：daily_counter 是平台维度的当日配额，run.evaluatedCount 是
+            // 整个 Run 的累计，两者都不是「这个城市×关键词」这一格的数，于是 combination_run 的
+            // evaluated / delivered 从建表起就一直是 0（Run 上写着 20，组合上写 0）。
+            // 这里按单张卡处理前后的差值补记，而不是在 processOneJob 里再判一次「算不算评估/投递」——
+            // 那里 incr 的两个点才是唯一口径，照抄一遍只会多出第二份真相。
+            int evaluatedBefore = count(run.getEvaluatedCount());
+            int deliveredBefore = count(run.getDeliveredCount());
             processOneJob(run, cfg, detail);
+            int evaluatedDelta = count(run.getEvaluatedCount()) - evaluatedBefore;
+            int deliveredDelta = count(run.getDeliveredCount()) - deliveredBefore;
+            if (evaluatedDelta > 0 || deliveredDelta > 0) {
+                combo.setEvaluated(count(combo.getEvaluated()) + evaluatedDelta);
+                combo.setDelivered(count(combo.getDelivered()) + deliveredDelta);
+                // 紧跟 checkpoint 落库：组合被配额 / 超时 / 停止打断时，已经扫过的那几张卡的账不能丢
+                runStore.updateCombination(combo);
+            }
 
             cardsSinceWatch++;
             boolean timeUp = (System.currentTimeMillis() - lastWatchAt) / 1000 >= WATCH_EVERY_SECONDS;
@@ -842,6 +857,11 @@ public class RunService {
     }
 
     // ---------------------------------------------------------------- 工具
+
+    /** 计数列取值的 null 安全版本：老库的行、内存里刚 new 出来的实体都可能是 null。 */
+    private static int count(Integer value) {
+        return value == null ? 0 : value;
+    }
 
     /**
      * 启动（或唤醒）时的时段守卫：只决定「现在能不能开跑」，不决定「能不能启动」。
