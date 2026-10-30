@@ -12,7 +12,6 @@
 - [快速开始](#快速开始)
 - [第一次使用（约 5 分钟）](#第一次使用约-5-分钟)
 - [数据在哪 / 怎么备份](#数据在哪--怎么备份)
-- [常见问题](#常见问题)
 - [使用边界与风险](#使用边界与风险)
 - [文档](#文档)
 
@@ -56,7 +55,7 @@
 
 适合只想用、不想折腾环境的人。机器只需要 Windows 10/11 + 自带的 Edge（或 Chrome）。
 
-1. 下载分发包 `chat-job-<version>-win-x64.zip`
+1. 下载分发包  [![GitHub release](https://img.shields.io/github/v/release/luochenfx/chat-job?label=Latest%20Release)](https://github.com/yourname/luochenfx/chat-job/latest)
 2. **解压到你有写权限的目录**，例如 `D:\chat-job`
    不要放在 `C:\Program Files` 下 —— 那里写不进数据库和浏览器配置
 3. 双击 `start.bat`
@@ -96,6 +95,11 @@ start.bat
 > **演练模式不是只读预览。** 只保证不投递、不回复，但仍然会浏览平台、调用 AI（消耗 token）、点开会话读消息 —— **点开即清未读红点，平台无法标回未读**。
 
 ---
+## 项目截图
+![概览](docs/imgs/概览.png)
+![系统](docs/imgs/系统.png)
+![AI配置](docs/imgs/AI配置.png)
+![模型配置](docs/imgs/模型配置.png)
 
 ## 数据在哪 / 怎么备份
 
