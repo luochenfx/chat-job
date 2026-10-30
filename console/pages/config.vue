@@ -351,7 +351,10 @@
 
       <div class="card">
         <h2>配额与节奏</h2>
-        <p class="hint">四个上限各管一件事：投递管产出与风险、评估管成本与暴露、轮数只管防死循环、未读扫描管值守能看到多少人</p>
+        <p class="hint">
+          五个上限各管一件事：投递管产出与风险、评估管成本与暴露、轮数只管防死循环、未读扫描管值守能看到多少人、巡检间隔管回复延迟。
+          投递配额与评估上限只中止扫描，不影响值守：配额用完只是今天不再找岗位，HR 的消息照常回。
+        </p>
         <div class="grid cols-3">
           <div class="field">
             <label>日投递配额</label>
@@ -379,6 +382,16 @@
             <input v-model.number="platform.unreadScanLimit" type="number" min="1" max="500" />
             <div class="desc">
               一轮值守最多看多少个会话。曾经写死 30 条：列表第 31 个之后的人永远收不到回复，也不报错。超出会打警告日志
+            </div>
+          </div>
+          <div class="field">
+            <label>值守巡检间隔（秒）</label>
+            <input v-model.number="platform.watchIntervalSeconds" type="number" min="30" max="600" />
+            <div class="desc">
+              扫描收工后，值守按这个节奏检查未读消息（30–600，越界按最近边界保存）。
+              消息页不是推送的，每轮都要重新加载一次消息列表才能看到新消息，所以这个数字同时是
+              「AI 回复的最长延迟」和「页面被刷新的频率」。120 秒 ≈ 最坏两分钟内回上；再短（如 60 秒）
+              等于每 8 小时按分钟级刷新几百次，不像人在用，反而更容易被风控盯上。实际间隔会在 ±10% 内随机浮动。
             </div>
           </div>
         </div>
@@ -535,6 +548,7 @@ const platform = reactive<any>({
   scrollRoundLimit: 300,
   combinationTimeLimitSec: 1200,
   unreadScanLimit: 100,
+  watchIntervalSeconds: 120,
   repeatChatEnabled: false,
   repeatChatMessages: [],
   dutyStartTime: '09:00',

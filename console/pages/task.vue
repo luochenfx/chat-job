@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>任务</h1>
-        <p>一个 Run = 一串搜索组合；断点记到卡片索引，重启后从这里续跑</p>
+        <p>一次启动 = 一段值守期：扫描找岗位、值守回消息；扫描可以停，值守不会跟着停</p>
         <!-- 时段只决定「什么时候开始跑」，不再是启动门禁：窗口内说到点时刻，等待态说还要等多久 -->
         <p v-if="dutyLine" class="hint" style="margin-bottom: 0">{{ dutyLine }}</p>
       </div>
@@ -25,6 +25,17 @@
           </template>
         </template>
       </div>
+    </div>
+
+    <!-- 待命横幅：配额/评估/组合耗尽只是「今天不再找岗位」，不是「今天不再回消息」。
+         没有这条横幅，界面只剩一个黄标签，人会以为任务已经半死了 -->
+    <div v-if="run?.status === 'STANDBY'" class="notice">
+      <div class="notice-title">值守待命：扫描已结束，未读消息照常回复</div>
+      <p class="notice-body">{{ run.message }}</p>
+      <p class="notice-foot">
+        配额或评估上限调高、或跨过零点进入新的一天，会自动恢复扫描 —— 不需要停止重来。
+        要真正结束这一轮，点「停止」。
+      </p>
     </div>
 
     <!-- 窗口外提示：启动按钮照常可点，这一轮不会立刻执行，而是排到窗口打开时自动开始 -->
@@ -74,7 +85,7 @@
         <div class="row" style="gap: 26px">
           <div>
             <div class="hint-inline">状态</div>
-            <span class="tag" :class="statusClass">{{ run?.status || '—' }}</span>
+            <span class="tag" :class="runView.tone">{{ runView.label }}</span>
           </div>
           <div>
             <div class="hint-inline">断点</div>
@@ -90,6 +101,14 @@
             <span class="tag" :class="connected ? 'ok' : ''">{{ connected ? '已连接' : '未连接' }}</span>
           </div>
         </div>
+      </div>
+
+      <!-- 「现在在干什么」+「上次动是什么时候」：等待期间日志是静默的，
+           没有这一行，界面无法区分「在等」和「卡死」 -->
+      <div v-if="run && activityLine" class="row wrap" style="margin-top: 14px; gap: 10px; align-items: baseline">
+        <span class="hint-inline">当前动作</span>
+        <span>{{ run.currentAction || '—' }}</span>
+        <span class="tag" :class="stale ? 'danger' : (runView.judgedIdle ? 'ok' : '')">{{ activityLine }}</span>
       </div>
     </div>
 
@@ -164,12 +183,18 @@ const mode = ref('NORMAL')
 const busy = ref(false)
 // 服务端算好的时段状态（跨天/全天三种写法的判定只在后端做一次，界面不重复实现）
 const duty = ref<any>(null)
+/** 无响应阈值，后端算好下发；前端只做比较 */
+const staleAfter = ref(90)
+/** 1 秒一跳，只为让「12 秒前有动作」这个数字在两次轮询之间也能走 */
+const nowMs = ref(Date.now())
 let lastLogId = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let tickTimer: ReturnType<typeof setInterval> | null = null
 let currentRunId: number | null = null
 
-const active = computed(() => run.value
-  && ['RUNNING', 'PAUSED', 'WAITING_DUTY', 'CREATED'].includes(run.value.status))
+// 状态 → 标签/色调/能不能暂停，一处定义（原来三处各写一遍，加状态必漏）
+const runView = computed(() => runStatusView(run.value?.status))
+const active = computed(() => runView.value.active)
 // 窗口外 + 正常模式 + 还没跑：点启动不会立刻执行，而是排到窗口打开（见模板里的 warn 块）。
 // 演练模式不发消息，本来就是窗口外唯一能立刻验证流程的方式，所以不提示。
 const dutyWarning = computed(() =>
@@ -207,14 +232,42 @@ const dutyLine = computed(() => {
   }
   return ''
 })
-const statusClass = computed(() => {
-  const s = run.value?.status
-  if (s === 'COMPLETED' || s === 'QUOTA_REACHED') return 'ok'
-  if (s === 'RUNNING' || s === 'PAUSED' || s === 'WAITING_DUTY') return 'warn'
-  if (s === 'FAILED' || s === 'CIRCUIT_OPEN' || s === 'LOGIN_LOST') return 'danger'
-  return ''
-})
 const reversed = computed(() => [...events.value].reverse().slice(0, 60))
+
+// 「上次动是什么时候」：后端只给时间戳，人话与陈旧判定在这里做（阈值本身来自后端）
+const idleSeconds = computed(() => {
+  const raw = run.value?.lastActivityAt
+  if (!raw) return null
+  const at = new Date(raw).getTime()
+  if (Number.isNaN(at)) return null
+  return Math.max(0, Math.round((nowMs.value - at) / 1000))
+})
+const stale = computed(() =>
+  runView.value.judgedIdle && idleSeconds.value != null && idleSeconds.value > staleAfter.value)
+const activityLine = computed(() => {
+  const s = run.value?.status
+  if (!s) return ''
+  // 暂停与挂起本来就该安静，做陈旧判定只会误报
+  if (s === 'PAUSED') return '已暂停：扫描与值守都停'
+  if (s === 'WAITING_DUTY') return '已挂起：值守期没有结束，窗口打开会自动继续'
+  if (!runView.value.active) return `已结束：${runView.value.label}`
+  if (idleSeconds.value == null) return '刚启动，还没有动作'
+  if (stale.value) {
+    const minutes = Math.max(1, Math.floor(idleSeconds.value / 60))
+    return `⚠️ 无响应 ${minutes} 分钟（阈值 ${staleAfter.value} 秒）`
+  }
+  return `${runView.value.label} · ${idleText(idleSeconds.value)}前有动作`
+})
+
+// 秒级数字对人没意义：12 秒 / 3 分钟 / 1 小时 5 分钟
+function idleText(seconds: number) {
+  if (seconds < 60) return `${seconds} 秒`
+  const total = Math.floor(seconds / 60)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  if (!h) return `${m} 分钟`
+  return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+}
 
 function comboClass(s: string) {
   return s === 'DONE' ? 'ok' : s === 'RUNNING' ? 'warn' : s === 'FAILED' ? 'danger' : ''
@@ -229,13 +282,30 @@ function time(at: number) {
   return new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
+// 事件里的 reason 是枚举，界面上要变成一句人话
+function stopReasonText(reason: string) {
+  return ({ QUOTA: '今日投递配额已用完', EVAL_LIMIT: '今日评估已达上限', COMBOS_EXHAUSTED: '搜索组合已扫完' } as any)[reason] || reason
+}
+
+function rescanReasonText(reason: string) {
+  return ({ QUOTA_RAISED: '配额已调高', EVAL_LIMIT_RAISED: '评估上限已调高', NEW_DAY: '进入新的一天，组合队列已复位' } as any)[reason] || reason
+}
+
 function describe(e: { type: string; data: any }) {
   const d = e.data || {}
   switch (e.type) {
     case 'run.started':
       return `任务启动（${modeText(d.mode)}）`
     case 'run.waiting':
-      return `不在值守时段（${d.window}，${d.at}），已挂起等待`
+      // 两种挂起来源文案必须分开：启动时就不在窗口内 vs 跑着跑着到点了。
+      // 混成一句「不在值守时段」，到点挂起会被读成任务被中断
+      return d.reason === 'DUTY_END'
+        ? `值守时段已结束（${d.window}，${d.at}），已挂起；值守期未结束`
+        : `不在值守时段（${d.window}，${d.at}），已挂起等待`
+    case 'run.standby':
+      return `扫描结束（${stopReasonText(d.reason)}），转入值守待命：投递 ${d.delivered} / 评估 ${d.evaluated}`
+    case 'run.rescan':
+      return `恢复扫描：${rescanReasonText(d.reason)}`
     case 'run.awakened':
       return `值守时段已到（${d.at}），开始执行挂起的任务`
     case 'combination.started':
@@ -256,8 +326,6 @@ function describe(e: { type: string; data: any }) {
         + (d.retried ? `，重试 ${d.retried}（失败 ${d.failed}）` : '')
     case 'circuit.opened':
       return `熔断：${d.kind} — ${d.message}`
-    case 'duty.ended':
-      return `值守时段结束（${d.window}，${d.at}），收工`
     case 'run.finished':
       return `任务结束：${d.status}（投递 ${d.delivered}，评估 ${d.evaluated}）`
     default:
@@ -270,6 +338,7 @@ async function refresh() {
     const cur = await call('/runs/current')
     run.value = cur.run
     duty.value = cur.duty || null
+    staleAfter.value = cur.staleAfterSeconds ?? 90
     combinations.value = cur.combinations || []
     if (cur.run && cur.run.id !== currentRunId) {
       currentRunId = cur.run.id
@@ -357,9 +426,12 @@ function clearLogs() {
 onMounted(() => {
   refresh()
   pollTimer = setInterval(refresh, 3000)
+  // 单独一跳：轮询是 3 秒一次，但「12 秒前有动作」这个数字要每秒都在走
+  tickTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
 })
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (tickTimer) clearInterval(tickTimer)
 })
 </script>

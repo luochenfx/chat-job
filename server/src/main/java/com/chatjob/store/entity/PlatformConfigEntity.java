@@ -33,6 +33,11 @@ public class PlatformConfigEntity {
     private Integer combinationTimeLimitSec;
     /** 值守时一轮最多读多少个会话项。原先写死 30，超出部分静默漏扫（V6） */
     private Integer unreadScanLimit;
+    /**
+     * 值守待命期的巡检间隔（秒）。它同时是「AI 回复的最长延迟」和「页面被刷新的频率」，
+     * 所以可配：120 是延迟与风控的折中，实际间隔会在 ±10% 内抖动（V12）。
+     */
+    private Integer watchIntervalSeconds;
     private Integer repeatChatEnabled;
     private String repeatChatMessages;
     private Integer resumeImageEnabled;

@@ -18,7 +18,7 @@
       <div class="metric">
         <div class="label">今日投递</div>
         <div class="value">{{ status?.deliveredToday ?? 0 }}<span style="font-size: 14px; color: var(--muted)"> / {{ quota }}</span></div>
-        <div class="sub">配额达到即收工</div>
+        <div class="sub">配额达到即中止扫描，值守继续</div>
       </div>
       <div class="metric">
         <div class="label">今日评估</div>
@@ -56,8 +56,8 @@
           </div>
           <div class="row" style="justify-content: space-between">
             <span>任务</span>
-            <span class="tag" :class="active ? 'warn' : ''">
-              {{ run?.status === 'WAITING_DUTY' ? '等待时段' : (active ? '运行中' : '空闲') }}
+            <span class="tag" :class="active ? runView.tone : ''">
+              {{ run ? runView.label : '空闲' }}
             </span>
           </div>
           <div v-if="status && !status.driverAvailable" class="hint-inline" style="color: var(--danger)">
@@ -95,7 +95,7 @@
 
     <div class="card">
       <h2>最近一次运行</h2>
-      <p class="hint">终止态优先级：投递配额 → 组合耗尽 → 单组合上限 → 熔断</p>
+      <p class="hint">扫描中止（配额 / 评估上限 / 组合耗尽）只停下找岗位，值守继续；熔断与异常才是终止</p>
       <div v-if="!run" class="empty">还没有运行记录</div>
       <div v-else class="grid cols-3">
         <div>
@@ -132,27 +132,13 @@ const cfg = ref<any>({ dailyDeliveryQuota: 30, dailyEvalLimit: 150 })
 const busy = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
-const active = computed(() => run.value
-  && ['RUNNING', 'PAUSED', 'WAITING_DUTY', 'CREATED'].includes(run.value.status))
+// 状态 → 标签/色调/是否活跃，一处定义（与任务页共用，避免加一个状态要改三处）
+const runView = computed(() => runStatusView(run.value?.status))
+const active = computed(() => runView.value.active)
 const quota = computed(() => cfg.value?.dailyDeliveryQuota ?? 30)
 const evalLimit = computed(() => cfg.value?.dailyEvalLimit ?? 150)
 
-const runStatusText = computed(() => {
-  if (!run.value) return '—'
-  const map: Record<string, string> = {
-    CREATED: '准备中',
-    WAITING_DUTY: '等待时段',
-    RUNNING: '运行中',
-    PAUSED: '已暂停',
-    COMPLETED: '已完成',
-    QUOTA_REACHED: '配额已满',
-    CIRCUIT_OPEN: '已熔断',
-    LOGIN_LOST: '登录失效',
-    CANCELLED: '已取消',
-    FAILED: '失败'
-  }
-  return map[run.value.status] || run.value.status
-})
+const runStatusText = computed(() => (run.value ? runView.value.label : '—'))
 
 function comboClass(s: string) {
   return s === 'DONE' ? 'ok' : s === 'RUNNING' ? 'warn' : s === 'FAILED' ? 'danger' : ''

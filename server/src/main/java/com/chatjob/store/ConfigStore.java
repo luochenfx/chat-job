@@ -42,6 +42,19 @@ public class ConfigStore {
      */
     public static final int MAX_UNREAD_SCAN_LIMIT = 500;
 
+    /** 待命巡检间隔默认值，与 V12 迁移里的列默认值保持一致。120 秒的由来见配置页说明 */
+    public static final int DEFAULT_WATCH_INTERVAL_SECONDS = 120;
+
+    /**
+     * 巡检间隔的合理区间。
+     *
+     * <p>下限 30 秒：消息页没有推流，每轮都要整页重载一次列表，压到几十秒就是
+     * 「每 8 小时按分钟级刷新几百次」，不像人在用，反而更容易被风控盯上。
+     * 上限 600 秒：再长就等于「HR 的消息最坏十分钟才有人接」，把待命的意义放掉了。
+     */
+    public static final int MIN_WATCH_INTERVAL_SECONDS = 30;
+    public static final int MAX_WATCH_INTERVAL_SECONDS = 600;
+
     /** AI 回复单次超时默认值，与 V8 迁移里的列默认值保持一致 */
     public static final int DEFAULT_AI_REPLY_TIMEOUT_SECONDS = 8;
 
@@ -152,6 +165,7 @@ public class ConfigStore {
         created.setScrollRoundLimit(300);
         created.setCombinationTimeLimitSec(1200);
         created.setUnreadScanLimit(DEFAULT_UNREAD_SCAN_LIMIT);
+        created.setWatchIntervalSeconds(DEFAULT_WATCH_INTERVAL_SECONDS);
         created.setRepeatChatEnabled(0);
         created.setRepeatChatMessages(writeList(DEFAULT_REPEAT_MESSAGES));
         created.setResumeImageEnabled(0);
@@ -193,6 +207,28 @@ public class ConfigStore {
             return DEFAULT_UNREAD_SCAN_LIMIT;
         }
         return Math.min(configured, MAX_UNREAD_SCAN_LIMIT);
+    }
+
+    /**
+     * 待命巡检间隔（秒）。同样在读取这一层归一，调用方拿到的永远是合法值 ——
+     * 库里的值可能是手工改的，也可能是旧版本控制台按「没这个字段」写进去的。
+     */
+    public int watchIntervalSeconds(String platform) {
+        return clampWatchInterval(platformConfig(platform).getWatchIntervalSeconds());
+    }
+
+    /**
+     * 间隔归一：{@code null} 按默认值处理，越界<b>按最近边界收敛</b>而不是回落默认值。
+     *
+     * <p>与 {@link #clampUnreadScanLimit} 的口径不同：那里&lt;1 等于「一条都不读」这种
+     * 静默失效，所以必须回落默认；这里填 10 秒的意思是「我想更频繁」，收敛到 30 秒
+     * 就是顺着他调整的方向限一下，回落 120 会让他以为配置没保存成功。
+     */
+    public static int clampWatchInterval(Integer configured) {
+        if (configured == null) {
+            return DEFAULT_WATCH_INTERVAL_SECONDS;
+        }
+        return Math.max(MIN_WATCH_INTERVAL_SECONDS, Math.min(configured, MAX_WATCH_INTERVAL_SECONDS));
     }
 
     // ------------------------------------------------------------ AI 配置

@@ -218,6 +218,7 @@ public class ConfigController {
             List<String> industry, List<String> stage, String activeLevelFloor,
             Integer waitTimeSeconds, Integer dailyDeliveryQuota, Integer dailyEvalLimit,
             Integer scrollRoundLimit, Integer combinationTimeLimitSec, Integer unreadScanLimit,
+            Integer watchIntervalSeconds,
             Boolean repeatChatEnabled,
             List<String> repeatChatMessages, Boolean resumeImageEnabled,
             String dutyStartTime, String dutyEndTime) {
@@ -247,6 +248,7 @@ public class ConfigController {
         out.put("combinationTimeLimitSec", entity.getCombinationTimeLimitSec());
         // 回发归一后的值：库里若被手工改脏，界面显示的就是实际生效的那个数
         out.put("unreadScanLimit", ConfigStore.clampUnreadScanLimit(entity.getUnreadScanLimit()));
+        out.put("watchIntervalSeconds", ConfigStore.clampWatchInterval(entity.getWatchIntervalSeconds()));
         out.put("repeatChatEnabled", entity.getRepeatChatEnabled() != null && entity.getRepeatChatEnabled() == 1);
         out.put("repeatChatMessages", configStore.readList(entity.getRepeatChatMessages()));
         out.put("resumeImageEnabled", entity.getResumeImageEnabled() != null
@@ -282,6 +284,11 @@ public class ConfigController {
         // 按「null 当默认值」处理的话，保存任何一个无关配置都会把扫描上限重置掉。
         if (body.unreadScanLimit() != null) {
             entity.setUnreadScanLimit(ConfigStore.clampUnreadScanLimit(body.unreadScanLimit()));
+        }
+        // 同一口径：未传则保持原值。旧版控制台不会提交这个字段，
+        // 按「null 当默认 120」处理会把用户调过的间隔静默改回去。
+        if (body.watchIntervalSeconds() != null) {
+            entity.setWatchIntervalSeconds(ConfigStore.clampWatchInterval(body.watchIntervalSeconds()));
         }
         entity.setRepeatChatEnabled(Boolean.TRUE.equals(body.repeatChatEnabled()) ? 1 : 0);
         entity.setRepeatChatMessages(configStore.writeList(body.repeatChatMessages()));

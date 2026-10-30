@@ -77,6 +77,8 @@ public class RunController {
         out.put("duty", runService.dutyStatus());
         List<CombinationRunEntity> combos = run == null ? List.of() : runService.combinationsOf(run.getId());
         out.put("combinations", combos);
+        // 陈旧阈值由后端算好下发：前端只做比较，不重复实现「几倍间隔」这条规则
+        out.put("staleAfterSeconds", runService.staleAfterSeconds(run));
         if (run != null) {
             out.put("deliveredToday", runStore.deliveredToday(run.getPlatform()));
             out.put("evaluatedToday", runStore.evaluatedToday(run.getPlatform()));
