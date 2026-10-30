@@ -137,7 +137,7 @@
           <label>判定提示词</label>
           <textarea v-model="ai.promptTemplate" style="min-height: 220px" />
           <div class="desc">
-            支持占位符：<code v-for="p in placeholders" :key="p">{{ p }}</code>。不要用 %s —— JD 里出现百分号会直接抛异常
+            支持占位符：<code v-for="p in placeholders" :key="p">{{ p }}</code>。
           </div>
         </div>
 
@@ -154,7 +154,7 @@
           <div class="field">
             <label>判定单次超时（秒）</label>
             <input v-model.number="ai.aiTimeoutSeconds" type="number" min="5" max="120" />
-            <div class="desc">投递判定与招呼语的调用超时，与下方值守回复的超时是两件事</div>
+            <div class="desc">投递判定与招呼语的调用超时，与下方的值守回复的超时是两件事</div>
           </div>
           <div class="field">
             <label>效果采集</label>
@@ -172,7 +172,7 @@
           <div>
             <h2>值守 AI 回复</h2>
             <p class="hint">
-              HR 发来新消息时由 AI 生成回复。关闭时这部分整条链路不动作，值守行为与改造前完全一致
+              HR 发来新消息时由 AI 生成回复。
             </p>
           </div>
           <span class="tag" :class="ai.aiReplyEnabled ? 'ok' : ''">
@@ -209,7 +209,7 @@
             <label>单次生成超时（秒）</label>
             <input v-model.number="ai.aiReplyTimeoutSeconds" type="number" min="1" max="120" />
             <div class="desc">
-              模型迟迟不回时，等多久就放弃这条。超时会进重试链，不是静默跳过。
+              模型迟迟不回时，等多久就放弃这条。超时会进重试链，不会静默跳过。
               <template v-if="effectiveReplyTimeout && effectiveReplyTimeout < ai.aiReplyTimeoutSeconds">
                 <b>实际生效 {{ effectiveReplyTimeout }} 秒</b> —— 当前提供商的超时更短，会先断开
               </template>
@@ -230,7 +230,7 @@
           <div>
             <h2>出站校验与告警</h2>
             <p class="hint">
-              发出去之前的最后一道闸。AI 味检查管「像不像人话」，告警管「它是不是一直在躲」
+              消息发出去之前的最后一次检查。
             </p>
           </div>
           <span class="tag" :class="ai.aiReplyToneCheckEnabled ? 'ok' : 'danger'">
@@ -240,7 +240,7 @@
 
         <label class="switch">
           <input v-model="ai.aiReplyToneCheckEnabled" type="checkbox" />
-          <span>开启 AI 味检查（套话、客服腔、小标题一律拦下）</span>
+          <span>开启 AI 味检查（套话、客服腔、小标题等一律拦下）</span>
         </label>
 
         <div class="field" style="margin-top: 16px">
@@ -280,8 +280,7 @@
             <label>告警最小样本数</label>
             <input v-model.number="ai.aiReplySkipAlertMinSample" type="number" min="1" max="1000" />
             <div class="desc">
-              判定次数低于此数就不下结论，面板显示「样本不足」。宁可说不知道怎么判，
-              也不把「还没法判断」渲染成「一切正常」
+              判定次数低于此数就不下结论，面板会显示「样本不足」。
             </div>
           </div>
         </div>
@@ -352,8 +351,8 @@
       <div class="card">
         <h2>配额与节奏</h2>
         <p class="hint">
-          五个上限各管一件事：投递管产出与风险、评估管成本与暴露、轮数只管防死循环、未读扫描管值守能看到多少人、巡检间隔管回复延迟。
-          投递配额与评估上限只中止扫描，不影响值守：配额用完只是今天不再找岗位，HR 的消息照常回。
+          投递配额决定主动沟通多少岗位，评估上限决定查看多少岗位
+          配额用完只是今天不再找岗位，HR 的消息照常回。
         </p>
         <div class="grid cols-3">
           <div class="field">
@@ -381,16 +380,15 @@
             <label>未读列表扫描上限（条）</label>
             <input v-model.number="platform.unreadScanLimit" type="number" min="1" max="500" />
             <div class="desc">
-              一轮值守最多看多少个会话。曾经写死 30 条：列表第 31 个之后的人永远收不到回复，也不报错。超出会打警告日志
+              最多看多少个会话消息。超出会打警告日志
             </div>
           </div>
           <div class="field">
             <label>值守巡检间隔（秒）</label>
             <input v-model.number="platform.watchIntervalSeconds" type="number" min="30" max="600" />
             <div class="desc">
-              扫描收工后，值守按这个节奏检查未读消息（30–600，越界按最近边界保存）。
-              消息页不是推送的，每轮都要重新加载一次消息列表才能看到新消息，所以这个数字同时是
-              「AI 回复的最长延迟」和「页面被刷新的频率」。120 秒 ≈ 最坏两分钟内回上；再短（如 60 秒）
+              配额达到上限后，按这个节奏检查未读消息（30–600，越界按最近边界保存）。
+              这个数字同时是「AI 回复的最长延迟」和「刷新的频率」。120 秒 ≈ 最坏两分钟内回上；再短（如 60 秒）
               等于每 8 小时按分钟级刷新几百次，不像人在用，反而更容易被风控盯上。实际间隔会在 ±10% 内随机浮动。
             </div>
           </div>
@@ -400,8 +398,8 @@
       <div class="card">
         <h2>值守时段</h2>
         <p class="hint">
-          窗口外不发任何消息——凌晨的招呼语只会被当成骚扰。它限制的是「什么时候开始跑」，不是「能不能点启动」：
-          窗口外点启动会把任务挂起，等窗口打开自动开始（隔夜、服务重启都不丢），期间可以随时取消。
+          时段外不发任何消息——凌晨的招呼语只会被当成骚扰。
+          时段外点启动会把任务挂起，等窗口打开自动开始，期间可以随时取消。
         </p>
         <div class="grid cols-2">
           <div class="field">
@@ -418,7 +416,7 @@
 
       <div class="card">
         <h2>重复沟通</h2>
-        <p class="hint">进会话后先读消息列表：已有我方消息就视为已沟通过，默认跳过</p>
+        <p class="hint">进会话后先读消息列表：已有我方最新消息就视为已沟通过，默认跳过</p>
         <label class="switch">
           <input v-model="platform.repeatChatEnabled" type="checkbox" />
           <span>允许对已沟通的会话再发一条跟进语</span>

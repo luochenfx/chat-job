@@ -34,7 +34,7 @@
       <p class="notice-body">{{ run.message }}</p>
       <p class="notice-foot">
         配额或评估上限调高、或跨过零点进入新的一天，会自动恢复扫描 —— 不需要停止重来。
-        要真正结束这一轮，点「停止」。
+        要真正结束，点「停止」。
       </p>
     </div>
 

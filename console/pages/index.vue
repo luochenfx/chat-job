@@ -95,7 +95,7 @@
 
     <div class="card">
       <h2>最近一次运行</h2>
-      <p class="hint">扫描中止（配额 / 评估上限 / 组合耗尽）只停下找岗位，值守继续；熔断与异常才是终止</p>
+      <p class="hint">扫描中止（配额 / 评估上限 / 组合耗尽）只停下找岗位，值守继续；熔断与异常才终止</p>
       <div v-if="!run" class="empty">还没有运行记录</div>
       <div v-else class="grid cols-3">
         <div>
