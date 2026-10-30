@@ -807,18 +807,23 @@ public class BossAdapter implements PlatformAdapter {
     }
 
     /**
-     * 发简历。四步，少一步都会「看起来发了、其实没发」：
+     * 发简历。三步，外加一个「可能不出现」的分支：
      *
      * <pre>
      * 1) 点工具栏「发简历」—— 按钮灰的时候点下去毫无反应，必须先判 unable 类
-     * 2) 等确认气泡 —— 平台不会直接发，只弹一个「确定向 Boss 发送简历吗？」
-     * 3) 点气泡里的「确定」
-     * 4) 等绿色简历卡片出现 —— 这是唯一的成功凭据
+     * 2) 确认气泡（可选）—— 多数情况下平台不直接发，只弹「确定向 Boss 发送简历吗？」，
+     *    弹了才点里面的「确定」；
+     *    不弹也是正常的：对方已经主动索要过简历时，平台认为无需二次确认，点了就直接发
+     * 3) 等绿色简历卡片出现 —— 这是唯一的成功凭据
      * </pre>
      *
      * <p>为什么不用「己方消息条数 +1」当判据（{@link #sendText} 用的那个）：实测简历发出去
      * 新增的是 {@code item-system} 系统消息，不是 {@code item-myself}，用文字的判据等下去
      * 只会稳定超时。判据必须跟着动作走。
+     *
+     * <p>同理，<b>「气泡弹没弹」不能当成功判据</b>：早期实现把「点了却没弹气泡」判成
+     * {@code FAILED}，实测漏掉了「对方已索要 → 平台直接发」这条正常路径，白白进重试链。
+     * 气泡只是「要不要多点一下」，成不成一律看卡片。
      */
     @Override
     public ResumeResult sendResume(UnreadThread thread) {
@@ -846,21 +851,15 @@ public class BossAdapter implements PlatformAdapter {
             }
             pause(800, 1_400);
 
+            // 气泡是可选步骤：对方已经主动索要过简历时，平台不发二次确认，点了就直接发。
+            // 所以「没弹气泡」不是失败，只是不用点「确定」—— 成不成一律看卡片。
             Locator panel = page.locator(BossSelectors.RESUME_CONFIRM_PANEL).first();
-            boolean noBubblePopped = !visibleWithin(panel, 6_000);
-            if (noBubblePopped) {
-                // 按钮判过不可用却没弹层：多半是点了没命中。不算业务不可用，算失败。
-                // 点了「发简历」但没有出现确认气泡，也可能是对方主动索要简历，视为发送成功
-//                return ResumeResult.failed("点了「发简历」但没有出现确认气泡");
-            }
-
-            // 有气泡弹出才检查
-            if (!noBubblePopped) {
+            if (visibleWithin(panel, 6_000)) {
                 Locator confirm = panel
                         .getByText(BossSelectors.RESUME_CONFIRM_TEXT,
                                 new Locator.GetByTextOptions().setExact(true))
                         .first();
-                
+
                 if (!visibleWithin(confirm, 3_000)) {
                     return ResumeResult.failed("确认气泡里找不到「确定」按钮");
                 }
@@ -874,7 +873,7 @@ public class BossAdapter implements PlatformAdapter {
             if (waitForResumeCard(page, cardsBefore, 20_000)) {
                 return ResumeResult.sent("简历卡片已出现");
             }
-            return ResumeResult.failed("已点确定但 20 秒内没等到简历卡片");
+            return ResumeResult.failed("已点「发简历」但 20 秒内没等到简历卡片");
         });
     }
 

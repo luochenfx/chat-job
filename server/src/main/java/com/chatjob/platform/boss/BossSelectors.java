@@ -54,10 +54,13 @@ public final class BossSelectors {
     /** 工具栏按钮的不可用类名。带它时点下去没有任何反应，必须提前判。 */
     public static final String TOOLBAR_UNABLE_CLASS = "unable";
     /**
-     * 点「发简历」后弹出的确认气泡（实测类名 {@code panel-resume sentence-popover}）。
+     * 点「发简历」后<b>可能</b>弹出的确认气泡（实测类名 {@code panel-resume sentence-popover}）。
      *
-     * <p>这一步容易漏：按钮点下去<b>不会直接发</b>，只是弹层。只点按钮不等弹层、
+     * <p>这一步容易漏：多数情况下按钮点下去<b>不会直接发</b>，只是弹层。只点按钮不等弹层、
      * 或者点完就走，都会表现为「看起来发了、其实没发」。
+     *
+     * <p>但<b>它不是必经步骤</b>：对方已经主动索要过简历时，平台不发二次确认，
+     * 点了就直接发。所以「没弹气泡」不能判成失败，只能用「简历卡片有没有出现」收口。
      */
     public static final String RESUME_CONFIRM_PANEL = ".panel-resume, .sentence-popover";
     /** 确认气泡里的「确定」。气泡只有「取消 / 确定」两个短文本，按文本精确匹配最稳。 */

@@ -483,7 +483,7 @@ class UnreadWatcherTest {
     void 发简历失败进重试链() {
         Fixture f = new Fixture(true);
         f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
-        f.adapter.resumeResult = ResumeResult.failed("已点确定但 20 秒内没等到简历卡片");
+        f.adapter.resumeResult = ResumeResult.failed("已点「发简历」但 20 秒内没等到简历卡片");
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
