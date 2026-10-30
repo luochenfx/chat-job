@@ -2,6 +2,7 @@ package com.chatjob.config;
 
 import com.chatjob.driver.BrowserChannel;
 import com.chatjob.driver.PatchrightDriver;
+import com.chatjob.platform.PlatformInfo;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -43,6 +44,7 @@ public class StartupBanner {
                 
                 ────────────────────────────────────────────────────────────
                  chat-job 已启动
+                 平台     : {}（chat-job.active-platform；换平台要重启）
                  工作目录 : {}
                  数据目录 : {}（相对 ./data，以工作目录为基准）
                  profile  : {}
@@ -50,6 +52,7 @@ public class StartupBanner {
                  driver   : {} —— {}
                  提示     : 请始终从仓库根启动；从 server/ 启动会生成另一份数据库
                 ────────────────────────────────────────────────────────────""",
+                PlatformInfo.of(props.activePlatform()).label() + " / " + props.activePlatform(),
                 cwd,
                 dataDir,
                 Paths.get(props.browser().userDataDir()).toAbsolutePath(),

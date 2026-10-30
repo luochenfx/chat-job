@@ -293,7 +293,9 @@
     <section v-show="tab === 'platform'">
       <div class="card">
         <h2>搜索条件</h2>
-        <p class="hint">城市填中文名，执行时才换 code。六组筛选是全局一套、只叠加不展开</p>
+        <p class="hint">
+          城市填中文名，执行时才换 code。{{ platformNote || '六组筛选是全局一套、只叠加不展开' }}
+        </p>
         <div class="grid cols-2">
           <div class="field">
             <label>城市</label>
@@ -304,35 +306,37 @@
             <ChipInput v-model="platform.keywords" placeholder="输入关键词后回车，如：Java" />
           </div>
         </div>
-        <div class="field">
+        <div v-if="supports('jobType')" class="field">
           <label>职位类型</label>
           <select v-model="platform.jobType">
             <option value="">不限</option>
             <option v-for="o in dict.jobType" :key="o" :value="o">{{ o }}</option>
           </select>
         </div>
-        <div class="grid cols-3">
-          <div class="field">
+        <!-- 筛选组按平台能力渲染：智联这一期只支持城市 + 关键词，
+             把 Boss 那六组摆出来会让人填一堆"看着生效、实际被忽略"的条件 -->
+        <div v-if="hasExtraFilters" class="grid cols-3">
+          <div v-if="supports('salary')" class="field">
             <label>薪资</label>
             <ChipInput v-model="platform.salary" placeholder="不限" :options="dict.salary" />
           </div>
-          <div class="field">
+          <div v-if="supports('experience')" class="field">
             <label>经验</label>
             <ChipInput v-model="platform.experience" placeholder="不限" :options="dict.experience" />
           </div>
-          <div class="field">
+          <div v-if="supports('degree')" class="field">
             <label>学历</label>
             <ChipInput v-model="platform.degree" placeholder="不限" :options="dict.degree" />
           </div>
-          <div class="field">
+          <div v-if="supports('scale')" class="field">
             <label>公司规模</label>
             <ChipInput v-model="platform.scale" placeholder="不限" :options="dict.scale" />
           </div>
-          <div class="field">
+          <div v-if="supports('industry')" class="field">
             <label>行业</label>
             <ChipInput v-model="platform.industry" placeholder="不限" :options="dict.industry" />
           </div>
-          <div class="field">
+          <div v-if="supports('stage')" class="field">
             <label>融资阶段</label>
             <ChipInput v-model="platform.stage" placeholder="不限" :options="dict.stage" />
           </div>
@@ -463,6 +467,12 @@ const tabs = [
 const tab = ref('provider')
 const saving = ref(false)
 
+// 当前平台由服务端装配期配置决定；配置读写与字典查询都要跟着它走
+const { ensure: ensurePlatform, platform: platformSlug, note: platformNote, supports } = usePlatform()
+const hasExtraFilters = computed(() =>
+  ['salary', 'experience', 'degree', 'scale', 'industry', 'stage'].some((key) => supports(key))
+)
+
 // 占位符作为数据渲染，不写字面量花括号：Vue 的插值扫描器遇到字符串里的 }} 会提前截断表达式
 const placeholders = ['{{introduce}}', '{{jobName}}', '{{company}}', '{{salary}}', '{{activeLevel}}', '{{blacklist}}', '{{jd}}']
 
@@ -589,10 +599,11 @@ const dict = reactive<Record<string, string[]>>({
 
 async function loadAll() {
   try {
+    await ensurePlatform()
     const [p, a, c, b] = await Promise.all([
       call('/config/providers'),
       call('/config/ai'),
-      call('/config/platform/boss'),
+      call(`/config/platform/${platformSlug.value}`),
       call('/blacklist')
     ])
     providers.value = p || []
@@ -617,7 +628,7 @@ async function loadDictionary() {
   await Promise.all(
     types.map(async (type) => {
       try {
-        const items = await call('/config/dictionary', { query: { platform: 'boss', type } })
+        const items = await call('/config/dictionary', { query: { platform: platformSlug.value, type } })
         dict[type] = (items || []).map((i: any) => i.name)
       } catch {
         dict[type] = []
@@ -778,7 +789,7 @@ async function saveAi() {
 async function savePlatform() {
   saving.value = true
   try {
-    await call('/config/platform/boss', { method: 'PUT', body: platform })
+    await call(`/config/platform/${platformSlug.value}`, { method: 'PUT', body: platform })
     show('平台配置已保存')
   } catch (e: any) {
     show(e.message, true)

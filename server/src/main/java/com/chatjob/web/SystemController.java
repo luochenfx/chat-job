@@ -10,6 +10,7 @@ import com.chatjob.orchestrator.RunService;
 import com.chatjob.orchestrator.RunStore;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.PlatformAdapter;
+import com.chatjob.platform.PlatformInfo;
 import com.chatjob.store.OptionStore;
 import com.chatjob.watcher.ReplyStore;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -59,10 +60,19 @@ public class SystemController {
         this.jdbc = jdbc;
     }
 
-    /** 概览页的指示灯都从这里取。刻意不主动启浏览器，避免刷一次页面就拉起一个 Chrome */
+    /**
+     * 概览页的指示灯都从这里取。刻意不主动启浏览器，避免刷一次页面就拉起一个 Chrome
+     */
     @GetMapping("/status")
     public Map<String, Object> status() {
         Map<String, Object> out = new LinkedHashMap<>();
+        // 平台信息随状态一起下发：控制台所有「平台配置 / 字典」请求都要带平台名，
+        // 前端不该自己猜（猜错的表现是读写 BOSS 的配置，而人以为在看智联的）
+        PlatformInfo.Info info = PlatformInfo.of(adapter.platform());
+        out.put("platform", info.platform());
+        out.put("platformLabel", info.label());
+        out.put("platformFilters", info.filters());
+        out.put("platformNote", info.note());
         PatchrightDriver.Status driver = patchright.inspect();
         out.put("driverAvailable", driver.available());
         out.put("driverDir", driver.driverDir());
@@ -136,6 +146,15 @@ public class SystemController {
                 LocalDateTime.now().minusDays(logDays)
                         .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
         return Map.of("ok", true, "jobsRemoved", jobs, "replyLogsRemoved", replies, "runLogsRemoved", logs);
+    }
+
+    /**
+     * 只看「当前跑哪个平台」。控制台首屏、配置页、任务页都要用；
+     * 单开一个轻接口，避免为了拿一个字符串去拉整份状态（那份会碰 driver 探测）。
+     */
+    @GetMapping("/platform")
+    public PlatformInfo.Info platform() {
+        return PlatformInfo.of(adapter.platform());
     }
 
     @GetMapping("/counters")

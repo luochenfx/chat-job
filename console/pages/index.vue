@@ -163,15 +163,12 @@ function modeText(m: string) {
 async function refresh() {
   busy.value = true
   try {
-    const [s, cur, c] = await Promise.all([
-      call('/system/status'),
-      call('/runs/current'),
-      call('/config/platform/boss')
-    ])
+    const [s, cur] = await Promise.all([call('/system/status'), call('/runs/current')])
     status.value = s
     run.value = cur.run
     combinations.value = cur.combinations || []
-    cfg.value = c
+    // 配额与评估上限是「当前平台」的配置：平台随装配期配置变化，不能写死 boss
+    cfg.value = await call(`/config/platform/${s?.platform || 'boss'}`)
   } catch (e: any) {
     show(e.message, true)
   } finally {

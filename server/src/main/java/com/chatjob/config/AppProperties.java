@@ -9,7 +9,19 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "chat-job")
 public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfCheck,
-                            NotifyProps notifyConfig) {
+                            NotifyProps notifyConfig,
+                            @DefaultValue("boss") String activePlatform) {
+
+    /**
+     * 当前启用的平台标识（{@code boss} / {@code zhaopin}）。
+     *
+     * <p>它是「装配期」的开关，不是运行期可切的业务开关：两个适配器同时注册会让
+     * {@code PlatformAdapter} 注入点出现两个候选 bean，Spring 在启动期就直接失败。
+     * 所以改平台＝改配置＋重启，回滚也是同理 —— 这一点在 spec 0004 阶段 1 里写明了。
+     */
+    public String activePlatform() {
+        return activePlatform == null || activePlatform.isBlank() ? "boss" : activePlatform.trim();
+    }
 
     /**
      * @param dir        patchright driver 目录，就绪判据是 {@code <dir>/package/cli.js} 存在

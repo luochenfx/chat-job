@@ -26,6 +26,7 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.WaitUntilState;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -44,6 +45,8 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Component
+@ConditionalOnProperty(prefix = "chat-job", name = "active-platform", havingValue = BossAdapter.PLATFORM,
+        matchIfMissing = true)
 public class BossAdapter implements PlatformAdapter {
 
     public static final String PLATFORM = "boss";

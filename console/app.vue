@@ -3,7 +3,7 @@
     <aside class="side">
       <div class="brand">
         <strong>chat-job</strong>
-        <span>BOSS 投递自动化 · 本机</span>
+        <span>{{ label }} 投递自动化 · 本机</span>
       </div>
       <NuxtLink
         v-for="item in nav"
@@ -25,6 +25,12 @@
 <script setup lang="ts">
 const route = useRoute()
 const { toast } = useToast()
+const { ensure, label } = usePlatform()
+
+// 平台名来自服务端（装配期配置），失败时 usePlatform 内部退回默认值，不阻塞页面
+onMounted(() => {
+  ensure().catch(() => {})
+})
 
 const nav = [
   { to: '/', label: '概览' },
