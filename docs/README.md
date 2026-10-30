@@ -281,6 +281,7 @@ cd console && npm run build
 | [`tech/0002-ai-reply-research.md`](tech/0002-ai-reply-research.md) | 值守 AI 回复调研 |
 | [`tech/0003-zhaopin-research.md`](tech/0003-zhaopin-research.md) | 智联接入依据：页面实测事实、与 get_jobs 的交叉验证、并行评估 |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案 |
+| [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 
 ## 接口速查
 

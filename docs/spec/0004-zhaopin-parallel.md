@@ -123,7 +123,7 @@ Boss 一条流水线一天能扫的组合有限，而且每个平台的岗位池
 |---|---|---|
 | 2a | `BrowserSession` / `PlaywrightExecutor` 改为每平台一份；`userDataDir` 按平台分目录（`profile/boss`、`profile/zhaopin`） | 两个浏览器实例能同时起来，各自独立导航互不干扰 |
 | 2b | `RunService` 改为按平台实例化（prototype + registry），内部 6 个字段一行不改；`PlatformAdapter` 改为 `Map<String, PlatformAdapter>` 注入 | 两个平台各有一个活跃 Run，`uk_run_running` 不冲突；杀掉一个平台的浏览器，另一个照常跑 |
-| 2c | 前端 `/runs/current` 改列表或带 platform 参数；日志每条加平台前缀；企业微信通知带平台名 | 控制台能看到两条独立任务；日志能按平台过滤；通知能看出是哪个平台 |
+| 2c | 控制台改造（界面规格见 [`ui/0002-parallel-console.md`](../ui/0002-parallel-console.md)）：概览并排、其余四页单平台切换；`/runs/current` 带 platform；写进 `data/logs/chat-job.log` 的每条日志带平台前缀；企业微信通知带平台名 | 概览不滚动能看到两平台状态；任务页切平台不串流；通知能看出是哪个平台 |
 
 | 项 | 内容 |
 |---|---|
