@@ -57,6 +57,23 @@
             <groupId>com.microsoft.playwright</groupId>
             <artifactId>playwright</artifactId>
             <version>${playwright.version}</version>
+            <!--
+              剔除 driver-bundle：它是一份 202MB 的 jar，里面装着 4 个平台的 node
+              （linux / linux-arm64 / mac / mac-arm64 / win32_x64），而本项目根本不用它——
+              真正干活的是 build/patchright-driver 里的 patchright driver（由
+              -Dplaywright.cli.dir 指过去），node 由 runtime/node.exe 或 PATH 提供。
+
+              不剔除的代价很直接：fat jar 250MB，剔除后约 48MB，分发包小一半以上。
+              副作用只有一个：driver 不可用且 fail-closed=false 时不能退回官方 driver，
+              BrowserSession 里已把那条路径改成显式报错。回归点见
+              scripts/build-dist.mjs 的打包前自检与 README「分发」一节。
+            -->
+            <exclusions>
+                <exclusion>
+                    <groupId>com.microsoft.playwright</groupId>
+                    <artifactId>driver-bundle</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- DPAPI：Windows 数据保护 API，用于加密 API Key 与 Cookie -->

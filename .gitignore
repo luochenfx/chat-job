@@ -68,5 +68,8 @@ target/
 # 由 scripts/install-patchright.mjs 重新生成，规则写在 build/.gitignore。
 /build/patchright-driver/
 
+# 分发包产物（scripts/build-dist.mjs 生成，几百 MB，只用于交付，不入库）
+/dist/
+
 # ---------- 工具与助手产生的本地状态 ----------
 .workbuddy/

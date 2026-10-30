@@ -60,10 +60,13 @@ web ── orchestrator ── evaluate ── platform(boss) ── driver(patc
 | 路径 | 作用 |
 |---|---|
 | `build.bat` | 一键构建：装配 patchright driver → 生成控制台 → 打包后端 jar |
+| `打包分发.bat` | **双击**出绿色版分发包（见 §5.5）：预检 node / mvn / JAVA_HOME，默认 `--rebuild`，结束时把 zip 绝对路径打在最后一行 |
 | `start.bat` | 生产式启动：`java -jar`，显式绑定 `127.0.0.1:8080`，服务就绪后自动打开控制台 |
 | `dev.bat` | 开发启动：`spring-boot:run`，改 Java 重启即可，不打 jar |
 | `scripts/install-patchright.mjs` | 用 `npm pack` 装配 driver 到 `build/patchright-driver/package/cli.js` |
 | `scripts/open-when-ready.mjs` | 轮询 `/api/system/status`，确认服务真的起来了再 `start` 浏览器；端口被别的程序占着时**不开**页面 |
+| `scripts/build-dist.mjs`、`scripts/dist-template/` | 打绿色版分发包（内置 JRE + node + driver，见 §5.5）与它的启动脚本模板 |
+| `dist/` | 分发包产物，体积 100MB 以上，**不入库** |
 | `server/` | Spring Boot 后端；迁移脚本在 `src/main/resources/db/migration/` |
 | `console/` | Nuxt 控制台；静态产物 `console/.output/public`（`console/dist` 是它的软链） |
 | `data/` | **活跃运行时数据**：`chat-job.db`（WAL）、`logs/chat-job.log`、备份（不入库） |
@@ -85,6 +88,9 @@ web ── orchestrator ── evaluate ── platform(boss) ── driver(patc
 4. **首次构建需联网**：`scripts/install-patchright.mjs` 用 `npm pack patchright-core@1.62.1` 下载 driver，`npm install` 也要拉 Nuxt 依赖；装好之后运行阶段不需要外网（除模型调用与平台访问）。
 5. 一个 BOSS 直聘账号（建议小号试跑），以及一个兼容 OpenAI Chat Completions 的模型服务（Base URL / 模型名 / API Key）。
 6. 可选：企业微信群机器人 Webhook（填在 `chat-job.notify-config.wecom-webhook`，不填则通知被跳过）。
+
+> 上面第 2 条只针对**从源码构建**。用 `scripts/build-dist.mjs` 打出来的绿色版（§5.5）自带 jlink JRE 与 node，
+> 对方机器只需要 Windows 10/11 + Edge 或 Chrome，不用装 JDK、Maven、Node.js。
 
 > **只从仓库根启动。** `application.yaml` 中路径经 `chat-job.home` 锚定，启动横幅会打印实际数据目录；从 `server/` 直接跑曾产生过两份互不相同的库，表现为「配置改了没生效」「投递记录不见了」。
 > **端口只认 `.bat` 里的 `__port`。** 宿主环境可能注入 `SERVER_PORT` / `SERVER__PORT`，Spring 宽松绑定会覆盖 yaml 里的 8080，所以两个 `.bat` 都显式传了 `--server.port`（命令行参数优先级最高）。后果是**改 `application.yaml` 的 `server.port` 不生效**：换端口改 bat 顶部那一行，或临时 `start.bat 8081` / `set CHAT_JOB_PORT=8081` 再跑。自动打开的页面用同一个变量拼出来，不会出现「开了 8080 其实跑在 8081」。
@@ -186,6 +192,42 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 ```
 
 > 上面这条也说明：**值守时段是库里的配置，不一定是出厂默认值**。本机当前配的是 `09:00–19:00`，默认值是 `09:00–22:00`。
+
+### 5.5 分发给别人用（绿色版）
+
+对方不想装 JDK / Maven / Node.js、也不想拿源码时，用分发包。
+
+**最快的用法是双击根目录的 `打包分发.bat`**：它先查 node / mvn / JAVA_HOME（缺了当场停，不会让人等一分钟才看到报错），不带参数时默认 `--rebuild`（双击的语义是「按现在的代码出一份包」），跑完把 zip 的绝对路径打在窗口最后一行，然后停住等按键。要传别的参数就在 cmd 里跑 `打包分发.bat --no-zip`，或者直接调底层脚本：
+
+```bat
+node scripts/build-dist.mjs            :: 复用已有 jar，缺了才构建
+node scripts/build-dist.mjs --rebuild  :: 强制 npm run build + mvn package
+node scripts/build-dist.mjs --no-zip   :: 只铺 dist 目录，不压缩
+```
+
+产物 `dist/chat-job-<version>-win-x64.zip`（约 125MB，解压 209MB），解压后双击 `start.bat` 即用：
+
+| 路径 | 内容 | 说明 |
+|---|---|---|
+| `start.bat` | 启动脚本 | 由 `scripts/dist-template/start.bat` 转码生成，**GBK + CRLF** |
+| `使用说明.txt` | 给使用者的说明 | UTF-8 BOM，记事本可直接看 |
+| `app/chat-job.jar` | 后端 + 控制台静态产物 | 46MB（已剔除 `driver-bundle`） |
+| `build/patchright-driver/` | patchright driver | 13MB |
+| `runtime/jre/` | jlink 裁剪的 Java 21 | 62MB，`java.base` 等 6 个模块 |
+| `runtime/node.exe` | driver 用的 node | 88MB，构建期从 `driver-bundle` 里抠出来的 win32_x64 那份 |
+
+**包里刻意不含** `data/` 与 `browser-data/`：前者是 SQLite + DPAPI 密文（换了 Windows 账户解不开），后者是登录态（等于把账号送出去）。首次运行由 Flyway 建空库、由 patchright 建空 profile。
+
+`server/pom.xml` 里对 `driver-bundle` 的 exclusion 是这条分发链的前提：那份 jar 有 202MB，装着 4 个平台的 node，而本项目一个都不用（真正干活的是 patchright driver，node 由 `runtime/node.exe` 或 PATH 提供）。剔掉后 fat jar 从 250MB 降到 46MB。代价只有一条：driver 不可用且 `fail-closed=false` 时不再退回官方 driver —— `BrowserSession` 把那条路径改成了显式报错，而不是抛一句「找不到 driver 资源」。
+
+真机验收（本机实测，`PATH` 只留 `C:\Windows\system32`，即 java 与 node 都不可见）：
+
+1. `start.bat` 启动 → `/api/system/status` 里 `driverAvailable=true`、`nodePath` 指向包内 `runtime\node.exe`、`dictionaryTotal=579`（Flyway 从空库迁移完成）。
+2. `POST /api/system/self-check` → `ok=true`、`webdriver=false`，真实 Edge 被拉起（证明 JRE → node → patchright → 浏览器整条链通）。
+3. `GET /` → 200，`<title>chat-job 控制台</title>`。
+4. 把 `runtime\node.exe` 改名再启动 → 状态页明确报「PATH 与 `<home>\runtime` 下都没有 node.exe」，而不是笼统的「驱动坏了」。
+
+分发时的三条硬要求：解压到**可写目录**（别放 `Program Files`）；对方自备一个兼容 OpenAI Chat Completions 的模型服务；`start.bat` 别另存成 UTF-8。
 
 ---
 

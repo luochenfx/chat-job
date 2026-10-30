@@ -94,9 +94,17 @@ public class BrowserSession {
         discardStale();
 
         Map<String, String> env = patchright.createOptionsEnv();
-        playwright = env.isEmpty()
-                ? Playwright.create()
-                : Playwright.create(new Playwright.CreateOptions().setEnv(env));
+        if (env.isEmpty()) {
+            // 这里原本是 Playwright.create()（无 env）—— 前提是 fat jar 里带着 playwright 官方
+            // driver-bundle，能退回官方 driver 跑。发布包为省 202MB 已经把 driver-bundle 剔除了
+            // （见 server/pom.xml 的 exclusion），那条回退路径在发布版上必然失败，且失败信息是
+            // 「找不到 driver 资源」，读起来指不到真正的原因。所以改成显式报错：
+            // 只有在 fail-closed=false 时才会走到这里，宁可讲清楚，也不要在没有反检测的状态下跑。
+            unavailableReason = driver.message();
+            throw new IllegalStateException(
+                    "patchright driver 不可用，且发布包未内置官方 driver，拒绝启动: " + driver.message());
+        }
+        playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env));
 
         Path userDataDir = Paths.get(props.browser().userDataDir()).toAbsolutePath();
         sanitizeProfileExitState(userDataDir);

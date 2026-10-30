@@ -1,6 +1,7 @@
 package com.chatjob.driver;
 
 import com.chatjob.config.AppProperties;
+import com.chatjob.config.ProjectHome;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -63,7 +64,9 @@ public class PatchrightDriver {
                                 + "请先执行 scripts/install-patchright.mjs 装配 driver。");
             } else if (node == null) {
                 status = new Status(false, dir.toString(), null,
-                        "找到了 patchright driver，但 PATH 里没有 node。请先安装 Node.js。");
+                        "找到了 patchright driver，但没找到 node：PATH 与 "
+                                + ProjectHome.resolve().resolve("runtime") + " 下都没有 node.exe。"
+                                + "请安装 Node.js，或把 node.exe 放到 runtime/ 下。");
             } else {
                 status = new Status(true, dir.toString(), node, "patchright driver 就绪");
             }
@@ -110,15 +113,39 @@ public class PatchrightDriver {
         return null;
     }
 
+    /**
+     * 找 node 可执行文件的顺序：显式指定 → 随包内置 → PATH。
+     *
+     * <p><b>为什么要有「随包内置」这一档</b>：分发版（{@code node scripts/build-dist.mjs} 产出）
+     * 把 node.exe 放在 {@code <home>/runtime/node.exe}，使用者不需要自己装 Node.js。
+     * 只认 PATH 的话，对方机器上驱动必然判定为不可用，任务被 fail-closed 拦在起点，
+     * 而报错读起来像是「驱动坏了」，指不到真正缺的东西。
+     *
+     * <p>显式指定的两条路（{@code -Dchat-job.node} / {@code CHAT_JOB_NODE}）留给
+     * 「用自己那套 node 跑」的场景，例如想换 node 版本排查驱动兼容性。
+     */
     private String locateNode() {
         boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows");
-        List<String> names = windows
-                ? List.of("node.exe", "node.cmd", "node.bat", "node")
-                : List.of("node");
+        String exe = windows ? "node.exe" : "node";
+
+        Path explicit = explicitNode();
+        if (explicit != null) {
+            return explicit.toString();
+        }
+
+        for (Path candidate : bundledNodeCandidates(exe)) {
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().toString();
+            }
+        }
+
         String path = System.getenv("PATH");
         if (path == null) {
             return null;
         }
+        List<String> names = windows
+                ? List.of("node.exe", "node.cmd", "node.bat", "node")
+                : List.of("node");
         for (String entry : path.split(File.pathSeparator)) {
             if (entry == null || entry.isBlank()) {
                 continue;
@@ -135,5 +162,31 @@ public class PatchrightDriver {
             }
         }
         return null;
+    }
+
+    /** {@code -Dchat-job.node} / {@code CHAT_JOB_NODE}：指向不存在时打 warn 并继续往下找，不直接失败。 */
+    private Path explicitNode() {
+        String value = System.getProperty("chat-job.node");
+        if (value == null || value.isBlank()) {
+            value = System.getenv("CHAT_JOB_NODE");
+        }
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        Path candidate = Paths.get(value.trim());
+        if (Files.isRegularFile(candidate)) {
+            return candidate.toAbsolutePath();
+        }
+        log.warn("CHAT_JOB_NODE 指向的 node 不存在，忽略: {}", candidate);
+        return null;
+    }
+
+    /**
+     * 随包内置的 node 位置。两种布局都认：{@code runtime/node.exe}（当前分发包）
+     * 与 {@code runtime/node/node.exe}（node 官方 zip 解出来的形状）。
+     */
+    private List<Path> bundledNodeCandidates(String exe) {
+        Path runtime = ProjectHome.resolve().resolve("runtime");
+        return List.of(runtime.resolve(exe), runtime.resolve("node").resolve(exe));
     }
 }
