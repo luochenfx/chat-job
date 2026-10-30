@@ -71,7 +71,7 @@
           </div>
           <div class="field">
             <label>模型</label>
-            <input v-model="providerForm.model" type="text" placeholder="deepseek-chat" />
+            <input v-model="providerForm.model" type="text" placeholder="deepseek-flash" />
           </div>
         </div>
         <div class="field">
@@ -472,7 +472,7 @@ const providerForm = reactive<any>({
   id: null,
   name: '',
   baseUrl: 'https://api.deepseek.com/v1',
-  model: 'deepseek-chat',
+  model: 'deepseek-flash',
   apiKey: '',
   timeoutSeconds: 60
 })
@@ -642,7 +642,7 @@ function newProvider() {
   providerForm.id = null
   providerForm.name = ''
   providerForm.baseUrl = 'https://api.deepseek.com/v1'
-  providerForm.model = 'deepseek-chat'
+  providerForm.model = 'deepseek-flash'
   providerForm.apiKey = ''
   providerForm.timeoutSeconds = 60
   providerHeaders.value = []
