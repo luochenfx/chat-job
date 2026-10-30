@@ -140,12 +140,46 @@ public class ConfigStore {
 
     // ------------------------------------------------------------ 平台配置
 
+    /**
+     * 取平台配置，<b>没有就落一行默认值</b>。
+     *
+     * <p>只给「本来就要用这份配置去跑」的调用方（RunService、ConfigController 的读写），
+     * 因为它会写库。只是「看一眼」的只读视图请用 {@link #peekPlatformConfig(String)}。
+     */
     public PlatformConfigEntity platformConfig(String platform) {
-        PlatformConfigEntity existing = platformConfigMapper.selectOne(
-                Wrappers.<PlatformConfigEntity>lambdaQuery().eq(PlatformConfigEntity::getPlatform, platform));
+        PlatformConfigEntity existing = find(platform);
         if (existing != null) {
             return existing;
         }
+        PlatformConfigEntity created = defaults(platform);
+        created.setUpdatedAt(now());
+        platformConfigMapper.insert(created);
+        log.info("已创建平台配置默认值: platform={}", platform);
+        return created;
+    }
+
+    /**
+     * 只读版本：库里没有该平台的行时，返回一份「内存默认值」，<b>不写库</b>。
+     *
+     * <p>为什么必须分开：控制台概览每 5 秒轮询一次，若走 {@link #platformConfig}，
+     * 光是打开页面就会给一个从没配置过的平台建出一行，而且那行的 {@code enabled=1}
+     * 看起来像「用户启用过它」。读接口不该改库 —— 这条比省一个方法重要。
+     *
+     * <p>默认值与 {@link #platformConfig} 同源（同一个 {@link #defaults}），
+     * 所以「没配过时界面显示的配额」和「真跑起来用的配额」不会对不上。
+     */
+    public PlatformConfigEntity peekPlatformConfig(String platform) {
+        PlatformConfigEntity existing = find(platform);
+        return existing != null ? existing : defaults(platform);
+    }
+
+    private PlatformConfigEntity find(String platform) {
+        return platformConfigMapper.selectOne(
+                Wrappers.<PlatformConfigEntity>lambdaQuery().eq(PlatformConfigEntity::getPlatform, platform));
+    }
+
+    /** 新平台的默认配置。唯一一处默认值定义，insert 与 peek 都从它来 */
+    private PlatformConfigEntity defaults(String platform) {
         PlatformConfigEntity created = new PlatformConfigEntity();
         created.setPlatform(platform);
         created.setEnabled(1);
@@ -171,9 +205,6 @@ public class ConfigStore {
         created.setResumeImageEnabled(0);
         created.setDutyStartTime(DEFAULT_DUTY_START);
         created.setDutyEndTime(DEFAULT_DUTY_END);
-        created.setUpdatedAt(now());
-        platformConfigMapper.insert(created);
-        log.info("已创建平台配置默认值: platform={}", platform);
         return created;
     }
 

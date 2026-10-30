@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.chatjob.evaluate.BlacklistMatcher;
 import com.chatjob.evaluate.TextNormalizer;
 import com.chatjob.orchestrator.JobStore;
+import com.chatjob.platform.PlatformInfo;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.BlacklistEntity;
 import com.chatjob.store.entity.DeliveryEntity;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @RestController
@@ -41,16 +43,31 @@ public class JobController {
         this.configStore = configStore;
     }
 
-    /** 岗位列表，带上最新一次投递状态与判定理由，控制台一屏能看完 */
+    /**
+     * 岗位列表，带上最新一次投递状态与判定理由，控制台一屏能看完。
+     *
+     * <p>{@code platform} 不传 = <b>全部平台</b>。岗位页是审阅用途，用户想看的是
+     * 「两个平台一共扫到了什么」；默认只回一个平台，会让人以为另一个平台没扫到岗位。
+     * 也正因为默认是全部，每条都必须带平台名（{@code platformLabel}），否则分不清归属。
+     *
+     * <p>参数是 slug（{@code boss} / {@code zhaopin}），不接受中文名 —— 中文名是展示层的事，
+     * 拿它当查询条件会在改文案时把接口一起改坏。
+     */
     @GetMapping("/jobs")
-    public List<Map<String, Object>> jobs(@RequestParam(defaultValue = "100") int limit) {
+    public List<Map<String, Object>> jobs(@RequestParam(defaultValue = "100") int limit,
+                                          @RequestParam(required = false) String platform) {
+        String scope = platform == null || platform.isBlank()
+                ? null : platform.trim().toLowerCase(Locale.ROOT);
         List<JobPostingEntity> jobs = jobMapper.selectList(Wrappers.<JobPostingEntity>lambdaQuery()
+                .eq(scope != null, JobPostingEntity::getPlatform, scope)
                 .orderByDesc(JobPostingEntity::getLastSeenAt)
                 .last("LIMIT " + Math.clamp(limit, 1, 500)));
         List<Map<String, Object>> out = new ArrayList<>(jobs.size());
         for (JobPostingEntity job : jobs) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("id", job.getId());
+            item.put("platform", job.getPlatform());
+            item.put("platformLabel", PlatformInfo.of(job.getPlatform()).label());
             item.put("jobName", job.getJobName());
             item.put("companyName", job.getCompanyName());
             item.put("salary", job.getSalary());

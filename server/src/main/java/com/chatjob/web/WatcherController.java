@@ -1,5 +1,6 @@
 package com.chatjob.web;
 
+import com.chatjob.platform.PlatformInfo;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.WatcherStatsMapper;
@@ -19,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -72,11 +74,13 @@ public class WatcherController {
     /**
      * 任务面板。默认只回计数与失败原因，不返回消息原文（表里也只存摘要）。
      *
-     * @param status 可选，传了只回该状态；未知值当没传处理，而不是报错 ——
-     *               面板的筛选参数来自界面，不该因为拼错一个词就让整块区域白屏
+     * @param status   可选，传了只回该状态；未知值当没传处理，而不是报错 ——
+     *                 面板的筛选参数来自界面，不该因为拼错一个词就让整块区域白屏
+     * @param platform 可选，平台 slug；不传 = 全部平台（面板默认看全部，单平台是筛选）
      */
     @GetMapping("/unread-tasks")
     public Map<String, Object> unreadTasks(@RequestParam(required = false) String status,
+                                           @RequestParam(required = false) String platform,
                                            @RequestParam(defaultValue = "7") int days,
                                            @RequestParam(defaultValue = "50") int limit) {
         String cutoff = cutoff(days);
@@ -84,11 +88,13 @@ public class WatcherController {
         if (normalized != null && !KNOWN_STATUS.contains(normalized)) {
             normalized = null;
         }
+        String scope = platform == null || platform.isBlank()
+                ? null : platform.trim().toLowerCase(Locale.ROOT);
 
-        List<UnreadTaskEntity> tasks = statsMapper.listTasks(cutoff, normalized, clampLimit(limit));
+        List<UnreadTaskEntity> tasks = statsMapper.listTasks(cutoff, normalized, scope, clampLimit(limit));
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("counts", counts(cutoff));
+        out.put("counts", counts(cutoff, scope));
         out.put("tasks", tasks.stream().map(WatcherController::view).toList());
         out.put("days", days);
         return out;
@@ -127,41 +133,78 @@ public class WatcherController {
 
     // ---------------------------------------------------------------- 内部
 
-    private Map<String, Object> counts(String cutoff) {
-        int pending = 0;
-        int processing = 0;
-        int retrying = 0;
-        int gaveUp = 0;
-        int done = 0;
+    /**
+     * 面板计数：一份「合计」（受 platform 过滤）+ 一份「按平台明细」（永远描述整个窗口）。
+     *
+     * <p>两份都从同一次分组查询派生，所以合计永远等于明细中对应那几个平台之和 ——
+     * 分两次查会因中间写入而不一致，而人只会觉得「面板算错了」。
+     *
+     * <p>明细<b>不受</b>筛选影响：切到智联时若把 BOSS 的 8 条显示成 0，那不是「当前筛选的结果」，
+     * 是错的数字。要看单个平台，看合计；要看两个平台各多少，看明细。
+     *
+     * <p>明细无条件覆盖 {@link PlatformInfo#KNOWN} 里的每个平台：一个平台今天没有任务时
+     * 显示 0，而不是从界面上消失。0 是真实发生的 0。
+     *
+     * @param platform null 表示不限平台，合计收窄到全部
+     */
+    private Map<String, Object> counts(String cutoff, String platform) {
+        StatusTally total = new StatusTally();
+        Map<String, StatusTally> byPlatform = new LinkedHashMap<>();
+        for (String known : PlatformInfo.KNOWN) {
+            byPlatform.put(known, new StatusTally());
+        }
         for (Map<String, Object> row : statsMapper.countTasksByStatus(cutoff)) {
+            String p = String.valueOf(row.get("platform"));
             String status = String.valueOf(row.get("status"));
-            // MyBatis 把 COUNT(*) 的列名按目标数据库返回，大小写不确定，这里宽松取
-            long count = row.values().stream()
-                    .filter(v -> v instanceof Number)
-                    .mapToLong(v -> ((Number) v).longValue())
-                    .findFirst().orElse(0L);
+            int count = ((Number) row.get("cnt")).intValue();
+            byPlatform.computeIfAbsent(p, k -> new StatusTally()).add(status, count);
+            if (platform == null || platform.equals(p)) {
+                total.add(status, count);
+            }
+        }
+        Map<String, Object> out = total.view();
+        Map<String, Object> per = new LinkedHashMap<>();
+        byPlatform.forEach((p, tally) -> per.put(p, tally.view()));
+        out.put("byPlatform", per);
+        return out;
+    }
+
+    /**
+     * 一组状态计数。
+     *
+     * <p>{@code PROCESSING} 并进「待处理」：它是同一条任务正在被处理的那一瞬间，
+     * 单独列一个「正在处理」只会让面板上多一个永远接近 0 的数字。
+     */
+    private static final class StatusTally {
+        private int pending;
+        private int retrying;
+        private int gaveUp;
+        private int done;
+
+        void add(String status, int count) {
             switch (status) {
-                case "PENDING" -> pending += (int) count;
-                case "PROCESSING" -> processing += (int) count;
-                case "FAILED" -> retrying += (int) count;
-                case "GAVE_UP" -> gaveUp += (int) count;
-                case "DONE" -> done += (int) count;
+                case "PENDING", "PROCESSING" -> pending += count;
+                case "FAILED" -> retrying += count;
+                case "GAVE_UP" -> gaveUp += count;
+                case "DONE" -> done += count;
                 default -> { }
             }
         }
-        Map<String, Object> out = new LinkedHashMap<>();
-        // 「待处理」把 PROCESSING 一起算进去：它是同一条任务正在被处理的那一瞬间，
-        // 单独列一个「正在处理」只会让面板上多一个永远接近 0 的数字
-        out.put("pending", pending + processing);
-        out.put("retrying", retrying);
-        out.put("gaveUp", gaveUp);
-        out.put("done", done);
-        return out;
+
+        Map<String, Object> view() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("pending", pending);
+            out.put("retrying", retrying);
+            out.put("gaveUp", gaveUp);
+            out.put("done", done);
+            return out;
+        }
     }
 
     private static Map<String, Object> view(UnreadTaskEntity t) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("id", t.getId());
+        out.put("platform", t.getPlatform());
         out.put("conversation", t.getPlatformConversationId());
         out.put("status", t.getStatus());
         out.put("attemptCount", t.getAttemptCount());

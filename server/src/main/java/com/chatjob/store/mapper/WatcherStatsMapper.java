@@ -39,22 +39,32 @@ public interface WatcherStatsMapper {
             + "WHERE reply_source = 'AI' AND action = 'AI_SKIPPED' AND created_at >= #{cutoff}")
     long countAiSkipped(@Param("cutoff") String cutoff);
 
-    /** 近 N 天按状态分组计数，面板三个数字都从这里来 */
-    @Select("SELECT status, COUNT(*) AS cnt FROM unread_task "
-            + "WHERE created_at >= #{cutoff} GROUP BY status")
+    /**
+     * 近 N 天按「平台 + 状态」分组计数。
+     *
+     * <p>刻意<b>不带</b>平台条件：面板要同时给出「合计」（受筛选影响）和「分平台明细」
+     * （永远描述整个窗口）。两次查询会因中间写入而对不上，而人只会觉得「面板算错了」；
+     * 一次查全、在内存里分组，两份数字天然自洽。
+     */
+    @Select("SELECT platform, status, COUNT(*) AS cnt FROM unread_task "
+            + "WHERE created_at >= #{cutoff} GROUP BY platform, status")
     List<Map<String, Object>> countTasksByStatus(@Param("cutoff") String cutoff);
 
     /**
      * 任务列表。刻意不返回 {@code last_message_digest} —— 它是消息内容的摘要，
      * 面板只需要「这条为什么失败」，不需要知道对方说了什么。
+     *
+     * <p>返回 {@code platform} 列（实体自带）：面板默认显示全部平台，明细必须能分清归属。
      */
     @Select("<script>SELECT id, platform, platform_conversation_id, conversation_id, status, "
             + "attempt_count, max_attempts, last_action, last_reason_code, last_error, "
             + "next_retry_at, created_at, updated_at "
             + "FROM unread_task WHERE created_at &gt;= #{cutoff} "
             + "<if test='status != null'> AND status = #{status} </if>"
+            + "<if test='platform != null'> AND platform = #{platform} </if>"
             + "ORDER BY updated_at DESC LIMIT #{limit}</script>")
     List<UnreadTaskEntity> listTasks(@Param("cutoff") String cutoff,
                                      @Param("status") String status,
+                                     @Param("platform") String platform,
                                      @Param("limit") int limit);
 }

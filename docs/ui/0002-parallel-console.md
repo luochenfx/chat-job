@@ -298,6 +298,23 @@ function applyPlatform(c: any) {
 
 2c-1/2c-2 是后端，可以并行于 2a/2b 的大部分；2c-3/2c-4 必须等 2a/2b 能真正跑起两个浏览器。
 
+### 2c-1 实施记录（2026-10-31，真实库 + 空库两次启动取证）
+
+四个接口按 §8 的形状落地，未碰任何写路径。落地时定下三处口径，都写进了代码注释：
+
+| 决定 | 理由 | 证据 |
+|---|---|---|
+| 平台清单是常量 `PlatformInfo.KNOWN`，不查库 | 能跑哪些平台由「代码里有哪些适配器」决定。按 `platform_config` 的行推，一个从没跑过的平台会从界面上消失，人也就没有入口去第一次配置它 | 空库里 `platform_config` 是 0 行，`/system/platforms` 照样回两条 |
+| `overview` 不返回 `loginState` | 探测登录态要读浏览器 cookie，会为了刷一次页面把浏览器拉起来，而概览每 5 秒轮询一次 | `api/system/overview` 全程未触发浏览器启动（启动日志无「浏览器已启动」） |
+| 概览读配置走新增的 `ConfigStore.peekPlatformConfig()` | 原 `platformConfig()` 查不到就 insert 一行；轮询一个只读接口不该改库 | 空库实例调完 `/overview` 与 `/platforms` 后 `platform_config` 仍为 0 行 |
+
+两处与 §8 契约的偏差，都是为了「2a/2b 之前也不能说谎」：
+
+- **`browserReady` 按装配平台判定**：2a 之前一个进程只有一份 `BrowserSession`，未装配的平台返回 `false` 是事实而非占位。2a 之后改为问该平台自己的 session。
+- **`counts.byPlatform` 不受 `platform` 筛选影响**：合计收窄到所选平台，明细永远描述整个窗口。切到智联时若把 BOSS 的 8 条显示成 0，那不是筛选结果而是错的数字。
+
+空库启动下每张卡的 `run` 字段被 Jackson 的 `non_null` 省掉（没有 Run 记录），前端据此显示「今天还没有跑过」。
+
 ## 10. 反直觉检查清单（验收用）
 
 1. 概览页**不滚动**就能同时看到两个平台的运行状态。

@@ -153,6 +153,24 @@ public class RunStore {
         return runMapper.selectById(id);
     }
 
+    /**
+     * 该平台最近的一条 Run，不管状态。
+     *
+     * <p>概览卡片要回答两件事：「现在在跑吗」（看它是否非终止态）和「今天跑过没有」。
+     * 一条查询同时满足：同一平台同一时刻只可能有一条非终止态 Run（{@code uk_run_running}），
+     * 而它必然是最近创建的那条 —— 已经有活跃 Run 时点不了启动。所以最新一条就是活跃那条。
+     *
+     * <p><b>不要</b>改用 {@code RunService.current()}：那个方法是「本进程持有的那一条」，
+     * 没有活跃 Run 时会退回全库最新一条 Run —— 并行之后会把另一个平台的 Run 显示在本平台卡上。
+     */
+    public Optional<RunEntity> latest(String platform) {
+        List<RunEntity> list = runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
+                .eq(RunEntity::getPlatform, platform)
+                .orderByDesc(RunEntity::getId)
+                .last("LIMIT 1"));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
     public List<RunEntity> recent(int limit) {
         return runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
                 .orderByDesc(RunEntity::getId)
@@ -197,6 +215,21 @@ public class RunStore {
         return combinationMapper.selectList(Wrappers.<CombinationRunEntity>lambdaQuery()
                 .eq(CombinationRunEntity::getRunId, runId)
                 .orderByAsc(CombinationRunEntity::getSeq));
+    }
+
+    /**
+     * 组合总数，只数不取行。
+     *
+     * <p>概览卡片上只用它算「3 / 12 进行中」。为两个数字把整张队列表读进内存没有必要，
+     * 而且这个接口每 5 秒被轮询一次。
+     */
+    public int combinationCount(Long runId) {
+        if (runId == null) {
+            return 0;
+        }
+        Integer value = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM combination_run WHERE run_id = ?", Integer.class, runId);
+        return value == null ? 0 : value;
     }
 
     public void updateCombination(CombinationRunEntity combo) {
