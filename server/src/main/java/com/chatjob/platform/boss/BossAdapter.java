@@ -847,22 +847,28 @@ public class BossAdapter implements PlatformAdapter {
             pause(800, 1_400);
 
             Locator panel = page.locator(BossSelectors.RESUME_CONFIRM_PANEL).first();
-            if (!visibleWithin(panel, 6_000)) {
+            boolean noBubblePopped = !visibleWithin(panel, 6_000);
+            if (noBubblePopped) {
                 // 按钮判过不可用却没弹层：多半是点了没命中。不算业务不可用，算失败。
-                return ResumeResult.failed("点了「发简历」但没有出现确认气泡");
+                // 点了「发简历」但没有出现确认气泡，也可能是对方主动索要简历，视为发送成功
+//                return ResumeResult.failed("点了「发简历」但没有出现确认气泡");
             }
 
-            Locator confirm = panel
-                    .getByText(BossSelectors.RESUME_CONFIRM_TEXT,
-                            new Locator.GetByTextOptions().setExact(true))
-                    .first();
-            if (!visibleWithin(confirm, 3_000)) {
-                return ResumeResult.failed("确认气泡里找不到「确定」按钮");
-            }
-            try {
-                confirm.click(new Locator.ClickOptions().setTimeout(8_000));
-            } catch (Exception e) {
-                return ResumeResult.failed("点击「确定」失败: " + e.getMessage());
+            // 有气泡弹出才检查
+            if (!noBubblePopped) {
+                Locator confirm = panel
+                        .getByText(BossSelectors.RESUME_CONFIRM_TEXT,
+                                new Locator.GetByTextOptions().setExact(true))
+                        .first();
+                
+                if (!visibleWithin(confirm, 3_000)) {
+                    return ResumeResult.failed("确认气泡里找不到「确定」按钮");
+                }
+                try {
+                    confirm.click(new Locator.ClickOptions().setTimeout(8_000));
+                } catch (Exception e) {
+                    return ResumeResult.failed("点击「确定」失败: " + e.getMessage());
+                }
             }
 
             if (waitForResumeCard(page, cardsBefore, 20_000)) {
