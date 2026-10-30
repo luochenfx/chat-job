@@ -55,7 +55,7 @@
 
 适合只想用、不想折腾环境的人。机器只需要 Windows 10/11 + 自带的 Edge（或 Chrome）。
 
-1. 下载分发包  [![GitHub release](https://img.shields.io/github/v/release/luochenfx/chat-job?label=Latest%20Release)](https://github.com/yourname/luochenfx/chat-job/latest)
+1. 下载分发包  [![GitHub release](https://img.shields.io/github/v/release/luochenfx/chat-job?label=Latest%20Release)](https://github.com/luochenfx/chat-job/releases/latest)
 2. **解压到你有写权限的目录**，例如 `D:\chat-job`
    不要放在 `C:\Program Files` 下 —— 那里写不进数据库和浏览器配置
 3. 双击 `start.bat`
