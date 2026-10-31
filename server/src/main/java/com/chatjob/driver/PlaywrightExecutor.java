@@ -1,7 +1,6 @@
 package com.chatjob.driver;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -10,33 +9,54 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Playwright 单线程调度器。
+ * Playwright 单线程调度器，<b>每个平台一条</b>。
  *
  * <p>Playwright Java 不是线程安全的：Playwright 对象以及由它创建的所有对象，必须在创建它的
  * 那个线程上调用。多线程同时操作同一个 BrowserContext 会随机抛
  * {@code Object doesn't exist: request@/response@}，导航还会被打断成 {@code net::ERR_ABORTED}。
  * 所以所有页面操作都收敛到这一条线程上串行执行。
  *
+ * <p>为什么是「每平台一条」而不是全进程一条：串行化只需要落在<b>同一个浏览器上下文</b>内部，
+ * 把两个互不相干的平台也焊在同一根线程上，等于让 Boss 一次投递的 30 秒等待把智联的巡检
+ * 一起挂住 —— 那正是 ADR-0003 要消灭的「时长相加」。线程名带平台后缀
+ * （{@code playwright-boss} / {@code playwright-zhaopin}），出现问题时从 jstack 一眼能看出
+ * 卡在哪个平台。
+ *
  * <p>监控类调用（登录态心跳）走 {@link #tryRun}：线程忙就丢掉本轮，不排队 ——
  * 心跳排到投递前面会把主流程挤死。
  */
 @Slf4j
-@Component
 public class PlaywrightExecutor {
 
-    private static final String THREAD_NAME = "playwright-thread";
+    private final String platform;
+    /** 线程名同时是「当前是否在这条线程上」的唯一判据，所以必须按实例区分，不能用静态常量 */
+    private final String threadName;
 
-    private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, THREAD_NAME);
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ExecutorService executor;
 
     /** 排队中 + 执行中的任务数，用于"忙就跳过"判断 */
     private final AtomicInteger depth = new AtomicInteger();
 
+    public PlaywrightExecutor(String platform) {
+        this.platform = platform;
+        this.threadName = "playwright-" + platform;
+        this.executor = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, threadName);
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    public String platform() {
+        return platform;
+    }
+
+    public String threadName() {
+        return threadName;
+    }
+
     public boolean onPlaywrightThread() {
-        return THREAD_NAME.equals(Thread.currentThread().getName());
+        return threadName.equals(Thread.currentThread().getName());
     }
 
     public boolean isBusy() {
@@ -93,12 +113,17 @@ public class PlaywrightExecutor {
             try {
                 task.run();
             } catch (Exception e) {
-                log.debug("Playwright 后台任务异常: {}", e.getMessage());
+                log.debug("[{}] Playwright 后台任务异常: {}", platform, e.getMessage());
             } finally {
                 depth.decrementAndGet();
             }
         });
         return true;
+    }
+
+    /** 关掉这条线程池。只由 {@link BrowserSessions#closeAll()} 在应用退出时调用 */
+    public void shutdown() {
+        executor.shutdownNow();
     }
 
     private static RuntimeException asRuntime(Throwable t) {

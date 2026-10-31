@@ -10,7 +10,6 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.PlaywrightException;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,7 +19,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 浏览器会话：用系统真实 Chrome 起一个持久化上下文的专用 profile。
+ * 浏览器会话：用系统真实 Chrome 起一个持久化上下文的专用 profile，<b>一个平台一份</b>。
+ *
+ * <p>它不是 Spring 单例组件，而是由 {@link BrowserSessions} 按平台创建并持有：
+ * 每份有自己的 {@link Playwright}、{@link BrowserContext}、profile 目录与调度线程。
+ * 「当前装配的那个平台」那一份由 {@code BrowserWiring} 暴露成 {@code @Primary} bean，
+ * 让只关心单平台的调用点（RunService、SelfCheck、适配器）保持原样注入。
  *
  * <p>三个刻意的取舍：
  * <ul>
@@ -34,13 +38,20 @@ import java.util.Map;
  * 是防止"要恢复页面吗"的模态框把 CDP 挂死：那个框会让 navigate 永不返回，连超时都不触发。
  */
 @Slf4j
-@Component
 public class BrowserSession {
 
+    private final String platform;
     private final AppProperties props;
     private final PlaywrightExecutor executor;
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
+    /**
+     * 该平台专属的 profile 目录（{@code <root>/<platform>}）。
+     *
+     * <p>在构造期算好而不是每次用时算：它同时出现在日志、异常信息与控制台里，
+     * 一旦指向两个不同目录，症状是「明明登录过却又要扫码」这种最难查的一类问题。
+     */
+    private final Path userDataDir;
 
     private Playwright playwright;
     private BrowserContext context;
@@ -53,12 +64,26 @@ public class BrowserSession {
     private volatile boolean closed = true;
     private volatile String unavailableReason;
 
-    public BrowserSession(AppProperties props, PlaywrightExecutor executor, PatchrightDriver patchright,
-                          BrowserChannel browserChannel) {
+    public BrowserSession(String platform, AppProperties props, PlaywrightExecutor executor,
+                          PatchrightDriver patchright, BrowserChannel browserChannel) {
+        this.platform = platform;
         this.props = props;
         this.executor = executor;
         this.patchright = patchright;
         this.browserChannel = browserChannel;
+        this.userDataDir = Paths.get(props.browser().userDataDirFor(platform)).toAbsolutePath();
+    }
+
+    public String platform() {
+        return platform;
+    }
+
+    public Path userDataDir() {
+        return userDataDir;
+    }
+
+    public PlaywrightExecutor executor() {
+        return executor;
     }
 
     public boolean isReady() {
@@ -106,7 +131,6 @@ public class BrowserSession {
         }
         playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env));
 
-        Path userDataDir = Paths.get(props.browser().userDataDir()).toAbsolutePath();
         sanitizeProfileExitState(userDataDir);
 
         BrowserChannel.Choice choice = browserChannel.resolve();
@@ -138,7 +162,7 @@ public class BrowserSession {
         unavailableReason = null;
         context.onClose(c -> {
             closed = true;
-            log.warn("浏览器已关闭（手动关窗口或崩溃），下次操作会自动重新初始化");
+            log.warn("[{}] 浏览器已关闭（手动关窗口或崩溃），下次操作会自动重新初始化", platform);
         });
 
         // 持久化上下文自带的启动标签页不能复用：它可能永远停在加载中，而 evaluate / locator
@@ -156,10 +180,11 @@ public class BrowserSession {
             try {
                 startup.close();
             } catch (Exception e) {
-                log.debug("关闭启动空白页失败（忽略）: {}", e.getMessage());
+                log.debug("[{}] 关闭启动空白页失败（忽略）: {}", platform, e.getMessage());
             }
         }
-        log.info("浏览器已启动（{}，profile: {}，driver: {}）", choice.label(), userDataDir, driver.driverDir());
+        log.info("[{}] 浏览器已启动（{}，profile: {}，driver: {}）",
+                platform, choice.label(), userDataDir, driver.driverDir());
     }
 
     private void discardStale() {
@@ -191,7 +216,7 @@ public class BrowserSession {
                 if (!recoverable(e)) {
                     throw e;
                 }
-                log.warn("新建标签页失败（{}），重建浏览器会话后重试一次", e.getMessage());
+                log.warn("[{}] 新建标签页失败（{}），重建浏览器会话后重试一次", platform, e.getMessage());
                 closed = true;
                 context = null;
                 playwright = null;
@@ -238,8 +263,8 @@ public class BrowserSession {
      * 应用被强制停止（IDE 停止按钮 / kill / 崩溃）后，Chrome 下次启动会弹"要恢复页面吗？"。
      * 命令行标志偶尔不生效，所以这里再把 Preferences 里的退出状态直接改掉。
      */
-    private void sanitizeProfileExitState(Path userDataDir) {
-        Path preferences = userDataDir.resolve("Default").resolve("Preferences");
+    private void sanitizeProfileExitState(Path dir) {
+        Path preferences = dir.resolve("Default").resolve("Preferences");
         if (!Files.isRegularFile(preferences)) {
             return;
         }
@@ -260,9 +285,9 @@ public class BrowserSession {
             profileNode.put("exit_type", "Normal");
             profileNode.put("exited_cleanly", true);
             mapper.writeValue(preferences.toFile(), rootNode);
-            log.info("已清除 profile 崩溃退出标记（原 exit_type={}）", exitType);
+            log.info("[{}] 已清除 profile 崩溃退出标记（原 exit_type={}）", platform, exitType);
         } catch (Exception e) {
-            log.debug("清理 profile 退出状态失败（不影响启动）: {}", e.getMessage());
+            log.debug("[{}] 清理 profile 退出状态失败（不影响启动）: {}", platform, e.getMessage());
         }
     }
 
@@ -270,7 +295,7 @@ public class BrowserSession {
         try {
             executor.run(this::discardStale);
         } catch (Exception e) {
-            log.debug("关闭浏览器失败: {}", e.getMessage());
+            log.debug("[{}] 关闭浏览器失败: {}", platform, e.getMessage());
         }
     }
 }

@@ -47,7 +47,7 @@ public class StartupBanner {
                  平台     : {}（chat-job.active-platform；换平台要重启）
                  工作目录 : {}
                  数据目录 : {}（相对 ./data，以工作目录为基准）
-                 profile  : {}
+                 profile  : {}（根目录 {}，每平台一个子目录）
                  浏览器   : {} —— {}
                  driver   : {} —— {}
                  提示     : 请始终从仓库根启动；从 server/ 启动会生成另一份数据库
@@ -55,6 +55,7 @@ public class StartupBanner {
                 PlatformInfo.of(props.activePlatform()).label() + " / " + props.activePlatform(),
                 cwd,
                 dataDir,
+                Paths.get(props.browser().userDataDirFor(props.activePlatform())).toAbsolutePath(),
                 Paths.get(props.browser().userDataDir()).toAbsolutePath(),
                 choice.label(), choice.note(),
                 driverDir, patchright.inspect().message());

@@ -2,6 +2,7 @@ package com.chatjob.web;
 
 import com.chatjob.driver.BrowserChannel;
 import com.chatjob.driver.BrowserSession;
+import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PatchrightDriver;
 import com.chatjob.driver.SelfCheck;
 import com.chatjob.notify.Notifier;
@@ -36,6 +37,7 @@ public class SystemController {
 
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
+    private final BrowserSessions sessions;
     private final BrowserSession session;
     private final SelfCheck selfCheck;
     private final PlatformAdapter adapter;
@@ -48,12 +50,14 @@ public class SystemController {
     private final Notifier notifier;
     private final JdbcTemplate jdbc;
 
-    public SystemController(PatchrightDriver patchright, BrowserChannel browserChannel, BrowserSession session,
+    public SystemController(PatchrightDriver patchright, BrowserChannel browserChannel, BrowserSessions sessions,
+                            BrowserSession session,
                             SelfCheck selfCheck, PlatformAdapter adapter, RunStore runStore, JobStore jobStore,
                             ReplyStore replyStore, OptionStore optionStore, ConfigStore configStore,
                             RunService runService, Notifier notifier, JdbcTemplate jdbc) {
         this.patchright = patchright;
         this.browserChannel = browserChannel;
+        this.sessions = sessions;
         this.session = session;
         this.selfCheck = selfCheck;
         this.adapter = adapter;
@@ -284,12 +288,14 @@ public class SystemController {
     /**
      * 该平台的浏览器是否已起。
      *
-     * <p>阶段 2a 之前一个进程只有一份 {@link BrowserSession}，它属于装配的那个平台。
-     * 所以未装配的平台返回 false 是<b>事实</b>而不是占位：它确实没有浏览器。
-     * 2a 之后这里改为问该平台自己的 session。
+     * <p>阶段 2a 之后每个平台有自己的一份 {@link BrowserSession}，这里问的就是「那个平台」，
+     * 未装配的平台只要浏览器起过也能显示为已就绪。查的是已创建的那份，
+     * <b>不会因为看一眼状态就把浏览器造出来</b>（{@code existing} 不创建）。
      */
     private boolean browserReady(String platform) {
-        return platform.equals(adapter.platform()) && session.isReady();
+        return sessions.existing(platform)
+                .map(browser -> browser.session().isReady())
+                .orElse(false);
     }
 
     @GetMapping("/counters")

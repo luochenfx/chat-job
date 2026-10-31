@@ -3,6 +3,8 @@ package com.chatjob.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import java.nio.file.Paths;
+
 /**
  * 应用级配置。只放"启动时决定、运行期不改"的参数，
  * 业务可调参数（配额、筛选条件、黑名单）一律在数据库里。
@@ -32,7 +34,8 @@ public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfC
     }
 
     /**
-     * @param userDataDir      专用 profile 目录，与日常浏览完全隔离
+     * @param userDataDir      专用 profile 的<b>根</b>目录，与日常浏览完全隔离。
+     *                         实际目录是它下面按平台分出的子目录，见 {@link #userDataDirFor(String)}
      * @param slowMoMs         每个动作放慢的毫秒数
      * @param defaultTimeoutMs Page 的默认超时
      * @param channel          浏览器 channel：auto（默认，按 chrome → msedge 探测）/ chrome / msedge
@@ -41,6 +44,20 @@ public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfC
     public record Browser(String userDataDir, int slowMoMs, int defaultTimeoutMs,
                           @DefaultValue("auto") String channel,
                           @DefaultValue("") String executablePath) {
+
+        /**
+         * 平台各自的 profile 目录：{@code <root>/boss}、{@code <root>/zhaopin}。
+         *
+         * <p>必须是两个目录而不是一个：Chrome 对同一 user-data-dir 加独占锁，第二个实例
+         * 起不来（报 {@code ProcessSingleton} 冲突）。而两个平台的登录态本来也不共用 ——
+         * 都是各自扫码各自记住，混在一个 profile 里是另一种串号。
+         *
+         * <p>目录名直接用平台标识，不做大小写或别名映射：它出现在日志、控制台与磁盘上，
+         * 三处必须能一眼对上。
+         */
+        public String userDataDirFor(String platform) {
+            return Paths.get(userDataDir).resolve(platform).toString();
+        }
     }
 
     public record SelfCheckProps(boolean enabled) {

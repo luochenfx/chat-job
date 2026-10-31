@@ -131,6 +131,40 @@ Boss 一条流水线一天能扫的组合有限，而且每个平台的岗位池
 | 回滚 | 2a/2b/2c 各自一个提交，出问题单独 revert |
 | 注意 | 2a 完成后用户需要**为智联的自动化 profile 单独扫码登录一次**（现有登录态在日常浏览器，本来就不能复用） |
 
+**阶段 2a 实施记录（2026-10-31，真实浏览器 + 服务启动取证）**
+
+落地结构与计划一致（每平台一份 `PlaywrightExecutor` + `BrowserSession`，由 `BrowserSessions` 注册表按需创建），三处按实际情况调整：
+
+| 项 | 计划 | 实际做法 | 依据 |
+|---|---|---|---|
+| profile 目录 | `profile/boss`、`profile/zhaopin` | **`browser-data/boss`、`browser-data/zhaopin`**：根目录沿用既有 `browser-data`，只在其下按平台分 | 现有 boss 登录态（`browser-data/Default/Network/Cookies`）就在这个根下。换根等于逼 boss 也重新扫码一次，而这与「分目录是为了让两平台并行」无关。迁移做成一次性搬迁，不改配置根即可保持登录态 |
+| 单值注入点 | 编排层与适配器「一行不改」，等 2b 改成 Map 注入 | 加一个过渡 `@Configuration`（`BrowserWiring`），把 activePlatform 那份导出成 `@Primary` bean | `BrowserSession` / `PlaywrightExecutor` 已经没有 `@Component`，而 `RunService`、`SelfCheck`、两个适配器仍按单值注入。这个 bean 是 **2b 的删除项**，不是长期结构 |
+| 线程归属判据 | — | `onPlaywrightThread()` 从静态线程名常量改成实例字段（`playwright-boss` / `playwright-zhaopin`） | 原实现用 `static final THREAD_NAME` 比较线程名；两条线程并存时，A 平台会误判「我在自己的线程上」，从而在错误线程上就地执行页面操作 |
+
+验证方式与结果（三方交叉）：
+
+- **代码**：`PlatformBrowserIsolationTest`（默认 `@EnabledIfSystemProperty` 关闭，手动 `-Dchat-job.browser.verify=true` 开启）断言：同平台复用同一份、跨平台会话与线程互异、profile 目录按平台分离、创建对象不启浏览器、起一个不会牵动另一个、各自导航互不干扰、关掉一个另一个仍可用、关掉的能自己重建。
+- **日志**：`[playwright-boss] [boss] 浏览器已启动（profile: …\browser-data\boss）` / `[playwright-zhaopin] [zhaopin] …browser-data\zhaopin`；`DataRootReporter` 现在按平台列出两行档案目录。改前同一处日志是 `[playwright-thread]` + 单一 `browser-data`。
+- **进程**：两棵独立的 `msedge` 进程树，`--user-data-dir` 分别指向 `…\boss` 与 `…\zhaopin`，同时存活。
+- **页面**：服务以 `active-platform=boss` 起时控制台侧栏是「BOSS 直聘」、自检灯「浏览器会话 已启动」；切 `CHAT_JOB_ACTIVE_PLATFORM=zhaopin` 重启后侧栏变为「智联招聘」，且 `browser-data/` 下才出现 `zhaopin` 目录；切回 boss 后 `probe-login` 仍返回 `loggedIn=true`（登录态没因分目录丢失）。
+- **bsk（自动化浏览器本体，二次实测已含两平台各一份扩展）**：
+  - 单平台（智联服务）：`bsk browsers` 列出 `f1c52653 自动化浏览器2（EXT 0.4.0）`；`bsk session start --browser f1c52653` + `bsk tab list` 读到服务 `open-login` 打开的 `福州招聘网…智联招聘` / `https://www.zhaopin.com/`；`bsk tab borrow` + 只读 `evaluate` 取到 `{url: https://www.zhaopin.com/, title: 智联, webdriver: false}`，页面 banner 显示已登录账号。
+  - 双平台并存（`PlatformBrowserIsolationTest` + 真实 `browser-data`）：`bsk browsers` 同时列出 `9a198826 自动化浏览器（EXT 0.3.3）` 与 `f1c52653 自动化浏览器2（EXT 0.4.0）`；分别开会话读标签，`9a198826` → `BOSS直聘…` / `https://www.zhipin.com/`，`f1c52653` → `智联招聘` / `https://www.zhaopin.com/`，各自停在自己平台上，没有交叉。
+
+一条必须记住的限制：**bsk 能不能观测到某个自动化浏览器，取决于那个 profile 里有没有装、以及装的是哪一版 bsk 扩展**，与「bsk 是否支持 Playwright 浏览器」无关。
+
+| profile | bsk 扩展 | `bsk browsers` 显示 | 说明 |
+|---|---|---|---|
+| `browser-data/boss` | 有（`emacgiaaaiojkkpkddmmdfhmokgmnikg` 0.3.3） | `自动化浏览器`（`9a198826`） | 2a 之前就在用的 profile，扩展一直跟着；`tab list` 能读到 `https://www.zhipin.com/` |
+| `browser-data/zhaopin` | 有（同 ID，0.4.0，2026-10-31 手动安装并命名为「自动化浏览器2」） | `自动化浏览器2`（`f1c52653`） | 装扩展后立刻可见，`tab list` 读到 `https://www.zhaopin.com/`；装之前该目录连 `Default/Extensions` 都没有，30 秒轮询不出现 |
+| `build/verify-2a/*` | 无 | 不出现 | 验证测试用的一次性空目录 |
+
+两侧启动参数都没有 `--load-extension`：扩展来自 profile 内部，不是启动时注入。所以 2a **之前**智联（那时和 boss 共用 `browser-data`）是有插件、bsk 可见、也带着登录态的；2a 之后它成了独立空 profile，这三样都要从零来一次 —— 不是 bsk 退化了，是独立 profile 的必然代价。
+
+截至 2026-10-31 已把这三样补回：`browser-data/zhaopin` 装上了 bsk 扩展 0.4.0（bsk 里命名「自动化浏览器2」），并已完成登录（页面 banner 显示账号）。所以后续开发不需要再为智联单独扫码，两平台可以各自带着登录态并行。
+
+判「bsk 看不看得到这个浏览器」的正确顺序：先看该 profile 的 `Default/Extensions`，再看 `bsk browsers`。反过来做，会把「空 profile 没扩展」误判成「bsk 不具备观测能力」—— 我第一版就栽在这里。
+
 ### 阶段 3：收尾
 
 | 项 | 内容 |

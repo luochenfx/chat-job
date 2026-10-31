@@ -1,5 +1,6 @@
 package com.chatjob.config;
 
+import com.chatjob.platform.PlatformInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -47,7 +48,14 @@ public class DataRootReporter implements ApplicationRunner {
         paths.put("工作目录", workDir);
         paths.put("数据库", databaseFile());
         paths.put("日志", configuredPath("logging.file.name"));
-        paths.put("浏览器档案", configuredPath("chat-job.browser.user-data-dir"));
+        // 每个平台一个 profile 子目录（2a）：只打根目录会让人以为两个平台共用一个 profile，
+        // 而这恰好是 2a 要消灭的事实
+        Path profileRoot = configuredPath("chat-job.browser.user-data-dir");
+        if (profileRoot != null) {
+            for (String platform : PlatformInfo.KNOWN) {
+                paths.put("浏览器档案/" + platform, profileRoot.resolve(platform));
+            }
+        }
         paths.put("patchright driver", configuredPath("chat-job.driver.dir"));
 
         StringBuilder line = new StringBuilder("运行时数据位置:");

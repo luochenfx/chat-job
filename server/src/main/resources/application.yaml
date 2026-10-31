@@ -64,6 +64,10 @@ chat-job:
     # 找不到 driver 时拒绝启动任务（fail-closed），不得静默退回官方 driver
     fail-closed: true
   browser:
+    # 专用 profile 的根目录。实际用的是它下面的平台子目录（boss / zhaopin）：
+    # 同一个 user-data-dir 有独占锁，两平台共用一个目录时第二个浏览器起不来；
+    # 登录态也是各平台各自扫各自的码，不该混在一个 profile 里。
+    # 阶段 2a 之前这里就是 boss 的 profile，browser-data/boss 是它的原样搬迁。
     user-data-dir: ${chat-job.home}/browser-data
     slow-mo-ms: 50
     default-timeout-ms: 30000
