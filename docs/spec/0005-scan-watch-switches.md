@@ -181,6 +181,7 @@ while (true) {
 1. **入口读一次开关只用于分叉**。循环内两处「运行中改了要不要生效」的判定各自从配置重读：卡片边界读扫描开关，`standbyLoop` 顶部与插空巡检读值守开关。把入口读到的值当缓存用，等于让开关变成「下次启动生效」。
 2. **`!watchEnabled` 的判定必须排在 `stopRequested` / `DRY_RUN` / `dutyEnded` 之后**。用户点停止仍是 `CANCELLED`，时段到点仍是挂起（第二天唤醒后继续扫），只有「扫描正常结束」这一支才落到 `SCAN_DONE`。
 3. **只值守的 Run 在 `standbyLoop` 里永远拿不到 `RESCAN`**（3.4 第 2 条保证），所以回到循环顶部后不会进 `if (scanEnabled)` 分支，而是再次 `standbyLoop`。
+4. **实现里 `!watchEnabled` 那一步读的是当下的配置，不是上面伪码里启动时那个值**（P2 实施记录里记为与伪码的一处偏离）。理由：它是「扫描结束后进不进待命」的最后一道门，用启动值的话，运行中关掉值守的这一轮会先进待命、发出「值守继续」的横幅与企业微信通知，随后被 `standbyLoop` 顶部判到 `ENDED` 立刻结束——那条横幅与通知在发出时已经是假的。改读当下值后，同一场景直接以 `SCAN_DONE` 收尾。
 
 代码块里的 `whyOf(reason)` 是从 `enterStandby` 现有 `switch` 里抽出来的私有方法（`RunService:486-490`），结束文案与待命文案共用同一句原因。抽出来的理由是：不抽就会有两份「配额已用完 / 评估已达上限 / 组合已扫完」的措辞，改一处漏一处，而这类漏改在日志里表现为「同一件事两种说法」，排查时会以为是两件事。
 
@@ -397,6 +398,74 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
 - 5.2 第 4、6 条属 P2（关闭值守），本次未实现；
 - 控制台的徽标、`—` 口径、任务页提示属 P3，本次未改，`task.vue` 的 `describe()` 暂时还显示不出
   `SCAN_DISABLED` 这个新原因。
+
+**P2 实施记录（2026-11-01，真实服务 + 真实库 + 真实浏览器）**
+
+落点：
+
+| 文件 | 实际改动 |
+|---|---|
+| `RunService.runLoop` | 启动后若值守关闭，先写一行「本轮只扫描…」；扫描段结束后，在 `stopRequested` / `DRY_RUN` / `dutyEnded` 三个既有判定之后加「未启用值守 → `finish(COMPLETED, SCAN_DONE)`」；`StandbyExit.ENDED` 收尾为 `COMPLETED / WATCH_DISABLED` |
+| `RunService.standbyLoop` | 每轮重读配置之后判值守开关，关闭则返回 `ENDED`；`sleepInterruptibly` 调用处改为传 `run` |
+| `RunService.StandbyExit` | 新增 `ENDED`（与 `STOPPED` 分开的理由写在枚举注释里） |
+| `RunService.sleepInterruptibly` | 每秒检查加入值守开关（签名由 `(window, millis)` 改为 `(run, window, millis)`——它需要平台才能读配置；返回类型仍是 `void`） |
+| `RunService.processCards` | 插空巡检命中时先判值守开关，关闭则跳过 `sweep`；计数器先归零再判，避免关掉期间累计卡片数 |
+| `RunService.whyOf` | 新增 `(reason, platform)` 重载：`runLoop` 手上没有 `enterStandby` 算好的当日数字 |
+| `RunService.executeCombinations` | 补方法注释（原来那句「跑组合队列」的 javadoc 落在段分隔线上，没有挂在方法上；P1 插入枚举后位置错开） |
+| `tools/verify-p2.mjs` | 新增：A/B/C 三个场景的运行时验收脚本，结束时把开始前读到的整份配置 PUT 回去并逐字段核对 |
+
+与 §3.3 伪码的一处偏离：伪码在循环里用启动时读到的 `watchEnabled`，实现改成在
+`!configStore.platformWatchEnabled(...)` 处读当下配置。理由已在 §3.3 第 4 条写明。
+
+取证（`java -jar server/target/chat-job.jar --server.port=8099`，库为 `data/chat-job.db`，
+配置改动由脚本临时施加并还原，`GET` 前后逐字段一致）：
+
+| run | 平台 | 模式 | 结果 | `combination_run` | 巡检日志 |
+|---|---|---|---|---|---|
+| 55 | boss | NORMAL | `COMPLETED / SCAN_DONE` | 1 行 DONE，0 张卡 | 0 行 |
+| 56 | boss | DRY_RUN | `COMPLETED / COMPLETED` | 1 行 DONE，30 张卡，评估 26 | 0 行 |
+| 57 | boss | DRY_RUN | `COMPLETED / COMPLETED` | 1 行 DONE，30 张卡，评估 8 | 0 行 |
+| 58 | zhaopin | NORMAL | `COMPLETED / WATCH_DISABLED` | 1 行 DONE，24 张卡，评估 19 | 1 行（第 1 轮） |
+
+- **验收 4（只开扫描，run 55）**：关键词换成不会命中的串，日志共 6 行 ——
+  「任务启动」→「该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命」→「开始组合 #0」
+  →「加载 0 张卡片」→「COMPLETED / SCAN_DONE / 扫描已结束（搜索组合已全部扫完），该平台未启用值守，
+  任务结束」。没有待命横幅，`combination_run` 一行 DONE。
+- **插空巡检跳过（run 56 / 57）**：演练模式不发消息、不投递，但 `processCards` 照常逐卡判定，
+  所以它是这一处的可用场景。run 56 评估 26 次、36 行日志、0 条 WARN，巡检行 0 —— 每 5 张卡一个巡检点，
+  26 张意味着至少 5 个巡检点被跳过；run 57 评估 8 次，同样 0 条巡检（见下面安全验证一条，
+  run 57 的卡片只处理到第 8 张）。
+- **验收 6（运行中关值守，run 58）**：智联，间隔临时设 600 秒。时间线：
+  03:09:18 组合超时 → 进待命（横幅「扫描已结束（搜索组合已全部扫完），值守继续：每 10 分钟检查一次
+  未读消息，到 23:59 停止操作页面并挂起」）→ 03:09:29 第 1 轮巡检（会话 20，回复 0），
+  下一轮排在 03:19:05 → 03:09:29 关掉值守 → 03:09:30.589「该平台已关闭值守，本轮不再巡检，任务结束」
+  → 03:09:30.595 `COMPLETED / WATCH_DISABLED`。**关开关到落终态 1017ms**，第 1 轮之后没有第 2 轮。
+  下一轮巡检本来排在 03:19:05，所以这一秒内的结束只可能来自 `sleepInterruptibly` 的每秒检查，
+  不是间隔到期。
+- **页面（bsk）**：智联实例（`f1c52653`，扩展 0.4.0）跑完后标签页停在
+  `zhaopin.com/jobs/?jl=681&kw=zzzz-p2-no-such-job`，没有再出现会话页 —— 巡检期的会话页是瞬时的
+  （`threadPage` 每轮结束就关闭），关掉值守之后也没有新的导航。截图留在 `build/verify-p2/`（不入库）。
+- 全量单测 **273 例通过**，P2 未新增单测：`StandbyExit` 是私有枚举，`standbyLoop` / `processCards`
+  需要真实浏览器与 sleep，理由与 §4.3 末尾那段一致。
+
+实施中确认的运行环境事实（不是代码问题，但会影响验收）：
+
+- **Boss 的安全验证会打断扫描，症状是「卡片没抓到详情」而不是报错。** 本轮 run 55 → 57 连续三次
+  导航后，Boss 返回 `zhipin.com/web/passport/zp/verify.html`，页面上写「您的账号可能存在异常访问行为，
+  完成验证后即可正常使用」。run 57 的后 22 张卡全部记「第 N 张卡片没抓到详情，跳过」，
+  组合仍然按「已跑完」收尾。因此验收 4 与插空巡检都改用不会触发真实投递的配置，
+  验收 6 换到智联上做。已把这条写进 `docs/README.md` 的排错表。
+- **智联对不存在的关键词不返回空结果**，而是给热门职位（本次 24 张卡），所以「用无命中关键词
+  让扫描快结束」这条在智联上不成立。run 58 因此真的判定了 19 个岗位，全部落在「AI 判定不投」，
+  投递 0。
+
+本次未取证的验收项，如实记录：
+
+- **5.2 第 8 条（两个平台各配一种组合同时跑，互不影响）**：Boss 当场被安全验证拦住，无法同时起两条
+  真实 Run。可依据的仍是 2b 的结构（`RunServices.of(platform)` 每平台一份实例、配置与浏览器按平台取）
+  与 P1 的取证（同一时刻两个实例并存）。
+- **时段到点优先于「未启用值守」**：需要真实 Run 跑到时段结束，本轮时段临时改为全天，未构造该场景。
+  代码里 `dutyEnded` 的判定在值守判定之前，位置在 §3.3 的三个既有判定之内。
 
 ### 4.3 测试
 

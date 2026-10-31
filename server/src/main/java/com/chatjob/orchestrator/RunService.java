@@ -48,7 +48,9 @@ import java.util.concurrent.ThreadLocalRandom;
  *       原来写的是「全库一个」，而 {@code uk_run_running ON run(platform)} 从建表起算的就是
  *       「每个平台一个持有者」。</li>
  *   <li>扫描中止条件按优先级判：投递配额 → 评估上限 → 组合耗尽。三者只中止<b>扫描</b>，
- *       Run 进入待命继续值守；熔断优先于全部，且不降级为待命。</li>
+ *       Run 进入待命继续值守；熔断优先于全部，且不降级为待命。
+ *       两个平台级开关改变这条规则的适用范围（spec 0005）：未启用扫描时不进扫描段、启动即待命；
+ *       未启用值守时不进待命，扫描结束即收尾。</li>
  *   <li>任何异常都终止 Run，不重试穿越。绕过一次验证码的代价远大于当天少投几十个岗。</li>
  *   <li>窗口外启动 / 窗口到点 = 挂起等待，不是收工：状态落库、由调度唤醒，进程重启也不丢
  *       （见 {@link RunServices#wakeWaitingRuns()}）。</li>
@@ -333,6 +335,12 @@ public class RunService {
             // 关掉后重新打开要等下次启动 —— 这个值在整轮里不再变，是为了让「循环要不要扫」
             // 与传给 StandbyGate 的判断始终是同一个（spec 0005 §3.3 第 1 条）。
             boolean scanEnabled = configStore.platformScanEnabled(platform);
+            // 只扫描不值守的这一轮，正常结局就是「扫完即收尾」。提前写一行说明，否则最后的
+            // COMPLETED / SCAN_DONE 会被读成任务提前退出 —— 这一轮的 unread.detected 事件
+            // 本来就一条都不会有，日志里没有别的痕迹能解释它为什么结束。
+            if (!configStore.platformWatchEnabled(platform)) {
+                log(run, "INFO", "该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命");
+            }
             if (!scanEnabled) {
                 // 只值守：不建组合、不开搜索页，日志里也不出现「开始扫描」「开始组合」
                 if ("DRY_RUN".equals(run.getMode())) {
@@ -355,6 +363,9 @@ public class RunService {
                     ensureScanDay(run);
                     reason = executeCombinations(run);
 
+                    // 三个既有判定顺序不变：停止是 CANCELLED、演练不进待命、到点挂起。
+                    // 下面的「未启用值守」只能排在它们之后 —— 排在前面就会把用户点停止
+                    // 和时段到点都记成 SCAN_DONE。
                     if (stopRequested) {
                         finish(run, RunStatus.CANCELLED, "CANCELLED", "用户主动停止");
                         return;
@@ -368,6 +379,17 @@ public class RunService {
                         park(run, "DUTY_END");
                         return;
                     }
+                    // 扫描开、值守关：扫完就结束，不进待命（spec 0005 §3.2 第二行）。
+                    // reason 在这里必不为 null：executeCombinations 只在停止或到点两处返回 null，
+                    // 而这两种情况上面已经各自 return 了。
+                    // 读当下的配置而不是启动那一刻的值：扫描中途被关掉的值守，要在走到这里时
+                    // 直接收尾，而不是先进待命发一条「值守继续」的横幅与企业微信通知、再立刻结束。
+                    if (!configStore.platformWatchEnabled(run.getPlatform())) {
+                        finish(run, RunStatus.COMPLETED, "SCAN_DONE",
+                                "扫描已结束（" + whyOf(reason, run.getPlatform())
+                                        + "），该平台未启用值守，任务结束");
+                        return;
+                    }
                     enterStandby(run, reason);
                 }
 
@@ -378,6 +400,13 @@ public class RunService {
                 }
                 if (exit == StandbyExit.PARKED) {
                     // 挂起是「收起页面」，不是结束：状态已由 park 落库，finally 不会推 run.finished
+                    return;
+                }
+                if (exit == StandbyExit.ENDED) {
+                    // 与 SCAN_DONE 分开记：一个是「该做的做完了」，一个是「中途被关掉了值守」，
+                    // 合并成一个码之后日报里这两种结束就分不开了（spec 0005 §3.6）。
+                    finish(run, RunStatus.COMPLETED, "WATCH_DISABLED",
+                            "值守已关闭，该平台没有可继续的工作，任务结束");
                     return;
                 }
                 // RESCAN：状态已置回 RUNNING，回到循环顶部接着扫（scanEnabled 为 false 时不会走到这里）
@@ -410,15 +439,24 @@ public class RunService {
         }
     }
 
-    /**
-     * 跑组合队列。
-     *
-     * @return 扫描为什么停；{@code null} 表示被人停 / 到点 / 组合超时这类「不需要待命理由」的退出
-     */
     // ---------------------------------------------------------------- 值守待命
 
-    /** 待命循环的三种出口 */
-    private enum StandbyExit { RESCAN, STOPPED, PARKED }
+    /** 待命循环的四种出口 */
+    private enum StandbyExit {
+        /** 回扫：跨自然日或配额/上限被调高，状态已置回 RUNNING */
+        RESCAN,
+        /** 用户点了停止 */
+        STOPPED,
+        /** 越过值守结束时刻，收起页面等下一个窗口（值守期没结束） */
+        PARKED,
+        /**
+         * 运行中把值守开关关掉了：值守不再继续，待命也就没有理由继续。
+         *
+         * <p>不复用 {@link #STOPPED}：那一条落 {@code CANCELLED}，而这里不是用户停的，
+         * 落 {@code CANCELLED} 会让日报把「配置被改」记成「被人中途停掉」。
+         */
+        ENDED
+    }
 
     /**
      * 待命循环：扫描停了，值守不停。
@@ -428,6 +466,10 @@ public class RunService {
      * 并行意味着两个线程交替操作同一批页面，历史上那正是「导航被打断成 net::ERR_ABORTED」的来源。
      *
      * <p>待命期不碰搜索页（不调 {@code openSearch}），{@code listPage} 保持上次扫描停在的位置。
+     *
+     * <p>四个出口里只有 {@link StandbyExit#RESCAN} 会回到扫描，而它的唯一来源是
+     * {@link StandbyGate} 的 {@code SCAN} 判定 —— 那个判定在 {@code scanEnabled} 为 false 时
+     * 直接返回 {@code WATCH}，所以「只值守」的 Run 不会因为跨日被判去回扫。
      *
      * @param scanEnabled 本轮是否参与扫描，取自 {@code runLoop} 启动时那一次读取
      */
@@ -451,6 +493,15 @@ public class RunService {
             // 「循环要不要扫」（runLoop 的局部变量）与「能不能回扫」（这里的入参）分成两个值，
             // 出现「发了回扫事件、状态改回 RUNNING，却没有真的去扫」。
             PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
+            // 值守开关则相反，必须每轮重读：它是「即刻生效」的三个点之一（另外两个是插空巡检
+            // 与 sleepInterruptibly 的每秒检查）。关掉之后待命没有继续的理由 —— STANDBY 的定义
+            // 是「扫描已中止、值守仍在继续」，两者都不成立了就该结束，由 runLoop 收尾。
+            // 走 ConfigStore 的读法而不复用上面那份 cfg：「缺省按开」的规则只有那一处，
+            // 在调用点照抄一遍 `== null || != 0` 就等于第二份默认值。
+            if (!configStore.platformWatchEnabled(run.getPlatform())) {
+                log(run, "INFO", "该平台已关闭值守，本轮不再巡检，任务结束");
+                return StandbyExit.ENDED;
+            }
             DutyWindow window = DutyWindow.of(cfg);
             LocalTime now = LocalTime.now();
             int interval = ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds());
@@ -499,7 +550,7 @@ public class RunService {
                     + (sweep.failed() > 0 ? "，失败 " + sweep.failed() : "")
                     + "；下次巡检 " + LocalTime.now().plusSeconds(jittered).format(HHMMSS)
                     + "（已待命 " + standbyMinutes + " 分钟）");
-            sleepInterruptibly(window, jittered * 1000L);
+            sleepInterruptibly(run, window, jittered * 1000L);
         }
     }
 
@@ -553,6 +604,18 @@ public class RunService {
             // 只值守的 Run 是从这里进待命的，横幅另写了文案；保留这一支是为了让 switch 覆盖全枚举
             case SCAN_DISABLED -> "未启用扫描";
         };
+    }
+
+    /**
+     * 同上一句，当日计数自己取。
+     *
+     * <p>给 {@code runLoop} 的「只扫描」收尾用：那里没有 {@code enterStandby} 已经算好的数字，
+     * 而这句话必须带上实际值 ——「配额已用完（30/30）」与不带数字的「配额已用完」，
+     * 在排查时是两件事。
+     */
+    private String whyOf(StandbyGate.StopReason reason, String platform) {
+        return whyOf(reason, configStore.platformConfig(platform),
+                runStore.deliveredToday(platform), runStore.evaluatedToday(platform));
     }
 
     /**
@@ -614,15 +677,20 @@ public class RunService {
     }
 
     /**
-     * 可打断的睡眠：每秒检查一次停止与时段结束。
+     * 可打断的睡眠：每秒检查一次停止、时段结束与值守开关。
      *
      * <p>不能直接 {@code Thread.sleep(interval)}：22:00 到点最多要等两分钟才收起页面，
      * 而「时段外不操作页面」是硬约束。暂停也靠这里尽快生效。
+     *
+     * <p>值守开关也放在这个每秒检查里：只靠 {@code standbyLoop} 顶部的判定，关掉之后最坏要等满
+     * 一个巡检间隔（按分钟计）才停；而「关掉值守后最多一秒停止巡检」是 spec 0005 的验收口径。
+     * 代价是每秒读一次本地 SQLite 的一行，比等满一个间隔便宜得多。
      */
-    private void sleepInterruptibly(DutyWindow window, long millis) {
+    private void sleepInterruptibly(RunEntity run, DutyWindow window, long millis) {
         long deadline = System.currentTimeMillis() + millis;
         while (System.currentTimeMillis() < deadline) {
-            if (stopRequested || !window.contains(LocalTime.now())) {
+            if (stopRequested || !window.contains(LocalTime.now())
+                    || !configStore.platformWatchEnabled(run.getPlatform())) {
                 return;
             }
             long left = deadline - System.currentTimeMillis();
@@ -678,6 +746,14 @@ public class RunService {
         }
     }
 
+    /**
+     * 跑组合队列。
+     *
+     * <p>进组合之前先判一次扫描开关，而不只依赖卡片边界的判定：再往下一步就是
+     * {@code openSearch}，关掉扫描之后不得再有任何搜索页导航（spec 0005 §3.5）。
+     *
+     * @return 扫描为什么停；{@code null} 表示被人停 / 到点 / 组合超时这类「不需要待命理由」的退出
+     */
     private StandbyGate.StopReason executeCombinations(RunEntity run) {
         PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
         List<CombinationRunEntity> combos = runStore.combinations(run.getId());
@@ -832,11 +908,19 @@ public class RunService {
             cardsSinceWatch++;
             boolean timeUp = (System.currentTimeMillis() - lastWatchAt) / 1000 >= WATCH_EVERY_SECONDS;
             if (cardsSinceWatch >= WATCH_EVERY_CARDS || timeUp) {
+                // 计数先归零再判开关：关掉值守期间不该累计卡片数，否则重新打开的那一刻
+                // 会立刻补一次巡检（那一刻并没有到间隔）。
                 cardsSinceWatch = 0;
                 lastWatchAt = System.currentTimeMillis();
-                UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
-                        adapter, run.getPlatform(), collectMetrics, dryRun);
-                publishUnread(run, sweep);
+                // 插空巡检是「即刻生效」的第二个点：扫描进行中关掉值守，扫描继续，但不再碰消息列表
+                // （spec 0005 §3.6）。读配置而不读 runLoop 里的局部值 —— 这个开关可以在扫描中途被改。
+                // 跳过时不打日志：每 5 张卡一行会盖住投递日志，而「没有 unread.detected 事件」
+                // 本身就是可核对的事实。
+                if (configStore.platformWatchEnabled(run.getPlatform())) {
+                    UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
+                            adapter, run.getPlatform(), collectMetrics, dryRun);
+                    publishUnread(run, sweep);
+                }
             }
 
             runStore.checkpoint(run, run.getCombinationIndex(), 0, card + 1);

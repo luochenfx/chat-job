@@ -34,7 +34,7 @@
 | 硬规则过滤 | 硬黑名单（公司/岗位名）→ HR 活跃度档位 → 已投递跳过，命中即不调用 AI | `evaluate/BlacklistMatcher.java`、`evaluate/ActiveLevel.java` |
 | AI 投递判定 | 单次调用产出「投不投 + 理由 + 招呼语」；关闭质量开关时用模板招呼语直接投 | `evaluate/AiJudge.java`、`evaluate/ChatClient.java` |
 | 投递与确认 | 进会话先读消息再决定是否发，用「立即沟通 → 继续沟通」按钮文案复核送达；投递记录可查、可重置。智联是点「立即投递」由平台发出简历与固定话术，没有自定义话术 | `platform/boss/BossChatNavigator.java`、`orchestrator/JobStore.java` |
-| 配额与运行态 | 日投递配额、日评估上限、组合时间/轮数上限；配额/上限/组合耗尽只中止扫描 → `STANDBY`（值守待命），时段结束 → `WAITING_DUTY` 挂起（值守期不结束）；`CIRCUIT_OPEN` / `LOGIN_LOST` / `CANCELLED` / `FAILED` 等终止态。定时唤醒与重启收尾统一由 `RunServices` 遍历已装配平台执行 | `orchestrator/RunService.java`、`orchestrator/RunStatus.java`、`orchestrator/StandbyGate.java`、`orchestrator/RunServices.java` |
+| 配额与运行态 | 日投递配额、日评估上限、组合时间/轮数上限；配额/上限/组合耗尽只中止扫描 → `STANDBY`（值守待命），未启用扫描的平台启动即 `STANDBY`，未启用值守的平台扫完即 `COMPLETED / SCAN_DONE`；时段结束 → `WAITING_DUTY` 挂起（值守期不结束）；`CIRCUIT_OPEN` / `LOGIN_LOST` / `CANCELLED` / `FAILED` 等终止态。定时唤醒与重启收尾统一由 `RunServices` 遍历已装配平台执行 | `orchestrator/RunService.java`、`orchestrator/RunStatus.java`、`orchestrator/StandbyGate.java`、`orchestrator/RunServices.java` |
 | 值守时段 | 默认 09:00–22:00；窗口外点启动会落一条 `WAITING_DUTY` 挂起，调度每 30 秒轮询唤醒（跨重启可续，跨自然日复位组合队列），演练模式不受限制 | `orchestrator/DutyWindow.java`、`orchestrator/RunService.java` |
 | 值守回复 | 关键词规则 + 文案池、敏感词优先拦截；可选「AI 回复」开关（默认关）；出站四重校验；未读任务落库 → 退避重试 3 次 → `GAVE_UP`，控制台可手动重试 | `watcher/`（`UnreadWatcher`、`ReplyRuleEngine`、`AiReplier`、`ReplyGuard`、`UnreadTaskStore`） |
 | 自动发简历 | 仅当规则动作显式设为 `SEND_RESUME` 时点一次「发简历」，发完不补话；不交给 AI 决定。确认气泡是可选步骤（对方已索要过简历时不弹），成败一律看「简历卡片 +1（20 秒内）」 | `watcher/UnreadWatcher.java`、`BossAdapter.sendResume`、`web/ReplyRuleController.java` |
@@ -225,7 +225,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 |---|---|---|
 | 缺省平台（调用方未传 `platform` 时） | `boss` | `chat-job.active-platform`（`application.yaml`，可用环境变量 `CHAT_JOB_ACTIVE_PLATFORM` 覆盖） |
 | 平台开关 | 启用 | `platform_config.enabled`（V1 建表即有，阶段 3 起真正生效） |
-| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。**本次只落数据与读写接口**：两列可读写、两个都关时拒绝保存；按开关改变运行行为属 spec 0005 的 P1–P3，尚未实现 |
+| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。两个都关时拒绝保存（400，文案指向平台开关）。关掉即改运行行为：扫描在卡片边界与组合入口生效，值守在待命循环的每秒检查与插空巡检生效。控制台的开关分组与徽标属 spec 0005 的 P3，尚未上线——目前只能用 `PUT /api/config/platform/{platform}`（**整份对象**，见下方排错表）改
 | 日投递配额 / 日评估上限 | 30 / 150（**每平台各一份**） | `platform_config`（V1） |
 | 卡片间隔基准 / 滚动轮上限 / 单组合时间上限 | 10 秒（实际随机 5–10 秒）/ 300 轮 / 1200 秒 | 同上 |
 | HR 活跃度下限 | 本月 | 同上 |
@@ -256,7 +256,10 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 | 配置/端口「明明写了却没生效」 | 看启动横幅里的**数据目录与端口**；只从仓库根用 `.bat` 启动，别从 `server/` 直接跑 |
 | 启动后立刻 `LOGIN_LOST` | 系统页点对应平台行的「打开登录页」扫码 → 「探测登录」确认；Run 启动前会先探测登录态。每个平台的 profile 独立，需要分别登录 |
 | 任务停在 `WAITING_DUTY` | 正常行为：不在值守时段。检查配置页的起止时间；挂起不是收工，调度每 30 秒唤醒一次，重启后也能接上 |
-| 任务停在 `STANDBY`（值守待命） | 正常行为：配额 / 评估上限 / 组合耗尽，只中止扫描。值守照常巡检，配额被调高或跨自然日后自动回扫 |
+| 任务停在 `STANDBY`（值守待命） | 正常行为：配额 / 评估上限 / 组合耗尽，或该平台未启用扫描，只中止扫描。值守照常巡检，配额被调高或跨自然日后自动回扫（未启用扫描的平台不回扫） |
+| 任务没进 `STANDBY` 就结束了，`terminal_reason` 是 `SCAN_DONE` | 正常行为：该平台未启用值守，扫完即收尾，不跨日回扫。要让它继续值守，打开值守开关后重新启动 |
+| `terminal_reason` 是 `WATCH_DISABLED` | 正常行为：运行中把值守关掉了，待命没有继续的理由，Run 自行结束（不是用户点的停止，所以不是 `CANCELLED`） |
+| 日志连续出现「第 N 张卡片没抓到详情，跳过」，浏览器标签停在 `zhipin.com/web/passport/zp/verify.html` | 平台侧触发了安全验证（「您的账号可能存在异常访问行为」）。程序不会自动过验证：在浏览器里人工完成验证后重新启动任务。这类中断表现为大面积跳过卡片，组合仍按「已跑完」收尾，只看结果状态会误判为正常结束 |
 | 某平台每次启动都报 `Protocol error (Network.setCacheDisabled): session closed` | **先查残留进程**，不要先怀疑装配：强杀浏览器后残留的 msedge 子进程会占住该 profile。按命令行过滤带 `browser-data\<平台>` 的 `msedge.exe` 并清理，再启动即恢复 |
 | 界面显示「可能已卡住」 | `staleAfterSeconds`（STANDBY 下 3 倍巡检间隔，默认 360 秒；终止态/无 Run 为 90 秒）内没有活动就提示。先看 `currentAction` 与 `data/logs/chat-job.log` 再判断是不是真无响应 |
 | 想看到值守任务去向 | 控制台「系统」页 → 未读任务面板（待处理/重试中/已放弃 + 手动重试，明细含平台列） |
