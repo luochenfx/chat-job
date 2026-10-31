@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>配置</h1>
-        <p>在这里填写 AI 服务、判断标准、每个平台的搜索条件和自动回复规则</p>
+        <p>在这里填写 AI 模型、判断标准、每个平台的搜索条件和自动回复规则</p>
       </div>
     </div>
 
@@ -19,35 +19,36 @@
       </button>
     </div>
 
-    <!-- ---------------------------------------------------- 模型提供商 -->
+    <!-- ---------------------------------------------------- 模型配置 -->
     <section v-show="tab === 'provider'">
       <div class="card">
         <div class="row" style="justify-content: space-between; align-items: flex-start">
           <div>
-            <h2>AI 服务商</h2>
+            <h2>模型配置</h2>
             <p class="hint">
-              这里填的是提供 AI 服务的公司，不是某一个具体模型。密钥会加密保存在本机，
-              页面上只显示「是否已填写」，不会显示内容
+              这里添加的是具体的模型，不是提供 AI 服务的公司。同一个服务商可以有多个模型，
+              接口地址和密钥填一样的，改一下模型名称就换成了该服务商下的另一个模型。
+              密钥会加密保存在本机，页面上只显示「是否已填写」，不会显示内容
             </p>
           </div>
-          <button class="btn sm" @click="openProvider()">添加</button>
+          <button class="btn sm" @click="openProvider()">添加模型</button>
         </div>
 
         <table v-if="providers.length">
           <thead>
             <tr>
-              <th>名称</th>
-              <th>接口地址</th>
               <th>模型</th>
+              <th>服务商</th>
+              <th>接口地址</th>
               <th style="width: 90px">密钥</th>
               <th style="width: 120px"></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="p in providers" :key="p.id">
+              <td>{{ p.model }}</td>
               <td>{{ p.name }}</td>
               <td class="hint-inline">{{ p.baseUrl }}</td>
-              <td>{{ p.model }}</td>
               <td>
                 <span class="tag" :class="p.keyConfigured ? 'ok' : 'danger'">
                   {{ p.keyConfigured ? '已填写' : '未填写' }}
@@ -63,26 +64,28 @@
           </tbody>
         </table>
         <div v-else class="empty">
-          还没有添加 AI 服务商，先添加一个。以 DeepSeek 为例，接口地址填 https://api.deepseek.com/v1
+          还没有添加模型，先添加一个。以 DeepSeek 为例，模型名称填 deepseek-chat，接口地址填 https://api.deepseek.com/v1
         </div>
       </div>
 
       <!-- 新增与编辑共用同一个弹层：点遮罩或按 Esc 即为放弃，不落库 -->
       <Modal
         :open="providerDialog"
-        :title="providerForm.id ? '编辑 AI 服务商' : '添加 AI 服务商'"
-        hint="编辑时密钥留空，表示保持原来的密钥不变"
+        :title="providerForm.id ? '编辑模型' : '添加模型'"
+        hint="同一服务商的多个模型，接口地址与密钥填一样的即可；编辑时密钥留空，表示保持原来的密钥不变"
         width="620px"
         @close="closeProviderDialog"
       >
         <div class="grid cols-2">
           <div class="field">
-            <label>服务商名称</label>
-            <input v-model="providerForm.name" type="text" placeholder="DeepSeek" />
-          </div>
-          <div class="field">
             <label>模型名称</label>
             <input v-model="providerForm.model" type="text" placeholder="deepseek-flash" />
+            <div class="desc">要换模型，改这里：填服务商文档里的模型 ID</div>
+          </div>
+          <div class="field">
+            <label>服务商</label>
+            <input v-model="providerForm.name" type="text" placeholder="DeepSeek" />
+            <div class="desc">只用于列表里区分；同一服务商填同一个名字即可</div>
           </div>
         </div>
         <div class="field">
@@ -107,7 +110,7 @@
             <button class="btn sm danger" @click="providerHeaders.splice(i, 1)">删除</button>
           </div>
           <button class="btn sm" @click="providerHeaders.push({ key: '', value: '' })">添加一行</button>
-          <div class="desc">一般不用填。服务商有特殊要求时，在这里补充参数</div>
+          <div class="desc">一般不用填。接口有特殊要求时，在这里补充参数</div>
         </div>
 
         <template #footer>
@@ -128,10 +131,10 @@
 
         <div class="grid cols-2">
           <div class="field">
-            <label>使用哪个 AI 服务商</label>
+            <label>使用哪个模型</label>
             <select v-model.number="ai.providerId">
               <option :value="null">未选择</option>
-              <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }} · {{ p.model }}</option>
+              <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.model }} · {{ p.name }}</option>
             </select>
           </div>
           <div class="field">
@@ -226,7 +229,7 @@
             <div class="desc">
               AI 迟迟没有回应时，等这么久就放弃这一条。放弃后会重新尝试，不会悄悄漏掉。
               <template v-if="effectiveReplyTimeout && effectiveReplyTimeout < ai.aiReplyTimeoutSeconds">
-                <b>实际只等 {{ effectiveReplyTimeout }} 秒</b> —— 你给这家 AI 服务商设的等待时间更短，到点会先断开
+                <b>实际只等 {{ effectiveReplyTimeout }} 秒</b> —— 你给这个模型设的等待时间更短，到点会先断开
               </template>
             </div>
           </div>
@@ -554,7 +557,7 @@ const { show } = useToast()
  * 标题又写着「两平台共用」，就不会去找开关。
  */
 const tabs = computed(() => [
-  { key: 'provider', label: 'AI 服务商 · 两个平台共用' },
+  { key: 'provider', label: '模型配置 · 两个平台共用' },
   { key: 'ai', label: 'AI 判断与回复 · 两个平台共用' },
   { key: 'platform', label: `平台配置 · ${platformLabel.value || '…'}` },
   { key: 'reply', label: '自动回复规则 · 两个平台共用' }
@@ -904,7 +907,7 @@ async function saveProvider() {
 }
 
 async function deleteProvider(p: any) {
-  if (!confirm(`删除「${p.name}」？`)) return
+  if (!confirm(`删除「${p.model}」？同一服务商下的其他模型不受影响`)) return
   try {
     await call(`/config/providers/${p.id}`, { method: 'DELETE' })
     show('已删除')

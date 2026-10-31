@@ -96,7 +96,7 @@ public class ConfigController {
     @PostMapping("/providers")
     public Map<String, Object> saveProvider(@RequestBody ProviderBody body) {
         if (body.name() == null || body.name().isBlank()) {
-            throw new IllegalArgumentException("服务商名称不能为空");
+            throw new IllegalArgumentException("服务商不能为空");
         }
         if (body.baseUrl() == null || body.baseUrl().isBlank()) {
             throw new IllegalArgumentException("接口地址不能为空");
@@ -106,7 +106,7 @@ public class ConfigController {
         }
         ProviderEntity entity = body.id() == null ? new ProviderEntity() : configStore.provider(body.id());
         if (entity == null) {
-            throw new IllegalArgumentException("这个 AI 服务商不存在");
+            throw new IllegalArgumentException("这条模型配置不存在");
         }
         entity.setName(body.name().trim());
         entity.setBaseUrl(body.baseUrl().trim());
@@ -117,7 +117,7 @@ public class ConfigController {
         if (body.apiKey() != null && !body.apiKey().isBlank()) {
             entity.setApiKeyCipher(cipher.encrypt(body.apiKey().trim()));
         } else if (entity.getId() == null) {
-            throw new IllegalArgumentException("添加 AI 服务商时必须填写密钥");
+            throw new IllegalArgumentException("添加模型时必须填写密钥");
         }
         configStore.saveProvider(entity);
         return Map.of("id", entity.getId(), "ok", true);
