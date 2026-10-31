@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>概览</h1>
-        <p>今日进度与各平台运行状态，一张卡一个平台</p>
+        <p>今天的投递进度。每个平台一张卡片</p>
       </div>
       <button class="btn" :disabled="busy" @click="refresh">刷新</button>
     </div>
@@ -16,20 +16,20 @@
     <div class="gbar" :class="{ bad: global && global.driverAvailable === false }">
       <div class="gbar-main">
         <span class="gbar-item">
-          patchright
+          浏览器驱动
           <b v-if="global">{{ global.driverAvailable ? '就绪' : '不可用' }}</b>
         </span>
         <span class="gbar-item">浏览器 <b>{{ global?.browserLabel || global?.browserChannel || '—' }}</b></span>
-        <span class="gbar-item">字典 <b>{{ global?.dictionaryTotal ?? 0 }}</b> 条</span>
+        <span class="gbar-item">筛选项 <b>{{ global?.dictionaryTotal ?? 0 }}</b> 条</span>
         <span class="gbar-item mono">{{ global?.serverTime || '—' }}</span>
       </div>
       <div v-if="global && !global.driverAvailable" class="gbar-msg">
-        两个平台都无法启动：{{ global.driverMessage || 'driver 不可用' }}
+        两个平台都无法启动：{{ global.driverMessage || '浏览器驱动不可用' }}
       </div>
     </div>
 
     <div v-if="!cards.length" class="card">
-      <div class="empty">正在读取平台清单…</div>
+      <div class="empty">正在读取平台列表…</div>
     </div>
 
     <!-- 卡片顺序固定按平台清单，不按状态排序：会跳位置的话，人无法建立空间记忆 -->
@@ -54,7 +54,7 @@
                 #{{ c.run.id }} · {{ modeText(c.run.mode) }} · {{ shortTime(c.run.startedAt) }}
               </template>
               <!-- 0 是真实发生的 0，不拿 — 盖掉；— 只留给「这一轮不可能产生该数字」 -->
-              <template v-else>今天还没有跑过</template>
+              <template v-else>今天还没有启动过</template>
             </div>
           </div>
           <div class="pcard-tags">
@@ -67,10 +67,10 @@
           <!-- 与下一行分开：一个是我们主动外呼，一个是对方先开口后我们才发简历。
                合成一个数字会让人以为今天被动的那些也消耗了配额（ADR-0004） -->
           <div class="pstat">
-            <div class="pstat-label">今日主动投递</div>
+            <div class="pstat-label">今天主动联系</div>
             <!-- 未启用扫描时这个数字不可能产生：显示 0 与「投了但全失败」在视觉上是同一件事，
                  用 — 并在 title 里说明原因，读者不必回配置页确认 -->
-            <div class="pstat-value" :title="scanOff(c) ? '该平台未启用扫描，今日不会产生主动投递' : ''">
+            <div class="pstat-value" :title="scanOff(c) ? '这个平台没有开启「搜索岗位」，今天不会主动联系任何人' : ''">
               <template v-if="scanOff(c)">—</template>
               <template v-else>
                 {{ c.delivered ?? 0 }}<span class="pstat-den"> / {{ c.quota ?? '—' }}</span>
@@ -78,13 +78,13 @@
             </div>
           </div>
           <div class="pstat">
-            <div class="pstat-label">值守发简历</div>
+            <div class="pstat-label">应要求发的简历</div>
             <div class="pstat-value">{{ c.resumeOnRequest ?? 0 }}</div>
           </div>
           <div class="pstat">
-            <div class="pstat-label">今日评估</div>
+            <div class="pstat-label">今天查看的岗位</div>
             <!-- 与主动投递同一判据：评估也只在扫描时发生 -->
-            <div class="pstat-value" :title="scanOff(c) ? '该平台未启用扫描，今日不会产生投递判定' : ''">
+            <div class="pstat-value" :title="scanOff(c) ? '这个平台没有开启「搜索岗位」，今天不会查看岗位' : ''">
               <template v-if="scanOff(c)">—</template>
               <template v-else>
                 {{ c.evaluated ?? 0 }}<span class="pstat-den"> / {{ c.evalLimit ?? '—' }}</span>
@@ -118,7 +118,7 @@
             </span>
           </div>
           <div class="prow">
-            <span class="prow-key">组合</span>
+            <span class="prow-key">搜索组合</span>
             <span class="prow-val num">{{ comboText(c) }}</span>
           </div>
         </div>
@@ -199,9 +199,9 @@ function scopeBadge(c: any) {
   if (c.enabled === false) return { label: '', tone: '' }
   const scan = c.scanEnabled !== false
   const watch = c.watchEnabled !== false
-  if (!scan && !watch) return { label: '扫描与值守都关', tone: 'danger' }
-  if (!scan) return { label: '仅值守', tone: 'warn' }
-  if (!watch) return { label: '仅扫描', tone: 'warn' }
+  if (!scan && !watch) return { label: '搜索和回复都关', tone: 'danger' }
+  if (!scan) return { label: '只自动回复', tone: 'warn' }
+  if (!watch) return { label: '只搜索岗位', tone: 'warn' }
   return { label: '', tone: '' }
 }
 
@@ -215,8 +215,8 @@ function actionOf(c: any): { kind: string; text: string; cls: string; disabled: 
   const view = viewOf(c)
   const driverDown = global.value && global.value.driverAvailable === false
   const disabledReason = driverDown
-    ? `patchright driver 不可用：${global.value?.driverMessage || ''}`
-    : c.enabled === false ? '该平台已停用' : undefined
+    ? `浏览器驱动不可用：${global.value?.driverMessage || ''}`
+    : c.enabled === false ? '这个平台已停用' : undefined
 
   if (!view.active) {
     return { kind: 'start', text: '启动', cls: 'primary', disabled: !!disabledReason, reason: disabledReason }
@@ -245,7 +245,7 @@ async function runAction(c: any) {
       show(`${c.label} 已继续`)
     } else {
       const hint = c.run?.status === 'WAITING_DUTY' ? '取消等待' : '停止'
-      if (!confirm(`${hint} ${c.label}？运行日志会保留，这一轮值守期将结束。`)) return
+      if (!confirm(`${hint} ${c.label}？运行记录会保留，这一轮将结束。`)) return
       await call(`/runs/${c.run.id}/cancel`, { method: 'POST' })
       show(`已发送${hint}指令：${c.label}`)
     }

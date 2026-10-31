@@ -87,17 +87,17 @@ public class ConfigController {
     @PostMapping("/providers")
     public Map<String, Object> saveProvider(@RequestBody ProviderBody body) {
         if (body.name() == null || body.name().isBlank()) {
-            throw new IllegalArgumentException("名称不能为空");
+            throw new IllegalArgumentException("服务商名称不能为空");
         }
         if (body.baseUrl() == null || body.baseUrl().isBlank()) {
-            throw new IllegalArgumentException("Base URL 不能为空");
+            throw new IllegalArgumentException("接口地址不能为空");
         }
         if (body.model() == null || body.model().isBlank()) {
-            throw new IllegalArgumentException("模型名不能为空");
+            throw new IllegalArgumentException("模型名称不能为空");
         }
         ProviderEntity entity = body.id() == null ? new ProviderEntity() : configStore.provider(body.id());
         if (entity == null) {
-            throw new IllegalArgumentException("提供商不存在");
+            throw new IllegalArgumentException("这个 AI 服务商不存在");
         }
         entity.setName(body.name().trim());
         entity.setBaseUrl(body.baseUrl().trim());
@@ -108,7 +108,7 @@ public class ConfigController {
         if (body.apiKey() != null && !body.apiKey().isBlank()) {
             entity.setApiKeyCipher(cipher.encrypt(body.apiKey().trim()));
         } else if (entity.getId() == null) {
-            throw new IllegalArgumentException("新增提供商必须填写 API Key");
+            throw new IllegalArgumentException("添加 AI 服务商时必须填写密钥");
         }
         configStore.saveProvider(entity);
         return Map.of("id", entity.getId(), "ok", true);
@@ -289,7 +289,7 @@ public class ConfigController {
                 if (!status.isTerminal()) {
                     throw new IllegalArgumentException("「"
                             + com.chatjob.platform.PlatformInfo.of(entity.getPlatform()).label()
-                            + "」还有未结束的任务（#" + run.getId() + "，" + run.getStatus()
+                            + "」还有一个没结束的任务（编号 " + run.getId()
                             + "）：请先停止它，再停用这个平台");
                 }
             });

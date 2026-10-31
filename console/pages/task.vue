@@ -3,7 +3,10 @@
     <div class="page-head">
       <div>
         <h1>任务</h1>
-        <p>一次启动 = 一段值守期：扫描找岗位、值守回消息；扫描停了值守照常，除非值守开关也关着</p>
+        <p>
+          点一次启动，就会按设定搜索岗位、发招呼语，同时盯着 HR 的消息自动回复。
+          搜索停下来之后，消息照样会回
+        </p>
         <!-- 时段只决定「什么时候开始跑」，不再是启动门禁：窗口内说到点时刻，等待态说还要等多久 -->
         <p v-if="dutyLine" class="hint" style="margin-bottom: 0">{{ dutyLine }}</p>
       </div>
@@ -40,30 +43,31 @@
          未启用扫描的平台从来没有扫过，标题与页脚都不能沿用「扫描已结束」那套说法。 -->
     <div v-if="run?.status === 'STANDBY'" class="notice">
       <div class="notice-title">
-        {{ scanOn ? '值守待命：扫描已结束，未读消息照常回复' : '值守待命：未启用扫描，只处理未读消息' }}
+        {{ scanOn ? '正在盯着消息：搜索已结束，未读消息照常回复' : '正在盯着消息：这个平台没有开启「搜索岗位」，只处理未读消息' }}
       </div>
       <p class="notice-body">{{ run.message }}</p>
       <p class="notice-foot">
         <template v-if="scanOn">
-          配额或评估上限调高、或跨过零点进入新的一天，会自动恢复扫描 —— 不需要停止重来。
+          把「每天最多主动联系多少个岗位」或「每天最多查看多少个岗位」调高，或者过了零点进入新的一天，
+          就会自动继续搜索，不需要停止再重新启动。
         </template>
         <template v-else>
-          这一轮不会恢复扫描：该平台的扫描开关是关闭的，没有可恢复的扫描。
+          这一轮不会再去搜索岗位，因为这个平台的「搜索岗位」开关是关着的。
         </template>
-        要真正结束，点「停止」。
+        如果想彻底结束这一轮，点「停止」。
       </p>
     </div>
 
     <!-- 窗口外提示：启动按钮照常可点，这一轮不会立刻执行，而是排到窗口打开时自动开始 -->
     <div v-if="dutyWarning" class="notice warn">
-      <div class="notice-title">现在不在值守时段（{{ duty.window }}）</div>
+      <div class="notice-title">现在不在自动回复时段（{{ duty.window }}）</div>
       <p class="notice-body">
-        点启动不会立刻执行：这条任务会挂在队列里等窗口打开，{{ duty.hint }}。
-        挂起期间不打开浏览器、不发消息、也不动未读红点，期间可以随时「取消等待」。
+        点启动不会立刻开始：任务会先排队，等到时间段开始再执行，{{ duty.hint }}。
+        排队期间不会打开浏览器、不发消息、也不会把未读消息点成已读，随时可以「取消等待」。
         <template v-if="duty.opensInMinutes > 0">预计还要等 {{ waitText(duty.opensInMinutes) }}。</template>
       </p>
       <p class="notice-foot">
-        想在窗口外立刻验证流程，切到<b>演练模式</b>：它不受时段限制，代价是不发任何消息。
+        想在时间段外马上试一遍流程，可以切到<b>演练模式</b>：它不受时间段限制，但不会发出任何消息。
       </p>
     </div>
 
@@ -72,30 +76,34 @@
     <div v-if="dryRunVisible" class="notice">
       <div class="notice-title">演练模式：不会发出任何消息</div>
       <p class="notice-body">
-        招呼语和值守回复都不会发出去，对方收不到任何东西。但演练验证的是流程本身，不是「只看不动」。
+        招呼语和自动回复都不会发出去，对方什么也收不到。演练会真的走一遍完整流程，不是只看不操作。
       </p>
       <ul class="notice-list">
-        <li>会真的浏览平台：打开搜索、滚动卡片、抓取岗位详情，与正常模式一样。</li>
-        <li>会真的调用 AI 判定并写招呼语，消耗 token，并计入当天的评估上限。</li>
-        <li>值守会真的点开会话读消息。<b>点开会话即清红点，平台无法标回未读</b> —— 这些消息之后不会再出现在未读列表里，正常运行也不会回复它们。</li>
-        <li>不受值守时段限制，任何时间都能跑；当天的主动投递配额与评估上限照常生效。</li>
+        <li>会真的打开平台的搜索页、翻动岗位列表、读取岗位详情，和正常运行时一样。</li>
+        <li>会真的调用 AI 判断岗位并写招呼语，消耗 AI 用量，也计入当天查看岗位的数量。</li>
+        <li>
+          自动回复会真的打开对话读消息。打开对话就会清掉未读标记，平台没有「标回未读」的功能，
+          所以这些消息之后不会再出现在未读列表里，正常运行时也不会再回复它们。
+        </li>
+        <li>不受自动回复时段限制，任何时间都能跑；当天的投递名额和查看上限照常生效。</li>
       </ul>
       <p class="notice-foot">
-        演练的结论只落在运行日志里（「本会投递」「本会回复」），控制台计数不会因此增加，也不会显示成已发送。
+        演练的结果只写进运行日志（会标明「本会投递」「本会回复」）。页面上的数字不会增加，
+        也不会显示成已发送。
       </p>
     </div>
 
     <div class="card">
       <div class="row wrap" style="justify-content: space-between; gap: 16px">
         <div>
-          <h2>当前运行</h2>
+          <h2>这一轮的进度</h2>
           <p class="hint" style="margin-bottom: 0">
             <template v-if="run">
               #{{ run.id }} ·
               <span class="tag" :class="run.mode === 'DRY_RUN' ? 'warn' : ''">{{ modeText(run.mode) }}</span>
               · {{ (run.startedAt || '未开始').replace('T', ' ') }}
             </template>
-            <template v-else>{{ platformLabel }} 还没有任务记录</template>
+            <template v-else>{{ platformLabel }} 还没有启动过</template>
           </p>
         </div>
         <div class="row" style="gap: 26px">
@@ -104,11 +112,11 @@
             <span class="tag" :class="runView.tone">{{ runView.label }}</span>
           </div>
           <div>
-            <div class="hint-inline">断点</div>
-            <div class="num">组合 {{ (run?.combinationIndex ?? 0) + 1 }} / 卡片 {{ run?.lastCardIndex ?? 0 }}</div>
+            <div class="hint-inline">进度</div>
+            <div class="num">搜索组合 {{ (run?.combinationIndex ?? 0) + 1 }} / 岗位 {{ run?.lastCardIndex ?? 0 }}</div>
           </div>
           <div>
-            <div class="hint-inline">主动投递 / 评估</div>
+            <div class="hint-inline">主动联系 / 已查看</div>
             <!-- 演练下投递恒为 0：显示 0 会被读成「投了但全失败」，用 — 表示「没有发生」 -->
             <div class="num">{{ runIsDryRun ? '—' : (run?.deliveredCount ?? 0) }} / {{ run?.evaluatedCount ?? 0 }}</div>
           </div>
@@ -126,7 +134,7 @@
         class="row wrap"
         style="margin-top: 14px; gap: 10px; align-items: baseline"
       >
-        <span class="hint-inline">当前动作</span>
+        <span class="hint-inline">正在做什么</span>
         <span>{{ activity.action || '—' }}</span>
         <span v-if="activity.text" class="tag" :class="activity.tone">{{ activity.text }}</span>
       </div>
@@ -134,17 +142,19 @@
 
     <div class="grid cols-2">
       <div class="card">
-        <h2>组合队列</h2>
-        <p class="hint">城市 × 关键词，串行执行；单个组合有轮数与时长双上限</p>
-        <div v-if="!combinations.length" class="empty">暂无组合</div>
+        <h2>搜索组合</h2>
+        <p class="hint">
+          每个组合就是一组「城市 + 关键词」，逐个执行；每个组合都有翻页次数和时长上限
+        </p>
+        <div v-if="!combinations.length" class="empty">还没有搜索组合</div>
         <table v-else>
           <thead>
             <tr>
               <th style="width: 36px">#</th>
               <th>城市 / 关键词</th>
               <th style="width: 80px">状态</th>
-              <th style="width: 60px">卡片</th>
-              <th style="width: 84px">主动投递</th>
+              <th style="width: 60px">岗位</th>
+              <th style="width: 84px">主动联系</th>
             </tr>
           </thead>
           <tbody>
@@ -161,7 +171,7 @@
 
       <div class="card">
         <h2>实时事件</h2>
-        <p class="hint">只推状态与计数，日志走下方独立流</p>
+        <p class="hint">这里只显示状态和数量变化，详细记录在下面的运行日志里</p>
         <div v-if="!events.length" class="empty">等待事件…</div>
         <div v-else class="log" style="max-height: 320px">
           <div v-for="(e, i) in reversed" :key="i">
@@ -174,9 +184,9 @@
     <div class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 4px">
         <h2>运行日志</h2>
-        <button class="btn sm" @click="clearLogs">清屏</button>
+        <button class="btn sm" @click="clearLogs">清空</button>
       </div>
-      <p class="hint">落库的 run_log，保留 14 天；断线后从这里补</p>
+      <p class="hint">运行记录保存在本机，保留 14 天；连接中断后可以在这里补齐</p>
       <div class="log" style="max-height: 340px">
         <div v-if="!logs.length" class="empty">暂无日志</div>
         <div v-for="l in logs" :key="l.id">
@@ -242,12 +252,12 @@ const startHint = computed(() => {
   if (active.value) return ''
   const desc = current.value
   if (!desc) return ''
-  if (desc.enabled === false) return '该平台已停用，启动会被拒绝：先在配置页启用它'
+  if (desc.enabled === false) return '这个平台已停用，无法启动：请先到配置页启用它'
   const scan = desc.scanEnabled !== false
   const watch = desc.watchEnabled !== false
-  if (!scan && !watch) return '该平台的扫描与值守都关着：启动后没有可做的事'
-  if (!scan) return '该平台未启用扫描：启动后不加载岗位，直接进入值守'
-  if (!watch) return '该平台未启用值守：扫描照常，扫完组合即结束'
+  if (!scan && !watch) return '这个平台的「搜索岗位」和「自动回复」都关着，启动后没有可以做的事'
+  if (!scan) return '这个平台没有开启「搜索岗位」：启动后不搜岗位，直接开始回复消息'
+  if (!watch) return '这个平台没有开启「自动回复」：照常搜索和投递，搜索跑完就结束'
   return ''
 })
 // 窗口外 + 正常模式 + 还没跑：点启动不会立刻执行，而是排到窗口打开（见模板里的 warn 块）。
@@ -277,13 +287,13 @@ const dutyLine = computed(() => {
   if (run.value?.status === 'WAITING_DUTY') {
     const minutes = duty.value?.opensInMinutes
     return minutes > 0
-      ? `已挂起，${waitText(minutes)}后自动开始（值守时段 ${duty.value.window}）`
-      : '已挂起，等值守时段开始后自动执行'
+      ? `任务已排队，${waitText(minutes)}后自动开始（自动回复时段 ${duty.value.window}）`
+      : '任务已排队，等自动回复时段开始后执行'
   }
   if (duty.value?.open && mode.value === 'NORMAL' && !dryRunVisible.value) {
     return duty.value.minutesLeft >= 0
-      ? `值守时段 ${duty.value.window}，还能跑约 ${waitText(duty.value.minutesLeft)}`
-      : `值守时段 ${duty.value.window}，${duty.value.hint}`
+      ? `自动回复时段 ${duty.value.window}，还能跑约 ${waitText(duty.value.minutesLeft)}`
+      : `自动回复时段 ${duty.value.window}，${duty.value.hint}`
   }
   return ''
 })
@@ -326,62 +336,66 @@ function time(at: number) {
   return new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 事件里的 reason 是枚举，界面上要变成一句人话
+// 事件里的 reason 是内部代号，界面上要变成一句能读懂的话
 function stopReasonText(reason: string) {
   return ({
-    QUOTA: '今日主动投递配额已用完',
-    EVAL_LIMIT: '今日评估已达上限',
-    COMBOS_EXHAUSTED: '搜索组合已扫完',
+    QUOTA: '今天主动联系的名额已经用完',
+    EVAL_LIMIT: '今天查看岗位的数量已达上限',
+    COMBOS_EXHAUSTED: '所有搜索组合都跑完了',
     // 未启用扫描的平台一启动就是待命，这个原因下「扫描结束」不成立（spec 0005）
-    SCAN_DISABLED: '该平台未启用扫描'
+    SCAN_DISABLED: '这个平台没有开启「搜索岗位」'
   } as any)[reason] || reason
 }
 
 function rescanReasonText(reason: string) {
-  return ({ QUOTA_RAISED: '配额已调高', EVAL_LIMIT_RAISED: '评估上限已调高', NEW_DAY: '进入新的一天，组合队列已复位' } as any)[reason] || reason
+  return ({
+    QUOTA_RAISED: '主动联系名额已调高',
+    EVAL_LIMIT_RAISED: '查看岗位上限定已调高',
+    NEW_DAY: '进入新的一天，搜索组合从头开始'
+  } as any)[reason] || reason
 }
 
 function describe(e: { type: string; data: any }) {
   const d = e.data || {}
   switch (e.type) {
     case 'run.started':
-      return `任务启动（${modeText(d.mode)}）`
+      return `任务已启动（${modeText(d.mode)}）`
     case 'run.waiting':
       // 两种挂起来源文案必须分开：启动时就不在窗口内 vs 跑着跑着到点了。
       // 混成一句「不在值守时段」，到点挂起会被读成任务被中断
       return d.reason === 'DUTY_END'
-        ? `值守时段已结束（${d.window}，${d.at}），已挂起；值守期未结束`
-        : `不在值守时段（${d.window}，${d.at}），已挂起等待`
+        ? `自动回复时段已结束（${d.window}，${d.at}），任务先暂停；这一轮还没有结束`
+        : `现在不在自动回复时段（${d.window}，${d.at}），任务已排队等待`
     case 'run.standby':
       // 未启用扫描的平台从未扫过，「扫描结束（…）」这句与事实不符：它只有在扫描真的
       // 中止时才成立（spec 0005 §3.5 的文案要求）
       return d.reason === 'SCAN_DISABLED'
-        ? `未启用扫描，进入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
-        : `扫描结束（${stopReasonText(d.reason)}），转入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
+        ? `没有开启「搜索岗位」，直接开始处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
+        : `搜索结束（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
     case 'run.rescan':
-      return `恢复扫描：${rescanReasonText(d.reason)}`
+      return `继续搜索：${rescanReasonText(d.reason)}`
     case 'run.awakened':
-      return `值守时段已到（${d.at}），开始执行挂起的任务`
+      return `自动回复时段已到（${d.at}），开始执行排队的任务`
     case 'combination.started':
-      return `开始组合 #${d.seq + 1} ${d.city || '不限'} / ${d.keyword || '不限'}`
+      return `开始第 ${d.seq + 1} 个搜索组合：${d.city || '不限'} / ${d.keyword || '不限'}`
     case 'job.evaluated':
-      return `${d.decision === 'PASS' ? '通过' : d.decision === 'AI_REJECT' ? '不投' : '判定失败'}：${d.jobName} @ ${d.company}${d.reason ? ' — ' + d.reason : ''}`
+      return `${d.decision === 'PASS' ? '决定投递' : d.decision === 'AI_REJECT' ? '决定不投' : '判断失败'}：${d.jobName} @ ${d.company}${d.reason ? ' — ' + d.reason : ''}`
     case 'delivery.updated':
-      return `投递 ${d.status}：${d.jobName}${d.failureReason ? ' — ' + d.failureReason : ''}`
+      return `投递结果 ${d.status}：${d.jobName}${d.failureReason ? ' — ' + d.failureReason : ''}`
     case 'unread.detected':
       // 打开 AI 模式后，一次扫描可能既没有回复也没有未命中，但有待重试/已失败的任务 ——
       // 那才是需要人看见的部分，不能因为前两个数是 0 就显示成「什么也没发生」
       if (d.dryRunWouldReply) {
         // 演练下 replied 恒为 0。显示成「回复 N」等于告诉操作者消息已经发出去了，
         // 而这正是这次要消灭的错觉。
-        return `值守（演练）：${d.threads} 个未读，本会回复 ${d.dryRunWouldReply}，未命中 ${d.unmatched}`
+        return `检查消息（演练）：${d.threads} 个未读，本来会回复 ${d.dryRunWouldReply} 个，没匹配到规则 ${d.unmatched} 个`
       }
-      return `值守：${d.threads} 个未读，回复 ${d.replied}，未命中 ${d.unmatched}`
-        + (d.retried ? `，重试 ${d.retried}（失败 ${d.failed}）` : '')
+      return `检查消息：${d.threads} 个未读，已回复 ${d.replied} 个，没匹配到规则 ${d.unmatched} 个`
+        + (d.retried ? `，重试 ${d.retried} 个（失败 ${d.failed} 个）` : '')
     case 'circuit.opened':
-      return `熔断：${d.kind} — ${d.message}`
+      return `已自动停止：${d.kind} — ${d.message}`
     case 'run.finished':
-      return `任务结束：${d.status}（主动投递 ${d.delivered}，评估 ${d.evaluated}）`
+      return `任务结束：${d.status}（主动联系 ${d.delivered}，已查看 ${d.evaluated}）`
     default:
       return e.type
   }
@@ -451,7 +465,7 @@ async function start() {
     })
     // 窗口外启动不再报错，而是挂起：toast 必须说「排到几点」，否则人会以为任务已经跑起来了
     if (duty.value && !duty.value.open && mode.value === 'NORMAL') {
-      show(`已挂起，${duty.value.hint}`)
+      show(`任务已排队，${duty.value.hint}`)
     } else {
       show('任务已启动')
     }

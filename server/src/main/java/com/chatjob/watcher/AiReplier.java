@@ -236,7 +236,7 @@ public class AiReplier {
         try {
             node = json.readTree(content);
         } catch (Exception e) {
-            return Reply.fail("AI 返回不是合法 JSON: " + ChatClient.truncate(content));
+            return Reply.fail("AI 返回的内容无法识别：" + ChatClient.truncate(content));
         }
         boolean skip = node.path("skip").asBoolean(false);
         String note = clip(node.path("reason").asText(""), MAX_NOTE_CHARS);
@@ -246,7 +246,7 @@ public class AiReplier {
         String text = node.path("reply").asText("").strip();
         if (text.isEmpty()) {
             // 既没 skip 又没内容：这是模型没遵守契约，算技术失败而不是「不想回」
-            return Reply.fail("模型既没有给 reply 也没有 skip");
+            return Reply.fail("AI 既没有给出回复，也没有说明跳过");
         }
         return Reply.ok(text, note);
     }

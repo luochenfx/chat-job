@@ -36,8 +36,8 @@ onMounted(() => {
 
 const subtitle = computed(() => {
   const names = platforms.value.map((p) => p.label)
-  if (!names.length) return '投递自动化 · 本机'
-  if (names.length === 1) return `${names[0]} 投递自动化 · 本机`
+  if (!names.length) return '自动投递简历'
+  if (names.length === 1) return `${names[0]} 自动投递`
   return names.join(' · ')
 })
 

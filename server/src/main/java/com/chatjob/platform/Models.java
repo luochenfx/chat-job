@@ -95,7 +95,7 @@ public final class Models {
 
     public record LoginState(boolean loggedIn, String reason) {
         public static LoginState ok() {
-            return new LoginState(true, "登录态 cookie 存在");
+            return new LoginState(true, "已找到登录信息");
         }
 
         public static LoginState lost(String reason) {

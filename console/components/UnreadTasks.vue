@@ -2,10 +2,10 @@
   <div class="card">
     <div class="row" style="justify-content: space-between; align-items: flex-start">
       <div>
-        <h2>未读任务与告警</h2>
+        <h2>未读消息的处理情况</h2>
         <p class="hint">
-          点开会话就清红点，平台没有「标回未读」的能力。所以每条未读先在任务表落一行，
-          处理失败按 1 / 5 / 15 分钟退避重试，3 次后放弃
+          打开对话就会清掉未读标记，平台没有「标回未读」的功能。所以每一条未读消息都会先记录下来；
+          处理失败后会在 1 分钟、5 分钟、15 分钟后再试，三次都失败就不再自动处理
         </p>
       </div>
       <button class="btn sm" :disabled="busy" @click="load">刷新</button>
@@ -20,19 +20,19 @@
 
     <div class="grid cols-3" style="margin-top: 14px">
       <div class="metric">
-        <div class="metric-label">待处理 · 合计</div>
+        <div class="metric-label">等待处理</div>
         <div class="metric-value">{{ counts.pending }}</div>
-        <div class="metric-hint">已落任务，等本轮或下一轮处理</div>
+        <div class="metric-hint">已经记下来了，等这一轮或下一轮处理</div>
       </div>
       <div class="metric">
-        <div class="metric-label">重试中 · 合计</div>
+        <div class="metric-label">正在重试</div>
         <div class="metric-value">{{ counts.retrying }}</div>
-        <div class="metric-hint">处理失败，已排好下次重试时间</div>
+        <div class="metric-hint">这次没处理成功，已经安排了下一次</div>
       </div>
       <div class="metric">
-        <div class="metric-label">已放弃 · 合计</div>
+        <div class="metric-label">已放弃</div>
         <div class="metric-value">{{ counts.gaveUp }}</div>
-        <div class="metric-hint">重试 3 次仍失败，不会再自动处理</div>
+        <div class="metric-hint">试了三次都没成功，不会再自动处理</div>
       </div>
     </div>
 
@@ -41,7 +41,7 @@
     <div v-if="platformRows.length" class="plat-rows">
       <div v-for="row in platformRows" :key="row.platform" class="plat-row">
         <span class="plat-name">{{ row.label }}</span>
-        <span class="plat-cell">待处理 <b>{{ row.pending }}</b></span>
+        <span class="plat-cell">等待处理 <b>{{ row.pending }}</b></span>
         <span class="plat-cell">重试 <b>{{ row.retrying }}</b></span>
         <span class="plat-cell">已放弃 <b>{{ row.gaveUp }}</b></span>
       </div>
@@ -54,15 +54,15 @@
     </button>
 
     <div v-if="showDetail">
-      <div v-if="!tasks.length" class="empty">近 7 天没有任务记录</div>
+      <div v-if="!tasks.length" class="empty">最近 7 天没有记录</div>
       <table v-else>
         <thead>
           <tr>
             <th style="width: 96px">平台</th>
-            <th>会话</th>
+            <th>对话</th>
             <th style="width: 90px">状态</th>
             <th style="width: 110px">原因</th>
-            <th style="width: 90px">尝试</th>
+            <th style="width: 90px">已试次数</th>
             <th style="width: 130px">更新时间</th>
             <th style="width: 60px"></th>
           </tr>
@@ -84,17 +84,17 @@
               <td colspan="7">
                 <div class="stack">
                   <div v-if="t.lastReasonCode" class="hint-inline">
-                    原因码：<code>{{ t.lastReasonCode }}</code>
+                    原因编号：<code>{{ t.lastReasonCode }}</code>
                   </div>
-                  <div v-if="t.lastError" class="hint-inline">失败信息：{{ t.lastError }}</div>
+                  <div v-if="t.lastError" class="hint-inline">具体错误：{{ t.lastError }}</div>
                   <div v-if="t.nextRetryAt" class="hint-inline">
-                    下次重试：{{ fmt(t.nextRetryAt) }}
+                    下次重试时间：{{ fmt(t.nextRetryAt) }}
                   </div>
                   <div v-if="t.status === 'GAVE_UP'" class="row" style="gap: 10px">
                     <button class="btn sm danger" :disabled="busy" @click="retry(t)">再试一次</button>
-                    <span class="hint-inline">会重置为 3 次机会，下一轮值守执行</span>
+                    <span class="hint-inline">会重新给 3 次机会，在下一轮自动回复时执行</span>
                   </div>
-                  <div v-else class="hint-inline">只有「已放弃」的任务可以手动重试</div>
+                  <div v-else class="hint-inline">只有「已放弃」的才需要手动重试</div>
                 </div>
               </td>
             </tr>
@@ -144,16 +144,16 @@ const platformRows = computed(() => {
 const alertText = computed(() => {
   const s = stats.value
   if (!s) return ''
-  const joined = `近 7 天 AI 参与 ${s.total} 次，主动不回 ${s.skipped} 次`
+  const joined = `最近 7 天 AI 判断了 ${s.total} 次，其中决定不回 ${s.skipped} 次`
   switch (s.state) {
     case 'DISABLED':
-      return `告警已关闭（阈值 0）。${joined}`
+      return `提醒已关闭（阈值填了 0）。${joined}`
     case 'INSUFFICIENT':
-      return `近 7 天 AI 参与 ${s.total} 次，样本不足（需 ${s.minSample} 次），未判定`
+      return `最近 7 天 AI 判断了 ${s.total} 次，样本不足（至少 ${s.minSample} 次才能比较），暂不判断`
     case 'ALERT':
-      return `${joined}（${s.pct}%），超过阈值 ${s.thresholdPct}%`
+      return `${joined}（${s.pct}%），超过了设定的 ${s.thresholdPct}%`
     default:
-      return `${joined}（${s.pct}%），阈值 ${s.thresholdPct}%`
+      return `${joined}（${s.pct}%），设定阈值 ${s.thresholdPct}%`
   }
 })
 
@@ -217,11 +217,11 @@ async function load() {
 }
 
 async function retry(t: any) {
-  if (!confirm(`将重新给「${t.conversation}」3 次机会，可能向对方发出消息。继续？`)) return
+  if (!confirm(`将重新给「${t.conversation}」3 次机会，可能会真的给对方发出消息。继续？`)) return
   busy.value = true
   try {
     await call(`/watcher/unread-tasks/${t.id}/retry`, { method: 'POST' })
-    show('已重置为待处理，下一轮值守执行')
+    show('已重新排队，在下一轮自动回复时执行')
     await load()
   } catch (e: any) {
     show(e.message, true)

@@ -120,14 +120,14 @@ public class ZhaopinAdapter implements PlatformAdapter {
             try {
                 navigateWithRetry(page, ZhaopinEndpoints.IM_URL, DEFAULT_COMMAND_TIMEOUT_MS, 0);
             } catch (Exception e) {
-                return LoginState.lost("打不开消息页: " + e.getMessage());
+                return LoginState.lost("打不开消息页：" + e.getMessage());
             }
             String url = safeUrl(page);
             if (url.contains(ZhaopinSelectors.LOGIN_HOST_MARK) || url.contains("/login")) {
-                return LoginState.lost("消息页被重定向到登录页: " + url);
+                return LoginState.lost("消息页跳到了登录页：" + url);
             }
             if (!url.contains("i.zhaopin.com")) {
-                return LoginState.lost("消息页停在意外地址: " + url);
+                return LoginState.lost("消息页停在了意外的地址：" + url);
             }
             return LoginState.ok();
         });

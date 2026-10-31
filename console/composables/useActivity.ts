@@ -102,32 +102,32 @@ export function activityView(
 
   // 暂停与挂起本来就该安静，做陈旧判定只会误报
   if (status === 'PAUSED') {
-    return { action: lastAction, text: '已暂停：扫描与值守都停', tone: 'warn', stale: false }
+    return { action: lastAction, text: '已暂停：搜索和自动回复都停下', tone: 'warn', stale: false }
   }
   if (status === 'WAITING_DUTY') {
     return {
       action: lastAction,
-      text: '已挂起：值守期没有结束，窗口打开会自动继续',
+      text: '已挂起：这一轮还没有结束，到时间段会自动开始',
       tone: 'warn',
       stale: false
     }
   }
 
   const idle = idleSeconds(run?.lastActivityAt, nowMs)
-  if (idle == null) return { action: lastAction, text: '刚启动，还没有动作', tone: '', stale: false }
+  if (idle == null) return { action: lastAction, text: '刚启动，还没有开始操作', tone: '', stale: false }
 
   const stale = !!staleAfterSeconds && idle > staleAfterSeconds
   if (stale) {
     const minutes = Math.max(1, Math.floor(idle / 60))
     return {
       action: lastAction,
-      text: `⚠️ 无响应 ${minutes} 分钟（阈值 ${staleAfterSeconds} 秒）`,
+      text: `⚠️ 已经 ${minutes} 分钟没有反应（超过 ${staleAfterSeconds} 秒就算无响应）`,
       tone: 'danger',
       stale: true
     }
   }
 
-  const ago = `${idleText(idle)}前有动作`
+  const ago = `${idleText(idle)}前有过操作`
   return {
     action: lastAction,
     text: withLabel ? `${view.label} · ${ago}` : ago,

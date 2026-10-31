@@ -87,7 +87,7 @@ public class ReplyRuleController {
     @PostMapping("/rules")
     public Map<String, Object> saveRule(@RequestBody RuleBody body) {
         if (body.name() == null || body.name().isBlank()) {
-            throw new IllegalArgumentException("规则名不能为空");
+            throw new IllegalArgumentException("规则名称不能为空");
         }
         List<String> keywords = body.keywords() == null ? List.of()
                 : body.keywords().stream().filter(k -> k != null && !k.isBlank())
@@ -99,7 +99,7 @@ public class ReplyRuleController {
                 : body.texts().stream().filter(t -> t != null && !t.isBlank())
                 .map(String::trim).toList();
         if (texts.isEmpty()) {
-            throw new IllegalArgumentException("至少要有一条文案");
+            throw new IllegalArgumentException("至少要有一条回复内容");
         }
 
         ReplyRuleEntity rule = body.id() == null ? null : ruleMapper.selectById(body.id());

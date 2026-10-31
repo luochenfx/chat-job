@@ -79,8 +79,8 @@ class DutyWindowTest {
     @Test
     void 窗口外给出下一次真正执行的提示() {
         DutyWindow w = window("09:00", "22:00");
-        assertThat(w.nextOpenHint(LocalTime.of(3, 0))).isEqualTo("今天 09:00 之后才会真正执行");
-        assertThat(w.nextOpenHint(LocalTime.of(23, 0))).isEqualTo("明天 09:00 之后才会真正执行");
+        assertThat(w.nextOpenHint(LocalTime.of(3, 0))).isEqualTo("今天 09:00 之后才会开始执行");
+        assertThat(w.nextOpenHint(LocalTime.of(23, 0))).isEqualTo("明天 09:00 之后才会开始执行");
     }
 
     @Test

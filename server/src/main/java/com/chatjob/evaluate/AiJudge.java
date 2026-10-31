@@ -117,7 +117,7 @@ public class AiJudge {
             }
             return new Verdict(shouldApply, score, reason, greeting, rawContent, null);
         } catch (Exception e) {
-            return Verdict.fail("AI 返回不是合法 JSON: " + truncate(content));
+            return Verdict.fail("AI 返回的内容无法识别：" + truncate(content));
         }
     }
 

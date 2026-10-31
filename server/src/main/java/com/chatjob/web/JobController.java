@@ -140,7 +140,7 @@ public class JobController {
         }
         if (!BlacklistMatcher.isValidKeyword(body.keyword())) {
             throw new IllegalArgumentException("关键词至少需要 "
-                    + BlacklistMatcher.MIN_KEYWORD_LENGTH + " 个字符（太短会误杀）");
+                    + BlacklistMatcher.MIN_KEYWORD_LENGTH + " 个字（太短容易把不相干的岗位也排除掉）");
         }
         boolean added = configStore.addBlacklist(kind, body.keyword().trim(),
                 TextNormalizer.normalize(body.keyword()));

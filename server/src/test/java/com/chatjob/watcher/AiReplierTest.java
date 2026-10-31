@@ -79,7 +79,7 @@ class AiReplierTest {
 
         // 这是模型没遵守契约，不能当成「不想回」—— 后者是终态，前者要重试
         assertThat(r.isFailure()).isTrue();
-        assertThat(r.error()).contains("既没有给 reply 也没有 skip");
+        assertThat(r.error()).contains("既没有给出回复，也没有说明跳过");
     }
 
     @Test

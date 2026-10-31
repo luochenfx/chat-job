@@ -112,17 +112,17 @@ public record DutyWindow(LocalTime start, LocalTime end) {
                 : format(start) + "–次日 " + format(end);
     }
 
-    /** 不在窗口内时，告诉人下一次能真正执行是什么时候 */
+    /** 不在窗口内时，告诉人下一次能真正开始是什么时候 */
     public String nextOpenHint(LocalTime now) {
         if (alwaysOn()) {
             return "";
         }
         if (start.isBefore(end)) {
-            return now.isBefore(start) ? "今天 " + format(start) + " 之后才会真正执行"
-                    : "明天 " + format(start) + " 之后才会真正执行";
+            return now.isBefore(start) ? "今天 " + format(start) + " 之后才会开始执行"
+                    : "明天 " + format(start) + " 之后才会开始执行";
         }
-        return now.isBefore(start) ? "今天 " + format(start) + " 之后才会真正执行"
-                : "今晚 " + format(start) + " 之后才会真正执行";
+        return now.isBefore(start) ? "今天 " + format(start) + " 之后才会开始执行"
+                : "今晚 " + format(start) + " 之后才会开始执行";
     }
 
     /**

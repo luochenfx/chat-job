@@ -3,7 +3,10 @@
     <div class="page-head">
       <div>
         <h1>岗位</h1>
-        <p>扫到的岗位与每次主动投递尝试。失败不自动无限重试：同一岗位连发三次可能导致封号</p>
+        <p>
+          搜索到的岗位，以及每一次主动联系的结果。投递失败不会无限重试：
+          同一个岗位连续发三次可能被平台封号
+        </p>
       </div>
       <div class="row">
         <!-- 默认「全部平台」而不是当前平台：这页是审阅用途，用户想看的是「两平台一共扫到什么」。
@@ -16,7 +19,7 @@
           <option value="">全部状态</option>
           <option value="DELIVERED">已投递</option>
           <option value="FAILED">投递失败</option>
-          <option value="SKIPPED">未投 / 跳过</option>
+          <option value="SKIPPED">未联系</option>
           <option value="NONE">未处理</option>
         </select>
         <button class="btn" :disabled="busy" @click="refresh">刷新</button>
@@ -24,7 +27,7 @@
     </div>
 
     <div class="card">
-      <div v-if="!filtered.length" class="empty">暂无岗位记录</div>
+      <div v-if="!filtered.length" class="empty">还没有岗位记录</div>
       <table v-else>
         <thead>
           <tr>
@@ -35,7 +38,7 @@
             <!-- 时间列紧跟状态：两格都在回答「这岗位新鲜不新鲜」，
                  隔一列再放会让人把「扫到」读成「状态发生的时刻」 -->
             <th style="width: 120px">时间</th>
-            <th>判定 / 失败原因</th>
+            <th>判断结果 / 失败原因</th>
             <th style="width: 130px"></th>
           </tr>
         </thead>
@@ -58,12 +61,12 @@
             </td>
             <td class="when">
               <div :title="fullTime(job.lastSeenAt)">
-                <span class="when-label">扫描</span>{{ relTime(job.lastSeenAt, nowMs) }}
+                <span class="when-label">发现</span>{{ relTime(job.lastSeenAt, nowMs) }}
               </div>
               <!-- 没有处置就整行不显示：状态列已经写着「未处理」，
                    底下再来一个「处置 —」是重复；重投清掉投递记录后同样走这一支 -->
               <div v-if="job.disposedAt" class="hint-inline" :title="fullTime(job.disposedAt)">
-                <span class="when-label">处置</span>{{ relTime(job.disposedAt, nowMs) }}
+                <span class="when-label">处理</span>{{ relTime(job.disposedAt, nowMs) }}
               </div>
             </td>
             <td class="hint-inline">
@@ -77,11 +80,11 @@
                   class="btn sm"
                   @click="reset(job)"
                 >
-                  重投
+                  重新投递
                 </button>
                 <button
                   class="btn sm"
-                  title="黑名单两平台共用：拉黑后哪个平台都不再投递"
+                  title="黑名单两个平台共用：拉黑后哪个平台都不会再投它"
                   @click="blacklistCompany(job)"
                 >
                   拉黑
@@ -94,10 +97,11 @@
     </div>
 
     <div class="card">
-      <h2>黑名单 · 两平台共用</h2>
+      <h2>黑名单 · 两个平台共用</h2>
       <p class="hint">
-        命中即丢弃：不调 AI、不落投递记录。黑名单没有平台维度 —— 拉黑一家公司，两个平台都不再投它。
-        关键词至少 2 个字符，子串匹配，忽略全角与大小写
+        名单里的词一旦命中，这个岗位会直接跳过：不调用 AI，也不记录投递。
+        名单两个平台共用，拉黑一家公司，两个平台都不会再投它。
+        关键词至少 2 个字，只要岗位名或公司名里包含这个词就算命中，不分大小写
       </p>
       <div class="row" style="margin-bottom: 14px">
         <select v-model="newKind" style="width: 110px">
@@ -144,7 +148,7 @@ const filtered = computed(() => {
 function statusText(status?: string) {
   if (!status) return '未处理'
   return (
-    ({ DELIVERING: '投递中', DELIVERED: '已投递', FAILED: '失败', SKIPPED: '未投', MANUAL: '需人工' } as any)[status] ||
+    ({ DELIVERING: '投递中', DELIVERED: '已投递', FAILED: '失败', SKIPPED: '未联系', MANUAL: '需人工处理' } as any)[status] ||
     status
   )
 }
@@ -183,7 +187,7 @@ async function refresh() {
 async function reset(job: any) {
   try {
     await call(`/jobs/${job.id}/reset`, { method: 'POST' })
-    show(`已重置 ${job.jobName}，下次扫描会重新评估`)
+    show(`已重置 ${job.jobName}，下次搜索时会重新判断`)
     await refresh()
   } catch (e: any) {
     show(e.message, true)

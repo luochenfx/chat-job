@@ -24,16 +24,16 @@ export interface RunStatusView {
 
 const TABLE: Record<string, RunStatusView> = {
   CREATED: { active: true, label: '准备中', tone: '', canPause: false, canStop: true, judgedIdle: false },
-  WAITING_DUTY: { active: true, label: '等待时段', tone: 'warn', canPause: false, canStop: true, judgedIdle: false },
+  WAITING_DUTY: { active: true, label: '等待时段开始', tone: 'warn', canPause: false, canStop: true, judgedIdle: false },
   RUNNING: { active: true, label: '运行中', tone: 'warn', canPause: true, canStop: true, judgedIdle: true },
   // 扫描停了，值守还在跑：按钮与 RUNNING 一致，因为「停止」才是真正结束值守期
   STANDBY: { active: true, label: '值守待命', tone: 'warn', canPause: true, canStop: true, judgedIdle: true },
   PAUSED: { active: true, label: '已暂停', tone: 'warn', canPause: false, canStop: true, judgedIdle: false },
   COMPLETED: { active: false, label: '已完成', tone: 'ok', canPause: false, canStop: false, judgedIdle: false },
   // 历史数据才有：V12 之后配额用完来自 STANDBY，不再写这个状态
-  QUOTA_REACHED: { active: false, label: '配额已用完', tone: 'ok', canPause: false, canStop: false, judgedIdle: false },
-  CIRCUIT_OPEN: { active: false, label: '已熔断', tone: 'danger', canPause: false, canStop: false, judgedIdle: false },
-  LOGIN_LOST: { active: false, label: '登录失效', tone: 'danger', canPause: false, canStop: false, judgedIdle: false },
+  QUOTA_REACHED: { active: false, label: '联系名额已用完', tone: 'ok', canPause: false, canStop: false, judgedIdle: false },
+  CIRCUIT_OPEN: { active: false, label: '已自动停止', tone: 'danger', canPause: false, canStop: false, judgedIdle: false },
+  LOGIN_LOST: { active: false, label: '登录状态失效', tone: 'danger', canPause: false, canStop: false, judgedIdle: false },
   CANCELLED: { active: false, label: '已取消', tone: '', canPause: false, canStop: false, judgedIdle: false },
   FAILED: { active: false, label: '失败', tone: 'danger', canPause: false, canStop: false, judgedIdle: false }
 }

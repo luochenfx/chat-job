@@ -150,7 +150,7 @@ public class SystemController {
         PlatformAdapter adapter = adapter(platform);
         adapter.openLogin();
         return Map.of("ok", true, "platform", adapter.platform(),
-                "hint", "已打开登录页，请在浏览器窗口扫码；登录完成后点「探测登录」确认");
+                "hint", "已打开登录页，请在浏览器窗口里扫码；登录完成后点「检测登录状态」确认");
     }
 
     @PostMapping("/notify-test")

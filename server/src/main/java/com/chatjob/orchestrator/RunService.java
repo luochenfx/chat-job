@@ -176,14 +176,14 @@ public class RunService {
         switches.require(platform);
         runStore.active(platform).ifPresent(run -> {
             if (RunStatus.WAITING_DUTY.name().equals(run.getStatus())) {
-                throw new IllegalStateException("已有一条任务在等待值守时段（id=" + run.getId()
+                throw new IllegalStateException("已经有一条任务在等待时段开始（编号 " + run.getId()
                         + "），要重新启动请先取消它");
             }
-            throw new IllegalStateException("已有进行中的任务（id=" + run.getId() + "，" + run.getStatus()
-                    + "），请先停止或等待其结束");
+            throw new IllegalStateException("已经有一个任务在运行（编号 " + run.getId()
+                    + "），请先停止它，或等它结束");
         });
         if (worker != null && worker.isAlive()) {
-            throw new IllegalStateException("上一个任务的线程尚未退出，请稍候");
+            throw new IllegalStateException("上一个任务还在收尾，请稍等一下");
         }
 
         PlatformConfigEntity cfg = configStore.platformConfig(platform);
@@ -195,7 +195,7 @@ public class RunService {
                 ? CombinationPlanner.plan(configStore.readList(cfg.getCities()), configStore.readList(cfg.getKeywords()))
                 : List.of();
         if (scanEnabled && combos.isEmpty()) {
-            throw new IllegalStateException("搜索条件为空：请先在平台配置里填写城市与关键词");
+            throw new IllegalStateException("搜索条件为空：请先在平台配置里填写城市和关键词");
         }
 
         String effectiveMode = mode == null ? "NORMAL" : mode;
@@ -208,7 +208,7 @@ public class RunService {
             // 让它在后台线程里失败 —— 后者会让控制台先看到"已启动"再看到"失败"，误导操作。
             PatchrightDriver.Status driver = patchright.inspect();
             if (!driver.available()) {
-                throw new IllegalStateException("拒绝启动：" + driver.message());
+                throw new IllegalStateException("无法启动：" + driver.message());
             }
         }
 
@@ -351,7 +351,7 @@ public class RunService {
                 }
                 enterStandby(run, StandbyGate.StopReason.SCAN_DISABLED);
             } else {
-                act(run, "开始扫描");
+                act(run, "开始搜索岗位");
             }
 
             // 值守期是「扫描 + 值守」两条腿：扫描因配额 / 评估上限 / 组合耗尽停下时，
@@ -536,7 +536,7 @@ public class RunService {
             }
 
             round++;
-            act(run, "待命巡检：读取消息列表");
+            act(run, "检查未读消息：读取消息列表");
             UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
                     adapter, run.getPlatform(), collectMetrics, false);
             publishUnread(run, sweep);
@@ -570,16 +570,16 @@ public class RunService {
         StandbyGate.StopReason why0 = reason == null ? StandbyGate.StopReason.COMBOS_EXHAUSTED : reason;
         String interval = intervalLabel(ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds()));
         String tail = window.alwaysOn()
-                ? "值守时段为全天，不会挂起"
-                : "到 " + DutyWindow.format(window.end()) + " 停止操作页面并挂起";
+                ? "自动回复时段设为全天，中途不会停下"
+                : "到 " + DutyWindow.format(window.end()) + " 会停止操作并进入等待";
         boolean neverScanned = why0 == StandbyGate.StopReason.SCAN_DISABLED;
         String message = neverScanned
-                ? "未启用扫描，本次只值守：每 " + interval + "检查一次未读消息，" + tail
-                : "扫描已结束（" + whyOf(why0, cfg, delivered, evaluated) + "），值守继续：每 "
+                ? "这个平台没有开启「搜索岗位」，本轮只处理消息：每 " + interval + "检查一次未读消息，" + tail
+                : "搜索已结束（" + whyOf(why0, cfg, delivered, evaluated) + "），继续处理消息：每 "
                 + interval + "检查一次未读消息，" + tail;
 
         runStore.markStandby(run, message);
-        act(run, neverScanned ? "值守待命：该平台未启用扫描，只做巡检" : "值守待命：等下一轮巡检");
+        act(run, neverScanned ? "正在盯着消息：没有开启「搜索岗位」，只检查消息" : "正在盯着消息：等下一次检查");
         log(run, "INFO", message);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("reason", why0.name());
@@ -587,7 +587,7 @@ public class RunService {
         data.put("evaluated", evaluated);
         data.put("quota", quota(cfg));
         publish(run, "run.standby", data);
-        notify(run, "standby", neverScanned ? "未启用扫描，值守中" : "扫描已结束，值守继续", message);
+        notify(run, "standby", neverScanned ? "没有开启搜索，正在处理消息" : "搜索已结束，继续处理消息", message);
     }
 
     /**
@@ -598,11 +598,11 @@ public class RunService {
      */
     private String whyOf(StandbyGate.StopReason reason, PlatformConfigEntity cfg, int delivered, int evaluated) {
         return switch (reason) {
-            case QUOTA -> "今日主动投递配额已用完（" + delivered + "/" + quota(cfg) + "）";
-            case EVAL_LIMIT -> "今日评估已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
-            case COMBOS_EXHAUSTED -> "搜索组合已全部扫完";
+            case QUOTA -> "今天主动联系的名额已经用完（" + delivered + "/" + quota(cfg) + "）";
+            case EVAL_LIMIT -> "今天查看岗位的数量已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
+            case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了";
             // 只值守的 Run 是从这里进待命的，横幅另写了文案；保留这一支是为了让 switch 覆盖全枚举
-            case SCAN_DISABLED -> "未启用扫描";
+            case SCAN_DISABLED -> "没有开启「搜索岗位」";
         };
     }
 
@@ -639,10 +639,10 @@ public class RunService {
     private void park(RunEntity run, String reason) {
         DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
         LocalTime now = LocalTime.now();
-        String message = "已到值守结束时间（" + window.describe() + "，现在 " + DutyWindow.format(now) + "），"
-                + "停止操作页面；" + window.nextOpenHint(now) + "，值守期没有结束，不需要重新启动";
+        String message = "已到自动回复结束时间（" + window.describe() + "，现在 " + DutyWindow.format(now) + "），"
+                + "已停止操作；" + window.nextOpenHint(now) + "，这一轮还没有结束，不需要重新启动";
         runStore.markWaiting(run, message);
-        act(run, "已挂起，等 " + window.describe() + " 的下一个窗口");
+        act(run, "已排队，等 " + window.describe() + " 这个时段开始");
         log(run, "INFO", message);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("reason", reason);
@@ -650,7 +650,7 @@ public class RunService {
         data.put("at", DutyWindow.format(now));
         data.put("opensInMinutes", window.opensInMinutes(now));
         publish(run, "run.waiting", data);
-        notify(run, "duty-end", "值守时段已结束，已挂起", message);
+        notify(run, "duty-end", "自动回复时段已结束，任务先排队", message);
     }
 
     /**
@@ -716,11 +716,11 @@ public class RunService {
 
     private static String stopLabel(StandbyGate.StopReason reason) {
         return switch (reason) {
-            case QUOTA -> "今日主动投递配额";
-            case EVAL_LIMIT -> "今日评估上限";
-            case COMBOS_EXHAUSTED -> "组合耗尽";
+            case QUOTA -> "每天主动联系的名额";
+            case EVAL_LIMIT -> "每天查看岗位的上限";
+            case COMBOS_EXHAUSTED -> "搜索组合已跑完";
             // 单独文案在 executeCombinations 里：那里「留待回扫时继续」这半句不成立，不能复用整句
-            case SCAN_DISABLED -> "未启用扫描";
+            case SCAN_DISABLED -> "没有开启「搜索岗位」";
         };
     }
 
@@ -881,7 +881,7 @@ public class RunService {
                 return null;
             }
 
-            act(run, "读取第 " + (card + 1) + " 张卡的岗位详情");
+            act(run, "查看第 " + (card + 1) + " 个岗位的详情");
             JobDetail detail = adapter().fetchDetail(card);
             if (detail == null) {
                 log(run, "WARN", "第 " + (card + 1) + " 张卡片没抓到详情，跳过");
@@ -927,7 +927,7 @@ public class RunService {
             run.setLastCardIndex(card + 1);
 
             // 节奏：每张卡片后随机 [waitTime/2, waitTime]
-            String next = card + 2 <= cardCount ? "处理第 " + (card + 2) + " 张卡" : "进入下一个组合";
+            String next = card + 2 <= cardCount ? "查看第 " + (card + 2) + " 个岗位" : "进入下一组搜索条件";
             pauseFor(run, cfg, next);
         }
         return null;
@@ -992,7 +992,7 @@ public class RunService {
         String aiRaw = null;
 
         if (qualityGate) {
-            act(run, "AI 判定中：" + job.getJobName() + " @ " + job.getCompanyName());
+            act(run, "AI 正在判断：" + job.getJobName() + " @ " + job.getCompanyName());
             AiJudge.Verdict verdict = aiJudge.judge(detail, blacklist);
             if (verdict.isFailure()) {
                 // fail-closed：判定不出来就不投
@@ -1100,10 +1100,10 @@ public class RunService {
         }
         long waitMinutes = window.opensInMinutes(now);
         // nextOpenHint 自带「之后才会真正执行」，这里不要再接「自动开始」，否则读成「真正执行自动开始」
-        String message = "当前 " + DutyWindow.format(now) + " 不在值守时段 " + window.describe()
-                + " 内，已挂起等待；" + window.nextOpenHint(now);
+        String message = "现在是 " + DutyWindow.format(now) + "，不在自动回复时段 " + window.describe()
+                + " 内，任务先排队；" + window.nextOpenHint(now);
         runStore.markWaiting(run, message);
-        act(run, "已挂起，等 " + window.describe() + " 的下一个窗口");
+        act(run, "已排队，等 " + window.describe() + " 这个时段开始");
         log(run, "INFO", message);
         Map<String, Object> data = new LinkedHashMap<>();
         // reason 与 park() 的 DUTY_END 区分开：这里是「启动时就不在窗口内」，

@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>系统</h1>
-        <p>driver 装配、浏览器与登录态、通知与数据清理</p>
+        <p>浏览器与登录状态、消息通知、数据清理</p>
       </div>
       <button class="btn" :disabled="busy" @click="load">刷新</button>
     </div>
@@ -20,21 +20,21 @@
     <div class="card">
       <div class="row" style="justify-content: space-between; align-items: flex-start">
         <div>
-          <h2>浏览器与登录态</h2>
+          <h2>浏览器与登录状态</h2>
           <p class="hint">
-            每个平台一份独立 profile，登录态不通用；探测会读该平台浏览器里的登录 cookie
+            每个平台用各自独立的浏览器，登录状态不通用。检测时会读取该平台浏览器里保存的登录信息
           </p>
         </div>
       </div>
 
-      <div v-if="!cards.length" class="empty">正在读取平台清单…</div>
+      <div v-if="!cards.length" class="empty">正在读取平台列表…</div>
       <table v-else>
         <thead>
           <tr>
             <th>平台</th>
             <th style="width: 96px">浏览器</th>
-            <th>登录态</th>
-            <th style="width: 96px">自检</th>
+            <th>登录状态</th>
+            <th style="width: 96px">自动检查</th>
             <th style="width: 268px"></th>
           </tr>
         </thead>
@@ -56,13 +56,13 @@
                 </span>
                 <div class="hint-inline">{{ login[c.platform].reason }}</div>
               </template>
-              <span v-else class="hint-inline">尚未探测</span>
+              <span v-else class="hint-inline">还没检测</span>
             </td>
             <td>
               <span v-if="checks[c.platform]" class="tag" :class="checks[c.platform].ok ? 'ok' : 'danger'">
                 {{ checks[c.platform].ok ? '通过' : '未通过' }}
               </span>
-              <span v-else class="hint-inline">未运行</span>
+              <span v-else class="hint-inline">还没运行</span>
             </td>
             <td>
               <!-- 停用的平台不给这三个按钮：它们都会去开那个平台的浏览器，
@@ -71,15 +71,15 @@
                 <button
                   class="btn sm"
                   :disabled="busy || c.enabled === false"
-                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  :title="c.enabled === false ? '这个平台已停用' : ''"
                   @click="probeLogin(c.platform)"
                 >
-                  探测登录
+                  检测登录状态
                 </button>
                 <button
                   class="btn sm"
                   :disabled="busy || c.enabled === false"
-                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  :title="c.enabled === false ? '这个平台已停用' : ''"
                   @click="openLogin(c.platform)"
                 >
                   打开登录页
@@ -87,10 +87,10 @@
                 <button
                   class="btn sm"
                   :disabled="busy || c.enabled === false"
-                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  :title="c.enabled === false ? '这个平台已停用' : ''"
                   @click="runSelfCheck(c.platform)"
                 >
-                  运行自检
+                  检查浏览器是否正常
                 </button>
               </div>
             </td>
@@ -100,7 +100,7 @@
 
       <!-- 自检失败原因逐条列出：只显示一个「未通过」等于让人自己去猜是哪一项断言没过 -->
       <div v-for="c in failedChecks" :key="c.platform" class="check-fail">
-        <div class="hint-inline" style="color: var(--danger)">{{ c.label }} 自检未通过：</div>
+        <div class="hint-inline" style="color: var(--danger)">{{ c.label }} 自动检查未通过：</div>
         <div v-for="(f, i) in c.failures" :key="i" class="hint-inline" style="color: var(--danger)">
           · {{ f }}
         </div>
@@ -109,23 +109,25 @@
 
     <div class="grid cols-2">
       <div class="card">
-        <h2>patchright driver</h2>
-        <p class="hint">找不到 driver 时任务会被拒绝启动（fail-closed），绝不静默退回官方 driver</p>
+        <h2>浏览器驱动</h2>
+        <p class="hint">
+          找不到浏览器驱动时，任务不会启动，也不会偷偷换成普通浏览器把流程跑下去
+        </p>
         <div class="stack">
           <div class="row" style="justify-content: space-between">
-            <span>可用性</span>
+            <span>是否可用</span>
             <span class="tag" :class="driverReady ? 'ok' : 'danger'">
               {{ driverReady ? '就绪' : '不可用' }}
             </span>
           </div>
-          <div class="hint-inline">两个平台共用这一份 driver：它不可用时两张平台卡都启动不了</div>
+          <div class="hint-inline">两个平台共用同一份浏览器驱动；它不可用时，两个平台都启动不了</div>
           <div>
-            <div class="hint-inline">driver 目录</div>
+            <div class="hint-inline">驱动所在目录</div>
             <div style="word-break: break-all">{{ status?.driverDir || '未找到' }}</div>
           </div>
           <div>
-            <div class="hint-inline">node 可执行文件</div>
-            <div style="word-break: break-all">{{ status?.nodePath || 'PATH 里没有 node' }}</div>
+            <div class="hint-inline">浏览器运行环境</div>
+            <div style="word-break: break-all">{{ status?.nodePath || '系统里没有找到' }}</div>
           </div>
           <div v-if="status && !driverReady" class="hint-inline" style="color: var(--danger)">
             {{ status.driverMessage }}
@@ -134,28 +136,29 @@
       </div>
 
       <div class="card">
-        <h2>通知</h2>
+        <h2>消息通知</h2>
         <p class="hint">
-          企业微信群机器人；未配置时只写日志。同类型事件 5 分钟内合并，正文带平台名
+          通过企业微信群机器人发送；没有配置时只写日志。同类消息 5 分钟内会合并成一条，
+          正文里会写明是哪个平台
         </p>
         <button class="btn" :disabled="busy" @click="testNotify">发送测试消息</button>
       </div>
     </div>
 
     <div class="card">
-      <h2>当日计数</h2>
+      <h2>今天的进度</h2>
       <p class="hint">
-        配额与评估上限都读这里，重启不归零。分母永远来自单平台配置 ——
-        两个平台的配额不相加（「24/60」看着像还剩 36，实际是各 18）
+        投递名额和查看上限都以这里为准，重启软件不会清零。每个平台各算各的，
+        两个平台的数字不相加（「24/60」不是还剩 36，而是每个平台各自的上限）
       </p>
-      <div v-if="!cards.length" class="empty">正在读取平台清单…</div>
+      <div v-if="!cards.length" class="empty">正在读取平台列表…</div>
       <table v-else>
         <thead>
           <tr>
             <th>平台</th>
-            <th>今日主动投递 / 配额</th>
-            <th>值守发简历</th>
-            <th>今日评估 / 上限</th>
+            <th>今天主动联系 / 名额</th>
+            <th>应要求发的简历</th>
+            <th>今天查看 / 上限</th>
           </tr>
         </thead>
         <tbody>
@@ -169,22 +172,23 @@
         </tbody>
       </table>
       <div class="hint-inline" style="margin-top: 12px">
-        日期 {{ overview?.global?.serverTime || status?.serverTime || '—' }} · 字典
-        {{ overview?.global?.dictionaryTotal ?? status?.dictionaryTotal ?? 0 }} 条（跨平台共用一份）
+        日期 {{ overview?.global?.serverTime || status?.serverTime || '—' }} · 筛选项
+        {{ overview?.global?.dictionaryTotal ?? status?.dictionaryTotal ?? 0 }} 条（两个平台共用一份）
       </div>
     </div>
 
     <div class="card">
       <h2>数据清理</h2>
       <p class="hint">
-        扫描明细保留 30 天，但只清「未投递 且 超期」的记录 —— 否则去重记录被清掉会导致同一岗位被重复投递
+        岗位记录保留 30 天，但只清理「没有投递过、并且已经过期」的记录。
+        如果把投递过的记录也清掉，同一个岗位可能会被重复投递
       </p>
       <div class="row">
         <button class="btn danger" :disabled="busy" @click="cleanup">立即清理</button>
-        <span class="hint-inline">run_log 保留 14 天，reply_log 保留 90 天</span>
+        <span class="hint-inline">运行日志保留 14 天，回复记录保留 90 天</span>
       </div>
       <div v-if="cleanupResult" class="hint-inline" style="margin-top: 12px">
-        已清理：岗位 {{ cleanupResult.jobsRemoved }} 条，值守日志 {{ cleanupResult.replyLogsRemoved }} 条，
+        已清理：岗位 {{ cleanupResult.jobsRemoved }} 条，回复记录 {{ cleanupResult.replyLogsRemoved }} 条，
         运行日志 {{ cleanupResult.runLogsRemoved }} 条
       </div>
     </div>
@@ -236,7 +240,7 @@ async function runSelfCheck(platform: string) {
   try {
     const res = await call('/system/self-check', { method: 'POST', query: { platform } })
     checks[platform] = res
-    show(`${labelOf(platform)} 自检${res.ok ? '通过' : '未通过'}`, !res.ok)
+    show(`${labelOf(platform)} 自动检查${res.ok ? '通过' : '未通过'}`, !res.ok)
     await load()
   } catch (e: any) {
     show(e.message, true)
@@ -282,7 +286,7 @@ async function testNotify() {
   busy.value = true
   try {
     await call('/system/notify-test', { method: 'POST' })
-    show('已发送（未配置 webhook 时只写日志）')
+    show('已发送（没有配置企业微信机器人时只写日志）')
   } catch (e: any) {
     show(e.message, true)
   } finally {
@@ -291,7 +295,7 @@ async function testNotify() {
 }
 
 async function cleanup() {
-  if (!confirm('清理超期扫描明细与日志？投递记录不会被清理。')) return
+  if (!confirm('清理过期的岗位记录和日志？投递记录不会被清理。')) return
   busy.value = true
   try {
     cleanupResult.value = await call('/system/cleanup', { method: 'POST', body: { scannedDays: 30, logDays: 14 } })

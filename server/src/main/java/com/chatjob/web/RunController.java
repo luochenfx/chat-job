@@ -147,7 +147,7 @@ public class RunController {
     private RunService serviceOf(Long runId) {
         RunEntity run = runStore.get(runId);
         if (run == null) {
-            throw new IllegalArgumentException("Run 不存在: " + runId);
+            throw new IllegalArgumentException("找不到这个任务：" + runId);
         }
         return runServices.of(run.getPlatform());
     }

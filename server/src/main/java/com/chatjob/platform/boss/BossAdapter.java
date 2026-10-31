@@ -110,11 +110,11 @@ public class BossAdapter implements PlatformAdapter {
             // 备用判据：URL 落在登录页
             Page page = listPage != null && !listPage.isClosed() ? listPage : null;
             if (page == null) {
-                return LoginState.lost("尚无打开的页面，且未找到登录态 cookie");
+                return LoginState.lost("还没有打开页面，也没有找到登录信息");
             }
             String url = safeUrl(page);
             if (url.contains("/web/user/")) {
-                return LoginState.lost("页面落在登录页: " + url);
+                return LoginState.lost("页面停在了登录页：" + url);
             }
             // 备用判据：DOM 上出现已登录标记（必须带超时，裸 isVisible 会无限等）
             try {
@@ -125,7 +125,7 @@ public class BossAdapter implements PlatformAdapter {
             } catch (Exception ignore) {
                 // 探针等不到就当作"没看到"，绝不能阻塞主流程
             }
-            return LoginState.lost("未找到登录态 cookie，也未检测到已登录标记");
+            return LoginState.lost("没有找到登录信息，也没有看到已登录的迹象");
         });
     }
 

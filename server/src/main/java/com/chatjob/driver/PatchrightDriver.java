@@ -60,15 +60,15 @@ public class PatchrightDriver {
             Status status;
             if (dir == null) {
                 status = new Status(false, null, node,
-                        "未找到 patchright driver（缺 " + props.driver().dir() + "/package/cli.js）。"
-                                + "请先执行 scripts/install-patchright.mjs 装配 driver。");
+                        "找不到浏览器驱动（缺少 " + props.driver().dir() + "/package/cli.js）。"
+                                + "请先运行 scripts/install-patchright.mjs 安装驱动。");
             } else if (node == null) {
                 status = new Status(false, dir.toString(), null,
-                        "找到了 patchright driver，但没找到 node：PATH 与 "
-                                + ProjectHome.resolve().resolve("runtime") + " 下都没有 node.exe。"
-                                + "请安装 Node.js，或把 node.exe 放到 runtime/ 下。");
+                        "找到了浏览器驱动，但没有找到运行环境 node：系统 PATH 和 "
+                                + ProjectHome.resolve().resolve("runtime") + " 目录下都没有 node.exe。"
+                                + "请安装 Node.js，或者把 node.exe 放到 runtime 目录下。");
             } else {
-                status = new Status(true, dir.toString(), node, "patchright driver 就绪");
+                status = new Status(true, dir.toString(), node, "浏览器驱动已就绪");
             }
             log.info("driver 检查: available={}, dir={}, node={}", status.available(),
                     status.driverDir(), status.nodePath());

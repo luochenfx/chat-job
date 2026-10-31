@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>配置</h1>
-        <p>模型提供商、AI 判定、平台搜索条件与值守规则</p>
+        <p>在这里填写 AI 服务、判断标准、每个平台的搜索条件和自动回复规则</p>
       </div>
     </div>
 
@@ -24,19 +24,22 @@
       <div class="card">
         <div class="row" style="justify-content: space-between; align-items: flex-start">
           <div>
-            <h2>模型提供商</h2>
-            <p class="hint">配置的是提供商，不是单个模型。API Key 经 DPAPI 加密落库，接口只回发"是否已配置"</p>
+            <h2>AI 服务商</h2>
+            <p class="hint">
+              这里填的是提供 AI 服务的公司，不是某一个具体模型。密钥会加密保存在本机，
+              页面上只显示「是否已填写」，不会显示内容
+            </p>
           </div>
-          <button class="btn sm" @click="openProvider()">新增</button>
+          <button class="btn sm" @click="openProvider()">添加</button>
         </div>
 
         <table v-if="providers.length">
           <thead>
             <tr>
               <th>名称</th>
-              <th>Base URL</th>
+              <th>接口地址</th>
               <th>模型</th>
-              <th style="width: 90px">Key</th>
+              <th style="width: 90px">密钥</th>
               <th style="width: 120px"></th>
             </tr>
           </thead>
@@ -47,7 +50,7 @@
               <td>{{ p.model }}</td>
               <td>
                 <span class="tag" :class="p.keyConfigured ? 'ok' : 'danger'">
-                  {{ p.keyConfigured ? '已配置' : '缺失' }}
+                  {{ p.keyConfigured ? '已填写' : '未填写' }}
                 </span>
               </td>
               <td>
@@ -59,54 +62,57 @@
             </tr>
           </tbody>
         </table>
-        <div v-else class="empty">还没有模型提供商，先新增一个（DeepSeek 的 base URL 填 https://api.deepseek.com/v1）</div>
+        <div v-else class="empty">
+          还没有添加 AI 服务商，先添加一个。以 DeepSeek 为例，接口地址填 https://api.deepseek.com/v1
+        </div>
       </div>
 
       <!-- 新增与编辑共用同一个弹层：点遮罩或按 Esc 即为放弃，不落库 -->
       <Modal
         :open="providerDialog"
-        :title="providerForm.id ? '编辑提供商' : '新增提供商'"
-        hint="主键 ID 不展示；编辑时留空 API Key 表示不修改"
+        :title="providerForm.id ? '编辑 AI 服务商' : '添加 AI 服务商'"
+        hint="编辑时密钥留空，表示保持原来的密钥不变"
         width="620px"
         @close="closeProviderDialog"
       >
         <div class="grid cols-2">
           <div class="field">
-            <label>名称</label>
+            <label>服务商名称</label>
             <input v-model="providerForm.name" type="text" placeholder="DeepSeek" />
           </div>
           <div class="field">
-            <label>模型</label>
+            <label>模型名称</label>
             <input v-model="providerForm.model" type="text" placeholder="deepseek-flash" />
           </div>
         </div>
         <div class="field">
-          <label>Base URL</label>
+          <label>接口地址</label>
           <input v-model="providerForm.baseUrl" type="text" placeholder="https://api.deepseek.com/v1" />
         </div>
         <div class="grid cols-2">
           <div class="field">
-            <label>API Key</label>
+            <label>密钥</label>
             <input v-model="providerForm.apiKey" type="password" :placeholder="providerForm.id ? '留空则不修改' : 'sk-...'" />
           </div>
           <div class="field">
-            <label>超时（秒）</label>
+            <label>等待回复时间（秒）</label>
             <input v-model.number="providerForm.timeoutSeconds" type="number" min="5" max="300" />
           </div>
         </div>
         <div class="field">
-          <label>自定义请求头</label>
+          <label>额外的请求参数</label>
           <div v-for="(h, i) in providerHeaders" :key="i" class="kv-row">
-            <input v-model="h.key" type="text" placeholder="Header 名" />
+            <input v-model="h.key" type="text" placeholder="参数名" />
             <input v-model="h.value" type="text" placeholder="值" />
             <button class="btn sm danger" @click="providerHeaders.splice(i, 1)">删除</button>
           </div>
-          <button class="btn sm" @click="providerHeaders.push({ key: '', value: '' })">添加请求头</button>
+          <button class="btn sm" @click="providerHeaders.push({ key: '', value: '' })">添加一行</button>
+          <div class="desc">一般不用填。服务商有特殊要求时，在这里补充参数</div>
         </div>
 
         <template #footer>
           <button class="btn" @click="closeProviderDialog">取消</button>
-          <button class="btn primary" :disabled="saving" @click="saveProvider">保存提供商</button>
+          <button class="btn primary" :disabled="saving" @click="saveProvider">保存</button>
         </template>
       </Modal>
     </section>
@@ -114,59 +120,62 @@
     <!-- ---------------------------------------------------- AI 配置 -->
     <section v-show="tab === 'ai'">
       <div class="card">
-        <h2>AI 配置</h2>
-        <p class="hint">一次调用同时产出「投不投」与「招呼语」；判定失败即跳过该岗位（fail-closed）</p>
+        <h2>AI 判断与打招呼</h2>
+        <p class="hint">
+          每看到一个岗位，AI 会一次性决定投不投，并写好招呼语。AI 判断出错时直接跳过这个岗位，
+          不会勉强投递
+        </p>
 
         <div class="grid cols-2">
           <div class="field">
-            <label>使用哪个提供商</label>
+            <label>使用哪个 AI 服务商</label>
             <select v-model.number="ai.providerId">
               <option :value="null">未选择</option>
               <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }} · {{ p.model }}</option>
             </select>
           </div>
           <div class="field">
-            <label>质量开关</label>
+            <label>是否让 AI 判断该不该投</label>
             <label class="switch" style="margin-top: 6px">
               <input v-model="ai.qualityGateEnabled" type="checkbox" />
-              <span>开启时由 AI 判断该不该投；关闭时硬规则通过即用模板招呼语</span>
+              <span>开启：由 AI 判断岗位值不值得投。关闭：只要符合搜索条件，就用固定的招呼语</span>
             </label>
           </div>
         </div>
 
         <div class="field">
-          <label>个人介绍</label>
-          <textarea v-model="ai.introduce" placeholder="描述技能、经验与专业背景，AI 用它生成个性化招呼语" />
+          <label>你的个人情况</label>
+          <textarea v-model="ai.introduce" placeholder="写下你的技能、经验和专业背景，AI 会据此写招呼语" />
         </div>
 
         <div class="field">
-          <label>判定提示词</label>
+          <label>判断标准（写给 AI 的说明）</label>
           <textarea v-model="ai.promptTemplate" style="min-height: 220px" />
           <div class="desc">
-            支持占位符：<code v-for="p in placeholders" :key="p">{{ p }}</code>。
+            可以在这里插入下面的内容，AI 会换成对应岗位的实际信息：<code v-for="p in placeholders" :key="p">{{ p }}</code>。
           </div>
         </div>
 
         <div class="field">
-          <label>模板招呼语（质量开关关闭时使用）</label>
+          <label>固定的招呼语（关闭 AI 判断时使用）</label>
           <input v-model="ai.templateGreeting" type="text" />
         </div>
 
         <div class="grid cols-3">
           <div class="field">
-            <label>JD 截断字符数</label>
+            <label>岗位描述最多读取多少字</label>
             <input v-model.number="ai.jdMaxChars" type="number" min="500" max="20000" />
           </div>
           <div class="field">
-            <label>判定单次超时（秒）</label>
+            <label>AI 判断的最长等待时间（秒）</label>
             <input v-model.number="ai.aiTimeoutSeconds" type="number" min="5" max="120" />
-            <div class="desc">投递判定与招呼语的调用超时，与下方的值守回复的超时是两件事</div>
+            <div class="desc">判断投不投、写招呼语时最多等这么久。下面「AI 自动回复」里的等待时间是另一项设置</div>
           </div>
           <div class="field">
-            <label>效果采集</label>
+            <label>统计回复效果</label>
             <label class="switch" style="margin-top: 6px">
               <input v-model="ai.collectEffectMetrics" type="checkbox" />
-              <span>记录首响时长与回复条数（仅统计）</span>
+              <span>记录对方多久回第一次、回了多少条（只做统计，不影响投递）</span>
             </label>
           </div>
         </div>
@@ -176,23 +185,23 @@
       <div class="card">
         <div class="row" style="justify-content: space-between; align-items: flex-start">
           <div>
-            <h2>值守 AI 回复</h2>
+            <h2>AI 自动回复</h2>
             <p class="hint">
-              HR 发来新消息时由 AI 生成回复。
+              HR 发来新消息时，由 AI 读消息并写出回复，不需要你盯着。
             </p>
           </div>
           <span class="tag" :class="ai.aiReplyEnabled ? 'ok' : ''">
-            {{ ai.aiReplyEnabled ? '运行中' : '已关闭' }}
+            {{ ai.aiReplyEnabled ? '已开启' : '已关闭' }}
           </span>
         </div>
 
         <label class="switch">
           <input v-model="ai.aiReplyEnabled" type="checkbox" />
-          <span>开启值守 AI 回复</span>
+          <span>开启 AI 自动回复</span>
         </label>
 
         <div class="field" style="margin-top: 16px">
-          <label>回复风格约束</label>
+          <label>回复风格要求</label>
           <textarea
             v-model="ai.aiReplyStyle"
             :placeholder="aiStyleDefault"
@@ -200,11 +209,11 @@
           />
           <div class="desc">
             <template v-if="ai.aiReplyStyle && ai.aiReplyStyle.trim()">
-              当前使用自定义风格（{{ ai.aiReplyStyle.trim().length }} 字）。改风格不等于收紧了出口，
-              能不能发仍由出站校验决定
+              当前使用你自己写的风格（{{ ai.aiReplyStyle.trim().length }} 字）。这里只决定语气和写法，
+              能不能发出去还要看下面的检查
             </template>
             <template v-else>
-              留空则使用默认风格。默认内容已显示在输入框的灰字里，共 {{ aiStyleDefault.length }} 字
+              不填就使用默认风格。默认内容已用灰字显示在输入框里，共 {{ aiStyleDefault.length }} 字
             </template>
             <button class="btn sm" style="margin-left: 8px" @click="restoreStyle">填入默认</button>
           </div>
@@ -212,22 +221,22 @@
 
         <div class="grid cols-2">
           <div class="field">
-            <label>单次生成超时（秒）</label>
+            <label>生成一条回复的最长等待时间（秒）</label>
             <input v-model.number="ai.aiReplyTimeoutSeconds" type="number" min="1" max="120" />
             <div class="desc">
-              模型迟迟不回时，等多久就放弃这条。超时会进重试链，不会静默跳过。
+              AI 迟迟没有回应时，等这么久就放弃这一条。放弃后会重新尝试，不会悄悄漏掉。
               <template v-if="effectiveReplyTimeout && effectiveReplyTimeout < ai.aiReplyTimeoutSeconds">
-                <b>实际生效 {{ effectiveReplyTimeout }} 秒</b> —— 当前提供商的超时更短，会先断开
+                <b>实际只等 {{ effectiveReplyTimeout }} 秒</b> —— 你给这家 AI 服务商设的等待时间更短，到点会先断开
               </template>
             </div>
           </div>
           <div class="field">
-            <label>单轮 AI 回复上限（条）</label>
+            <label>每轮最多回复几条</label>
             <input v-model.number="ai.aiReplyMaxPerSweep" type="number" min="1" max="10" />
             <div class="desc">
-              一轮值守最多花几次模型调用。超出的未读退回待处理，不消耗重试次数，下一轮继续。
+              每轮自动回复最多调用几次 AI。超出数量的未读消息会留到下一轮继续处理，不算失败，也不占用重试机会。
               <!-- ADR-0003 第 4 条：两个平台各建一份预算，不共享。 -->
-              <b>每个平台各自算一份</b>，{{ platforms.length }} 个平台同时值守时，一轮最多花
+              <b>每个平台单独计算</b>，{{ platforms.length }} 个平台同时开启时，一轮最多调用
               {{ platforms.length || 1 }} × {{ ai.aiReplyMaxPerSweep || 0 }} 次
             </div>
           </div>
@@ -237,23 +246,23 @@
       <div class="card">
         <div class="row" style="justify-content: space-between; align-items: flex-start">
           <div>
-            <h2>出站校验与告警</h2>
+            <h2>发送前检查与提醒</h2>
             <p class="hint">
-              消息发出去之前的最后一次检查。
+              消息发出前的最后一道检查。
             </p>
           </div>
           <span class="tag" :class="ai.aiReplyToneCheckEnabled ? 'ok' : 'danger'">
-            {{ ai.aiReplyToneCheckEnabled ? '检查中' : '已停止' }}
+            {{ ai.aiReplyToneCheckEnabled ? '已开启' : '已关闭' }}
           </span>
         </div>
 
         <label class="switch">
           <input v-model="ai.aiReplyToneCheckEnabled" type="checkbox" />
-          <span>开启 AI 味检查（套话、客服腔、小标题等一律拦下）</span>
+          <span>开启「像 AI 写的」检查：出现客套话、客服口气、小标题等一律不发送</span>
         </label>
 
         <div class="field" style="margin-top: 16px">
-          <label>AI 味词表（一行一条）</label>
+          <label>不发送的词（一行一个）</label>
           <textarea
             v-model="ai.aiReplyToneTerms"
             :placeholder="aiToneTermsDefault"
@@ -261,41 +270,41 @@
           />
           <div class="desc">
             <template v-if="ai.aiReplyToneTerms && ai.aiReplyToneTerms.trim()">
-              当前使用自定义词表，生效 {{ toneTermsEffective }} 条。整条回复里出现任一条就会被拦下
+              当前使用你自己填的词，共 {{ toneTermsEffective }} 条。一条回复里只要出现其中任何一个词，这条就不会发送
             </template>
             <template v-else>
-              留空则使用默认词表（{{ aiToneTermsEffectiveCount }} 条），内容已显示在输入框的灰字里。
-              自定义词表会<b>整体替换</b>默认词表，不是追加
+              不填就使用默认的词（{{ aiToneTermsEffectiveCount }} 条），内容已用灰字显示在输入框里。
+              自己填的会<b>整个替换</b>默认的那份，不是加在默认清单后面
             </template>
             <button class="btn sm" style="margin-left: 8px" @click="restoreToneTerms">填入默认</button>
           </div>
           <div v-if="riskyToneHits.length" class="desc" style="color: var(--warn)">
-            ⚠ 这几行是日常口语本身：{{ riskyToneHits.join('、') }}。
-            词表按「整条回复含该词就拦」匹配，加了它会连「感谢您的回复」「方便发份简历吗」一起拦掉，
-            建议删掉 —— 但仍可保存
+            ⚠ 这几个词本身就是平时说话会用到的：{{ riskyToneHits.join('、') }}。
+            因为只要出现这个词，整条回复就不会发送，加上它们会把「感谢您的回复」「方便发份简历吗」
+            这类正常回复也一起拦住，建议删掉。不过仍然可以保存
           </div>
         </div>
 
         <div class="grid cols-2">
           <div class="field">
-            <label>skip 占比告警阈值（%）</label>
+            <label>「AI 决定不回」比例提醒（%）</label>
             <input v-model.number="ai.aiReplySkipAlertPct" type="number" min="0" max="100" />
             <div class="desc">
-              近 7 天 AI 参与判定里，主动不回的比例超过它就在系统页提示。<b>填 0 = 关闭告警</b>，
-              关闭状态照样会显示出来，不会假装一切正常
+              最近 7 天里，AI 判断后决定不回的比例超过这个数，就在「系统」页给出提醒。
+              <b>填 0 表示关闭提醒</b>；关闭时也会明确写出来，不会让你以为一切正常
             </div>
           </div>
           <div class="field">
-            <label>告警最小样本数</label>
+            <label>至少判断多少次才提醒</label>
             <input v-model.number="ai.aiReplySkipAlertMinSample" type="number" min="1" max="1000" />
             <div class="desc">
-              判定次数低于此数就不下结论，面板会显示「样本不足」。
+              判断次数少于这个数时不下结论，页面上会显示「样本不足」。
             </div>
           </div>
         </div>
       </div>
 
-      <button class="btn primary" :disabled="saving" @click="saveAi">保存 AI 配置</button>
+      <button class="btn primary" :disabled="saving" @click="saveAi">保存 AI 设置</button>
     </section>
 
     <!-- ---------------------------------------------------- 平台配置 -->
@@ -317,18 +326,18 @@
         <div class="switches">
           <label class="switch" :title="enabledHint">
             <input v-model="platform.enabled" type="checkbox" />
-            <span>平台启用<b>{{ platform.enabled === false ? '关' : '开' }}</b></span>
+            <span>启用平台<b>{{ platform.enabled === false ? '关' : '开' }}</b></span>
           </label>
           <label class="switch" :title="scanHint">
             <input v-model="platform.scanEnabled" type="checkbox" />
-            <span>扫描<b>{{ platform.scanEnabled === false ? '关' : '开' }}</b></span>
+            <span>搜索岗位<b>{{ platform.scanEnabled === false ? '关' : '开' }}</b></span>
           </label>
           <label class="switch" :title="watchHint">
             <input v-model="platform.watchEnabled" type="checkbox" />
-            <span>值守<b>{{ platform.watchEnabled === false ? '关' : '开' }}</b></span>
+            <span>自动回复<b>{{ platform.watchEnabled === false ? '关' : '开' }}</b></span>
           </label>
         </div>
-        <span class="scope-note">下面五张卡只属于这个平台；搜索条件与配额都是每平台一份</span>
+        <span class="scope-note">下面这些设置只对这个平台有效，每个平台各有一份</span>
         <span v-if="dirty" class="tag warn">有未保存改动</span>
       </div>
 
@@ -338,20 +347,20 @@
         同时只能出现一条：停用时后面几行的判断都不再成立。
       -->
       <div v-if="platform.enabled === false" class="off-note">
-        停用后不再为「{{ platformLabel }}」开浏览器，也不启动它的扫描与值守；另一个平台照常跑。
-        正在跑的任务要先停止，否则停用会被拒绝。停用时下面两个开关不起作用。
+        停用后不会再为「{{ platformLabel }}」打开浏览器，也不会搜索岗位或自动回复；另一个平台不受影响。
+        如果有任务正在跑，要先停止才能停用。停用期间下面两个开关不起作用。
       </div>
       <div v-else-if="bothOff" class="off-note danger">
-        两个都关时保存会被拒绝。要整体停用「{{ platformLabel }}」，请关掉「平台启用」——
-        那会同时关掉浏览器，与「什么都不做」不是一回事。
+        两个都关掉时无法保存。如果想让「{{ platformLabel }}」完全停下，请关闭上面的「启用平台」，
+        那会连浏览器一起关掉。
       </div>
       <div v-else-if="scanOff" class="off-note">
-        只值守：「{{ platformLabel }}」启动后不加载岗位列表、不做投递判定、不投递，也不占投递配额与评估上限；
-        它直接进入值守待命，只按巡检间隔处理未读消息。
+        只自动回复：「{{ platformLabel }}」启动后不搜索岗位、不查看岗位详情、不投递，
+        也不占用投递和查看的名额；它会直接开始盯着 HR 的消息，按设定间隔处理未读消息。
       </div>
       <div v-else-if="watchOff" class="off-note">
-        只扫描：「{{ platformLabel }}」的扫描与投递照常，但组合扫完后任务直接结束（状态「已完成」），
-        不再继续盯未读消息；要再投一轮就重新点启动。
+        只搜索岗位：「{{ platformLabel }}」照常搜索和投递，但所有搜索组合跑完后任务就结束
+        （状态显示「已完成」），不再继续盯着消息。想再跑一轮，重新点启动。
       </div>
 
       <!--
@@ -364,10 +373,10 @@
       <fieldset class="card" :disabled="scanOff">
         <h2>搜索条件</h2>
         <p v-if="scanOff" class="card-note">
-          该平台未启用扫描：这些字段不生效，打开扫描后才会被使用
+          该平台没有开启「搜索岗位」：下面这些条件暂时不起作用，开启后才会用到
         </p>
         <p class="hint">
-          城市填中文名，执行时才换 code。{{ platformNote || '六组筛选是全局一套、只叠加不展开' }}
+          城市直接填中文名即可。{{ platformNote || '这些筛选条件可以同时使用，符合条件的岗位才会出现' }}
         </p>
         <div class="grid cols-2">
           <div class="field">
@@ -415,77 +424,78 @@
           </div>
         </div>
         <div class="field">
-          <label>HR 活跃度下限</label>
+          <label>HR 活跃程度要求</label>
           <select v-model="platform.activeLevelFloor" style="width: 220px">
             <option v-for="o in platform.activeLevelOptions || []" :key="o" :value="o">{{ o }}</option>
           </select>
           <div class="desc">
-            平台文案没有「7 天」这一档，只能按档位定；映射表之外的文案归为「未知」，不参与硬过滤
+            平台只提供这几档活跃程度，没有更细的选项。认不出的档位一律当作「未知」，不会因此被排除
           </div>
         </div>
       </fieldset>
 
       <div class="card">
-        <h2>配额与节奏</h2>
+        <h2>名额与节奏</h2>
         <p class="hint">
-          主动投递配额决定主动沟通多少岗位，评估上限决定查看多少岗位
-          配额用完只是今天不再找岗位，HR 的消息照常回。
+          这两个数字决定今天最多主动联系多少岗位、最多查看多少岗位。用完之后只是不再找新岗位，
+          HR 发来的消息照样回复
         </p>
         <!--
           这张卡里混了两类字段：前五项属扫描（配额、上限、节奏），后两项属值守（未读上限、巡检间隔）。
           所以只禁用前五项，不整卡禁用 —— 整卡禁用会让人以为巡检间隔也改不了，而它照常生效。
         -->
         <p v-if="scanOff" class="card-note">
-          该平台未启用扫描：投递配额、评估上限、动作间隔、滚动与时长上限不生效；
-          最后两项（未读列表扫描上限、值守巡检间隔）属值守，照常生效
+          该平台没有开启「搜索岗位」：投递名额、查看上限、动作间隔、翻页次数和每组条件的时长都不起作用；
+          最后两项（每次最多看多少条未读消息、多久检查一次新消息）属于自动回复，照常生效
         </p>
         <div class="grid cols-3">
           <div class="field">
-            <label>日主动投递配额</label>
+            <label>每天最多主动联系多少个岗位</label>
             <input v-model.number="platform.dailyDeliveryQuota" type="number" min="1" max="200" :disabled="scanOff" />
-            <div class="desc">只含扫描侧发起的投递；值守里应对方索要发的简历不计入</div>
+            <div class="desc">只算搜索时主动发起的联系；对方要简历后发出的简历不计入这个数</div>
           </div>
           <div class="field">
-            <label>日评估上限</label>
+            <label>每天最多查看多少个岗位</label>
             <input v-model.number="platform.dailyEvalLimit" type="number" min="10" max="1000" :disabled="scanOff" />
           </div>
           <div class="field">
-            <label>动作间隔（秒）</label>
+            <label>每个动作之间的间隔（秒）</label>
             <input v-model.number="platform.waitTimeSeconds" type="number" min="3" max="60" :disabled="scanOff" />
-            <div class="desc">实际等待为 [间隔/2, 间隔] 的随机值</div>
+            <div class="desc">实际等待时间会在这个数的一半到它之间随机</div>
           </div>
           <div class="field">
-            <label>单组合滚动上限（轮）</label>
+            <label>每组条件最多翻多少轮</label>
             <input v-model.number="platform.scrollRoundLimit" type="number" min="20" max="2000" :disabled="scanOff" />
           </div>
           <div class="field">
-            <label>单组合时长上限（秒）</label>
+            <label>每组条件最长跑多久（秒）</label>
             <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" :disabled="scanOff" />
           </div>
           <div class="field">
-            <label>未读列表扫描上限（条）</label>
+            <label>每次最多看多少条未读消息</label>
             <input v-model.number="platform.unreadScanLimit" type="number" min="1" max="500" />
             <div class="desc">
-              最多看多少个会话消息。超出会打警告日志
+              一条未读消息算一条。超出后会在日志里给出提醒
             </div>
           </div>
           <div class="field">
-            <label>值守巡检间隔（秒）</label>
+            <label>多久检查一次新消息（秒）</label>
             <input v-model.number="platform.watchIntervalSeconds" type="number" min="30" max="600" />
             <div class="desc">
-              配额达到上限后，按这个节奏检查未读消息（30–600，越界按最近边界保存）。
-              这个数字同时是「AI 回复的最长延迟」和「刷新的频率」。120 秒 ≈ 最坏两分钟内回上；再短（如 60 秒）
-              等于每 8 小时按分钟级刷新几百次，不像人在用，反而更容易被风控盯上。实际间隔会在 ±10% 内随机浮动。
+              名额用完后，按这个间隔检查有没有新消息（可填 30–600 秒，超出范围会按最接近的边界保存）。
+              它决定对方最多等多久收到回复，也决定刷新有多频繁。120 秒意味着最慢两分钟内回复；
+              调得太短（比如 60 秒）会让操作显得太频繁，增加被平台限制的风险。
+              实际间隔会在 ±10% 内随机浮动。
             </div>
           </div>
         </div>
       </div>
 
       <div class="card">
-        <h2>值守时段</h2>
+        <h2>自动回复时段</h2>
         <p class="hint">
-          时段外不发任何消息——凌晨的招呼语只会被当成骚扰。
-          时段外点启动会把任务挂起，等窗口打开自动开始，期间可以随时取消。
+          这个时间段之外不会发出任何消息，凌晨发招呼语容易被当成骚扰。
+          在时间段外点启动，任务会先排队，等时间到了自动开始，期间随时可以取消。
         </p>
         <div class="grid cols-2">
           <div class="field">
@@ -501,21 +511,21 @@
       </div>
 
       <div class="card">
-        <h2>重复沟通</h2>
-        <p class="hint">进会话后先读消息列表：已有我方最新消息就视为已沟通过，默认跳过</p>
+        <h2>已经聊过的人</h2>
+        <p class="hint">打开对话后先看消息记录：最后一条是我们发的，就当作已经聊过，默认跳过</p>
         <label class="switch">
           <input v-model="platform.repeatChatEnabled" type="checkbox" />
-          <span>允许对已沟通的会话再发一条跟进语</span>
+          <span>允许对已经聊过的对话再发一条跟进消息</span>
         </label>
         <div class="field" style="margin-top: 16px">
-          <label>跟进语文案池（随机取一条）</label>
-          <ChipInput v-model="platform.repeatChatMessages" placeholder="输入一条跟进语后回车" />
+          <label>跟进消息（随机取一条发送）</label>
+          <ChipInput v-model="platform.repeatChatMessages" placeholder="输入一条跟进消息后回车" />
         </div>
       </div>
 
       <div class="card">
-        <h2>黑名单 · 两平台共用</h2>
-        <p class="hint">在「岗位」页维护，与这里共用同一份数据；黑名单没有平台维度</p>
+        <h2>黑名单 · 两个平台共用</h2>
+        <p class="hint">在「岗位」页增删，和这里用的是同一份名单，两个平台都生效</p>
         <div v-if="!blacklist.length" class="empty">还没有黑名单</div>
         <div v-else class="row wrap" style="gap: 8px">
           <span v-for="b in blacklist" :key="b.id" class="chip" :class="b.kind === 'company' ? '' : 'danger'">
@@ -544,10 +554,10 @@ const { show } = useToast()
  * 标题又写着「两平台共用」，就不会去找开关。
  */
 const tabs = computed(() => [
-  { key: 'provider', label: '模型提供商 · 两平台共用' },
-  { key: 'ai', label: 'AI 配置 · 两平台共用' },
+  { key: 'provider', label: 'AI 服务商 · 两个平台共用' },
+  { key: 'ai', label: 'AI 判断与回复 · 两个平台共用' },
   { key: 'platform', label: `平台配置 · ${platformLabel.value || '…'}` },
-  { key: 'reply', label: '值守规则 · 两平台共用' }
+  { key: 'reply', label: '自动回复规则 · 两个平台共用' }
 ])
 const tab = ref('provider')
 const saving = ref(false)
@@ -700,20 +710,20 @@ const bothOff = computed(() => scanOff.value && watchOff.value)
  */
 const enabledHint = computed(() =>
   platform.enabled === false
-    ? '关闭：不再为它开浏览器，也不启动它的扫描与值守；扫描与值守两个开关不再起作用'
-    : '开启：这个平台可以被启动。启动后做什么由扫描与值守两个开关决定'
+    ? '关闭：不再为它打开浏览器，也不会搜索岗位或自动回复；下面两个开关不再起作用'
+    : '开启：这个平台可以启动。启动后具体做什么，由「搜索岗位」和「自动回复」两个开关决定'
 )
 
 const scanHint = computed(() =>
   scanOff.value
-    ? '关闭扫描：不加载岗位列表、不做投递判定、不投递，也不占投递配额与评估上限'
-    : '开启扫描：按城市 × 关键词加载岗位列表，并逐卡决定投不投'
+    ? '关闭：不搜索岗位、不查看岗位详情、不投递，也不占用投递和查看的名额'
+    : '开启：按城市和关键词找到岗位，逐个查看岗位详情，并决定投不投'
 )
 
 const watchHint = computed(() =>
   watchOff.value
-    ? '关闭值守：不巡检未读、不读消息、不回消息、不发简历；平台侧的未读标记保持原样'
-    : '开启值守：扫描进行中按间隔插空巡检，扫描结束后继续巡检'
+    ? '关闭：不检查未读消息、不读消息、不回消息、不发简历；平台上的未读标记保持原样'
+    : '开启：搜索过程中会顺带检查消息，搜索结束后继续盯着消息'
 )
 
 /** 加载完成时的快照：与当前值比较得出 dirty（切 tab / 切平台前据此拦截） */
@@ -741,11 +751,11 @@ const effectiveReplyTimeout = computed(() => {
 const dutyHint = computed(() => {
   const start = platform.dutyStartTime || ''
   const end = platform.dutyEndTime || ''
-  if (!start || !end) return '留空按默认 09:00–22:00 处理'
-  if (start === end) return '开始与结束相同 = 全天不限，凌晨也会发消息'
+  if (!start || !end) return '不填则按 09:00–22:00 处理'
+  if (start === end) return '开始和结束填成一样，表示全天都发消息，凌晨也会发'
   return start < end
-    ? `每天 ${start}–${end}：窗口内启动立刻开跑、到 ${end} 自动收工；窗口外启动会挂起，等到下一次 ${start} 自动开始`
-    : `跨天窗口：${start} 到次日 ${end}`
+    ? `每天 ${start}–${end}：这段时间内启动会立刻开始，到 ${end} 自动停止；在这段时间外启动会先排队，等到下一个 ${start} 自动开始`
+    : `跨天时段：从 ${start} 一直发到第二天 ${end}`
 })
 
 const dict = reactive<Record<string, string[]>>({
@@ -797,7 +807,7 @@ async function loadPlatform() {
  * 改动已经没了，而且没有任何痕迹说明它是什么时候没的。
  */
 async function switchPlatform(slug: string) {
-  if (dirty.value && !confirm(`有未保存的平台配置改动，放弃并切换到 ${labelOf(slug)}？`)) return
+  if (dirty.value && !confirm(`「${platformLabel.value}」的改动还没保存，放弃改动并切换到 ${labelOf(slug)}？`)) return
   try {
     await select(slug)
     await loadPlatform()
@@ -809,7 +819,7 @@ async function switchPlatform(slug: string) {
 /** 切 tab 同样要拦：离开「平台配置」时草稿会被下一次加载覆盖 */
 function switchTab(key: string) {
   if (key === tab.value) return
-  if (tab.value === 'platform' && dirty.value && !confirm('有未保存的平台配置改动，放弃并切换？')) return
+  if (tab.value === 'platform' && dirty.value && !confirm('改动还没保存，放弃改动并切换吗？')) return
   tab.value = key
 }
 
@@ -883,7 +893,7 @@ async function saveProvider() {
         enabled: true
       }
     })
-    show('提供商已保存')
+    show('已保存')
     await loadAll()
     closeProviderDialog()
   } catch (e: any) {
@@ -894,7 +904,7 @@ async function saveProvider() {
 }
 
 async function deleteProvider(p: any) {
-  if (!confirm(`删除提供商「${p.name}」？`)) return
+  if (!confirm(`删除「${p.name}」？`)) return
   try {
     await call(`/config/providers/${p.id}`, { method: 'DELETE' })
     show('已删除')
@@ -907,7 +917,7 @@ async function deleteProvider(p: any) {
 /** 把默认风格填进输入框，不落库 —— 保存动作留给用户，与「点了就改配置」区分开 */
 function restoreStyle() {
   if (!aiStyleDefault.value) {
-    show('默认风格尚未加载，请刷新页面重试', true)
+    show('默认风格还没加载出来，请刷新页面后再试', true)
     return
   }
   ai.aiReplyStyle = aiStyleDefault.value
@@ -916,7 +926,7 @@ function restoreStyle() {
 /** 同上：只填框，由用户自己保存 */
 function restoreToneTerms() {
   if (!aiToneTermsDefault.value) {
-    show('默认词表尚未加载，请刷新页面重试', true)
+    show('默认词表还没加载出来，请刷新页面后再试', true)
     return
   }
   ai.aiReplyToneTerms = aiToneTermsDefault.value
@@ -930,20 +940,20 @@ async function saveAi() {
   const alertPct = Number(ai.aiReplySkipAlertPct)
   const minSample = Number(ai.aiReplySkipAlertMinSample)
   if (!Number.isInteger(timeout) || timeout < 1) {
-    show('单次生成超时要填 ≥1 的整数', true)
+    show('「生成一条回复的最长等待时间」要填大于 0 的整数', true)
     return
   }
   if (!Number.isInteger(maxPerSweep) || maxPerSweep < 1) {
-    show('单轮 AI 回复上限要填 ≥1 的整数', true)
+    show('「每轮最多回复几条」要填大于 0 的整数', true)
     return
   }
   // 阈值 0 是合法值（= 关闭告警），所以这里不能用 `!alertPct` 判断
   if (!Number.isInteger(alertPct) || alertPct < 0) {
-    show('告警阈值要填 0–100 的整数，0 表示关闭告警', true)
+    show('提醒比例要填 0 到 100 之间的整数，0 表示关闭提醒', true)
     return
   }
   if (!Number.isInteger(minSample) || minSample < 1) {
-    show('告警最小样本数要填 ≥1 的整数', true)
+    show('「至少判断多少次才提醒」要填大于 0 的整数', true)
     return
   }
 
@@ -963,9 +973,9 @@ async function saveAi() {
     })
     // 后端会丢弃超长行（一行 50 字基本是误粘的整段文本）。不说一声，用户会以为整段都生效了
     if (res?.toneTermsDropped > 0) {
-      show(`已保存，但有 ${res.toneTermsDropped} 行超过 20 字被丢弃`, true)
+      show(`已保存，但有 ${res.toneTermsDropped} 行超过 20 个字，没有保存进去`, true)
     } else {
-      show('AI 配置已保存')
+      show('已保存')
     }
     // 回读一次：超时上限 120、回复上限 10 这类 clamp 在后端做，前端不该假装自己知道结果
     await loadAll()
@@ -980,7 +990,7 @@ async function savePlatform() {
   saving.value = true
   try {
     await call(`/config/platform/${platformSlug.value}`, { method: 'PUT', body: platform })
-    show('平台配置已保存')
+    show('已保存')
     // 开关变了要立刻重拉清单：否则分段控件上那个「已停用」要等下次进页面才出现
     await refreshPlatforms().catch(() => {})
     // 回读一次：后端对 watchIntervalSeconds 等字段有钳制，不回读的话界面显示的是用户填的、

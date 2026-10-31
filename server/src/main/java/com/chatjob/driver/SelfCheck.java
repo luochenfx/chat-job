@@ -77,7 +77,7 @@ public class SelfCheck {
         String driverDir = patchright.inspect().driverDir();
         details.put("driver", driverDir == null ? "未装配" : driverDir);
         if (driverDir == null) {
-            failures.add("未使用 patchright driver");
+            failures.add("没有使用指定的浏览器驱动");
         }
 
         BrowserChannel.Choice choice = browserChannel.resolve();
@@ -102,19 +102,19 @@ public class SelfCheck {
             Object webdriver = details.get("webdriver");
             boolean webdriverExposed = webdriver instanceof Boolean b && b;
             if (webdriverExposed) {
-                failures.add("navigator.webdriver 为 true");
+                failures.add("浏览器暴露了自动化控制标记");
             }
             Object cdc = details.get("cdcKeys");
             if (cdc instanceof List<?> list && !list.isEmpty()) {
-                failures.add("检测到 cdc_ 残留: " + list);
+                failures.add("浏览器里残留了自动化工具的标记：" + list);
             }
             Object uaData = details.get("uaData");
             if (uaData instanceof Boolean b && !b) {
                 // 不是硬失败：某些旧版 Chrome 没有 userAgentData，只记录
-                details.put("warning", "navigator.userAgentData 不存在（可能是旧版 Chrome）");
+                details.put("warning", "浏览器版本较旧，缺少部分新版特性");
             }
         } catch (Exception e) {
-            failures.add("自检执行异常: " + e.getMessage());
+            failures.add("检查过程中出错：" + e.getMessage());
         } finally {
             if (page != null) {
                 try {

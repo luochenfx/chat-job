@@ -22,12 +22,15 @@
       <div class="row" style="justify-content: space-between; align-items: flex-start">
         <div>
           <h2>回复规则</h2>
-          <p class="hint">一条规则 = 关键词组 + 文案池。命中多个规则时取关键词最长的那条；同会话 3 分钟内最多回一次</p>
+          <p class="hint">
+            一条规则 = 几个关键词 + 一组准备好的回复。同时命中多条规则时，用关键词最长的那条；
+            同一个对话 3 分钟内最多回一次
+          </p>
         </div>
-        <button class="btn sm" @click="openRule()">新增规则</button>
+        <button class="btn sm" @click="openRule()">添加规则</button>
       </div>
 
-      <div v-if="!rules.length" class="empty">还没有规则</div>
+      <div v-if="!rules.length" class="empty">还没有添加规则</div>
       <div v-else class="stack">
         <div v-for="rule in rules" :key="rule.id" class="rule-row">
           <div class="row" style="justify-content: space-between; align-items: flex-start">
@@ -35,7 +38,7 @@
               <strong style="font-size: 13.5px">{{ rule.name }}</strong>
               <span v-if="!rule.enabled" class="tag" style="margin-left: 8px">已关闭</span>
               <span v-if="rule.action === 'SEND_RESUME'" class="tag" style="margin-left: 8px">
-                真实动作：发简历
+                会真的发简历
               </span>
             </div>
             <div class="row" style="gap: 6px">
@@ -48,11 +51,11 @@
           </div>
           <div class="hint-inline" style="margin-top: 8px">
             <template v-if="rule.action === 'SEND_RESUME'">
-              命中后去点平台的「发简历」按钮，一句话都不说。下面这句只在按钮灰掉时兜底：
+              触发后直接点平台的「发简历」按钮，不发送任何文字。下面这句只在按钮点不了时才会用到：
               <span style="color: var(--ink)">{{ rule.texts[0] }}</span>
             </template>
             <template v-else>
-              文案 {{ rule.texts.length }} 条 · 本次命中会随机取一条：
+              准备了 {{ rule.texts.length }} 条回复，每次随机用一条：
               <span style="color: var(--ink)">{{ rule.texts[0] }}</span>
             </template>
           </div>
@@ -63,30 +66,30 @@
     <!-- 新增与编辑共用同一个弹层：点遮罩或按 Esc 即为放弃，不落库 -->
     <Modal
       :open="dialogOpen"
-      :title="form.id ? '编辑规则' : '新增规则'"
-      hint="关键词组里任一命中即算命中该规则；文案池随机取一条，避免同一句话发给几十个 HR"
+      :title="form.id ? '编辑规则' : '添加规则'"
+      hint="消息里出现任意一个关键词就算命中这条规则；每次随机取一条回复，避免同一句话发给几十个 HR"
       @close="closeDialog"
     >
       <div class="field">
-        <label>规则名</label>
+        <label>规则名称</label>
         <input v-model="form.name" type="text" placeholder="约面试" />
       </div>
       <div class="field">
-        <label>启用</label>
+        <label>是否启用</label>
         <label class="switch">
           <input v-model="form.enabled" type="checkbox" />
           <span>{{ form.enabled ? '生效中' : '已关闭' }}</span>
         </label>
       </div>
       <div class="field">
-        <label>命中后做什么</label>
+        <label>触发后做什么</label>
         <select v-model="form.action">
-          <option value="REPLY">回一句文案</option>
-          <option value="SEND_RESUME">发简历（真实点击，不说话）</option>
+          <option value="REPLY">回一句话</option>
+          <option value="SEND_RESUME">发简历（真的点按钮，不发文字）</option>
         </select>
         <div v-if="form.action === 'SEND_RESUME'" class="desc">
-          命中就点平台的「发简历」按钮，发完什么都不补。文案只在按钮不可用时兜底 ——
-          平台要求双方都说过话才能发，那时候才轮到文案出场
+          触发后直接点平台的「发简历」按钮，发完不再补话。只有在按钮点不了时才会发送文字，
+          比如平台要求双方先说过话才能发简历
         </div>
       </div>
       <div class="field">
@@ -94,9 +97,9 @@
         <ChipInput v-model="form.keywords" placeholder="输入关键词后回车，如：面试" />
       </div>
       <div class="field">
-        <label>{{ form.action === 'SEND_RESUME' ? '兜底文案' : '文案池' }}</label>
-        <ChipInput v-model="form.texts" placeholder="输入一条回复文案后回车" />
-        <div class="desc">单条建议不超过 60 字，纯文本，不带表情</div>
+        <label>{{ form.action === 'SEND_RESUME' ? '按钮点不了时发的文字' : '准备好的回复' }}</label>
+        <ChipInput v-model="form.texts" placeholder="输入一条回复后回车" />
+        <div class="desc">单条建议不超过 60 个字，只发文字，不带表情</div>
       </div>
 
       <template #footer>
@@ -109,16 +112,16 @@
     <div class="card">
       <div class="row" style="justify-content: space-between; align-items: flex-start">
         <div>
-          <h2>未命中消息</h2>
+          <h2>没有回复的消息</h2>
           <p class="hint">
-            近 7 天没有回复的对方消息。AI 回复关闭时这里是「没匹配到规则」；
-            开启后变成 AI 主动选择不回对方消息、AI 调用失败、被校验拦下 —— 三种都值得看，
-            如果要补规则就从这里开始，把高频说法变成关键词
+            最近 7 天里没有回复对方的消息。关闭 AI 回复时，这里只有「没有匹配到规则」这一种；
+            开启后还包括 AI 判断不需要回、AI 没有正常返回、被发送前检查拦下。
+            这些都是补规则的好材料，常出现的说法可以直接变成关键词
           </p>
         </div>
         <button class="btn sm" :disabled="busy" @click="loadUnmatched">刷新</button>
       </div>
-      <div v-if="!unmatched.length" class="empty">最近没有未命中消息</div>
+      <div v-if="!unmatched.length" class="empty">最近没有漏回的消息</div>
       <table v-else>
         <thead>
           <tr>
@@ -137,7 +140,7 @@
             <td class="hint-inline">{{ reasonText(m) }}</td>
             <td class="hint-inline">{{ (m.createdAt || '').replace('T', ' ').slice(0, 16) }}</td>
             <td>
-              <button class="btn sm" @click="promote(m)">转为规则</button>
+              <button class="btn sm" @click="promote(m)">用它建一条规则</button>
             </td>
           </tr>
         </tbody>
@@ -194,35 +197,35 @@ async function loadUnmatched() {
  * 直接显示给运营看等于让他去翻代码。
  */
 const REASON_TEXT: Record<string, string> = {
-  NO_SUBSTANCE: '没什么可回的',
+  NO_SUBSTANCE: '没有需要回答的内容',
   SENSITIVE_TOPIC: '话题敏感',
-  ALREADY_HANDLED: '已经聊过了',
-  LOW_CONFIDENCE: '没把握怎么说',
-  HUMAN_REQUIRED: '得人来定'
+  ALREADY_HANDLED: '之前已经聊过',
+  LOW_CONFIDENCE: 'AI 不确定怎么回',
+  HUMAN_REQUIRED: '需要你自己回'
 }
 
 function reasonText(m: any) {
   const action = m.action || ''
   if (action === 'AI_SKIPPED') {
-    const why = REASON_TEXT[m.reasonCode] || m.reasonCode || '未给出原因'
-    return `AI 主动不回 · ${why}`
+    const why = REASON_TEXT[m.reasonCode] || m.reasonCode || '没有给出原因'
+    return `AI 判断不用回 · ${why}`
   }
   if (action === 'AI_FAILED') {
-    return 'AI 调用失败'
+    return 'AI 没有正常返回'
   }
   if (action.startsWith('BLOCKED_')) {
     const kind = action.slice('BLOCKED_'.length)
     const map: Record<string, string> = {
-      TONE: 'AI 味',
-      CONTACT: '联系方式',
+      TONE: '听起来像 AI 写的',
+      CONTACT: '含联系方式',
       SENSITIVE: '敏感词',
-      TOO_LONG: '太长',
-      FALSE_CLAIM: '声称做过没做的事'
+      TOO_LONG: '字数太多',
+      FALSE_CLAIM: '说了没做过的事'
     }
-    return `出站拦截 · ${map[kind] || kind}`
+    return `发送前被拦下 · ${map[kind] || kind}`
   }
   if (action === 'UNMATCHED') {
-    return '未命中规则'
+    return '没有匹配到规则'
   }
   return action || '—'
 }
@@ -312,7 +315,7 @@ function promote(message: any) {
   form.enabled = true
   form.action = 'REPLY'
   dialogOpen.value = true
-  show('已填入草稿，补充关键词与文案后保存')
+  show('已填入草稿，补上关键词和回复内容后保存')
 }
 
 onMounted(loadAll)
