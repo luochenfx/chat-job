@@ -328,6 +328,9 @@ button {
   font-size: 13px;
   /* 表格里的按钮列宽是按内容估的，一换字号或加一格就会把「编辑」折成两行 */
   white-space: nowrap;
+  /* 按钮宽度由文字决定，不参与 flex 收缩：.row > * 的 min-width: 0 会让它在窄行里被压到
+     比文字还窄，而 nowrap 又不许折行，文字就直接溢出边框（「添加模型」四个字曾这样露出按钮外） */
+  flex: none;
   transition: background 120ms ease;
 }
 

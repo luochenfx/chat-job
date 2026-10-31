@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 配置读写。
@@ -104,13 +105,25 @@ public class ConfigController {
         if (body.model() == null || body.model().isBlank()) {
             throw new IllegalArgumentException("模型名称不能为空");
         }
+        String name = body.name().trim();
+        String model = body.model().trim();
         ProviderEntity entity = body.id() == null ? new ProviderEntity() : configStore.provider(body.id());
         if (entity == null) {
             throw new IllegalArgumentException("这条模型配置不存在");
         }
-        entity.setName(body.name().trim());
+        // 与 V16 的联合唯一索引同一个判据。先在这里拦一次，是为了让前端气泡拿到一句中文，
+        // 而不是数据库抛出的 UNIQUE constraint 原文。
+        boolean duplicated = configStore.providers().stream()
+                .anyMatch(p -> !Objects.equals(p.getId(), body.id())
+                        && name.equals(p.getName())
+                        && model.equals(p.getModel()));
+        if (duplicated) {
+            throw new IllegalArgumentException("已经有这个模型了：服务商「" + name + "」下的「" + model
+                    + "」。同一服务商下的模型名称不能重复——换一个模型名称，或者给服务商换个名字");
+        }
+        entity.setName(name);
         entity.setBaseUrl(body.baseUrl().trim());
-        entity.setModel(body.model().trim());
+        entity.setModel(model);
         entity.setTimeoutSeconds(body.timeoutSeconds() == null ? 60 : body.timeoutSeconds());
         entity.setExtraHeaders(writeHeaders(body.extraHeaders()));
         entity.setEnabled(body.enabled() == null || body.enabled() ? 1 : 0);

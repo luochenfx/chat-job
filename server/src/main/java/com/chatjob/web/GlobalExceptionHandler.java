@@ -38,6 +38,20 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 数据库唯一约束冲突。
+     *
+     * <p>业务层大多已经先查过一次（例如模型配置按「服务商 + 模型名称」查重）。这里兜的是
+     * 并发下两条请求同时通过检查、最后由数据库拦下的情况。不单独接住就会落到下面的
+     * Exception 分支，message 变成 "DuplicateKeyException: ### Error updating database ...
+     * UNIQUE constraint failed"，前端气泡里直接糊一屏 SQL，用户看不出是自己填重了。
+     */
+    @ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
+    public ResponseEntity<Map<String, Object>> duplicate(org.springframework.dao.DuplicateKeyException e) {
+        log.warn("唯一约束冲突: {}", e.getMostSpecificCause().getMessage());
+        return body(HttpStatus.CONFLICT, "保存失败：这条记录和已有的重复了，改一个名字再试");
+    }
+
+    /**
      * 静态资源备用处理器（WebConfig 里那条 /**）在找不到资源、又不属于 SPA 回落范围时
      * 抛 NoResourceFoundException。它必须排在 Exception 之前被单独接住，否则一个拼错的
      * 接口路径会被包成 500，前端提示变成"服务器错误"，排查方向直接跑偏。
