@@ -2,7 +2,7 @@ package com.chatjob.config;
 
 import com.chatjob.driver.BrowserChannel;
 import com.chatjob.driver.PatchrightDriver;
-import com.chatjob.platform.PlatformInfo;
+import com.chatjob.platform.PlatformAdapters;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.stream.Collectors;
 
 /**
  * 启动横幅：把「相对路径最终解析成了哪里」和「用哪个浏览器」直接打出来。
@@ -26,11 +27,14 @@ public class StartupBanner {
     private final AppProperties props;
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
+    private final PlatformAdapters adapters;
 
-    public StartupBanner(AppProperties props, PatchrightDriver patchright, BrowserChannel browserChannel) {
+    public StartupBanner(AppProperties props, PatchrightDriver patchright, BrowserChannel browserChannel,
+                         PlatformAdapters adapters) {
         this.props = props;
         this.patchright = patchright;
         this.browserChannel = browserChannel;
+        this.adapters = adapters;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -39,12 +43,17 @@ public class StartupBanner {
         Path dataDir = Paths.get("data").toAbsolutePath();
         Path driverDir = Paths.get(props.driver().dir()).toAbsolutePath();
         BrowserChannel.Choice choice = browserChannel.resolve();
+        // 每个平台一条：并行之后「profile 是哪一个」不再是单数，只打根目录会让人以为两平台共用一个
+        String profiles = adapters.platforms().stream()
+                .map(platform -> platform + " = "
+                        + Paths.get(props.browser().userDataDirFor(platform)).toAbsolutePath())
+                .collect(Collectors.joining("，"));
 
         log.info("""
                 
                 ────────────────────────────────────────────────────────────
                  chat-job 已启动
-                 平台     : {}（chat-job.active-platform；换平台要重启）
+                 已装配平台: {}（缺省 {}，chat-job.active-platform）
                  工作目录 : {}
                  数据目录 : {}（相对 ./data，以工作目录为基准）
                  profile  : {}（根目录 {}，每平台一个子目录）
@@ -52,10 +61,10 @@ public class StartupBanner {
                  driver   : {} —— {}
                  提示     : 请始终从仓库根启动；从 server/ 启动会生成另一份数据库
                 ────────────────────────────────────────────────────────────""",
-                PlatformInfo.of(props.activePlatform()).label() + " / " + props.activePlatform(),
+                adapters.platforms(), props.activePlatform(),
                 cwd,
                 dataDir,
-                Paths.get(props.browser().userDataDirFor(props.activePlatform())).toAbsolutePath(),
+                profiles,
                 Paths.get(props.browser().userDataDir()).toAbsolutePath(),
                 choice.label(), choice.note(),
                 driverDir, patchright.inspect().message());

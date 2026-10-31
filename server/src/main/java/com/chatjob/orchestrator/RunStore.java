@@ -177,6 +177,19 @@ public class RunStore {
                 .last("LIMIT " + Math.max(1, limit)));
     }
 
+    /**
+     * 某平台最近若干条 Run。
+     *
+     * <p>不能靠「先取全库再过滤」：某个平台连着几天没跑时，全库最近 N 条会全是另一个平台的，
+     * 它的历史列表就被挤成空 —— 而界面上读起来像「这个平台从来没跑过」。
+     */
+    public List<RunEntity> recent(String platform, int limit) {
+        return runMapper.selectList(Wrappers.<RunEntity>lambdaQuery()
+                .eq(RunEntity::getPlatform, platform)
+                .orderByDesc(RunEntity::getId)
+                .last("LIMIT " + Math.max(1, limit)));
+    }
+
     public void update(RunEntity run) {
         runMapper.updateById(run);
     }

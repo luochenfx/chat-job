@@ -14,12 +14,17 @@ import java.util.Map;
  *
  * <p>存在的意义是消除 fail-open 的隐性状态 —— 用户以为有防护、实际没有，
  * 等到账号被限制才发现。这里把它变成"启动即失败"，而不是一条 warn 日志。
+ *
+ * <p><b>按平台自检</b>（阶段 2b）：指纹与 driver 是<b>浏览器实例</b>的属性，每个平台一个实例，
+ * 所以「自检过没过」不是一个全局布尔值。原来注入的是 {@code @Primary} 的那份会话，
+ * 两个平台并行后那会变成「A 平台的自检替 B 平台作保」。现在由调用方给平台，
+ * 这里从 {@link BrowserSessions} 取该平台那份 —— 顺带保证「谁用这份会话，就检这份会话」。
  */
 @Slf4j
 @Component
 public class SelfCheck {
 
-    private final BrowserSession session;
+    private final BrowserSessions sessions;
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
     private final AppProperties props;
@@ -40,9 +45,9 @@ public class SelfCheck {
             }
             """;
 
-    public SelfCheck(BrowserSession session, PatchrightDriver patchright, BrowserChannel browserChannel,
+    public SelfCheck(BrowserSessions sessions, PatchrightDriver patchright, BrowserChannel browserChannel,
                      AppProperties props) {
-        this.session = session;
+        this.sessions = sessions;
         this.patchright = patchright;
         this.browserChannel = browserChannel;
         this.props = props;
@@ -57,13 +62,18 @@ public class SelfCheck {
     public record Result(boolean ok, String driver, Map<String, Object> details, List<String> failures) {
     }
 
-    public Result run() {
+    /**
+     * @param platform 要检哪个平台的浏览器；空值按缺省平台处理
+     */
+    public Result run(String platform) {
+        // 该平台的会话（惰性创建、不启浏览器；真正的启动发生在下面 newPage()）
+        BrowserSession session = sessions.of(platform).session();
         if (!props.selfCheck().enabled()) {
             return new Result(true, patchright.inspect().driverDir(), Map.of(), List.of());
         }
         Map<String, Object> details = new LinkedHashMap<>();
         List<String> failures = new java.util.ArrayList<>();
-
+        details.put("platform", session.platform());
         String driverDir = patchright.inspect().driverDir();
         details.put("driver", driverDir == null ? "未装配" : driverDir);
         if (driverDir == null) {
@@ -116,8 +126,8 @@ public class SelfCheck {
         }
 
         boolean ok = failures.isEmpty();
-        log.info("启动自检 {} | driver={} | details={} | failures={}",
-                ok ? "通过" : "失败", driverDir, details, failures);
+        log.info("[{}] 启动自检 {} | driver={} | details={} | failures={}",
+                session.platform(), ok ? "通过" : "失败", driverDir, details, failures);
         return new Result(ok, driverDir, details, failures);
     }
 }

@@ -2,6 +2,8 @@ package com.chatjob.platform.boss;
 
 import com.chatjob.driver.BlockedException;
 import com.chatjob.driver.BrowserSession;
+import com.chatjob.driver.BrowserSessions;
+import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
 import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
@@ -26,7 +28,6 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.WaitUntilState;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -42,11 +43,15 @@ import java.util.regex.Pattern;
  *
  * <p>约定：所有 public 方法内部都经过 {@link PlaywrightExecutor} 调度；嵌套调用会就地执行，
  * 所以从 orchestrator 的一次 {@code call} 里连调多个方法不会死锁。
+ *
+ * <p><b>浏览器从 {@link BrowserSessions} 按自己的平台取</b>（阶段 2b）。原来注入的是
+ * {@code @Primary} 的那份「当前装配平台的会话」——两个适配器同时装配后，那个 bean 只可能是
+ * 其中一个平台的，另一个适配器就会在别人的 profile 上操作页面：症状是随机
+ * {@code Object doesn't exist}，且只在两平台同时跑时出现。所以取 session 与 executor
+ * 必须成对、按平台，见 {@link PlatformBrowser} 的注释。
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "chat-job", name = "active-platform", havingValue = BossAdapter.PLATFORM,
-        matchIfMissing = true)
 public class BossAdapter implements PlatformAdapter {
 
     public static final String PLATFORM = "boss";
@@ -66,13 +71,15 @@ public class BossAdapter implements PlatformAdapter {
     private Page listPage;
     private Page threadPage;
 
-    public BossAdapter(BrowserSession session,
-                       PlaywrightExecutor executor,
+    public BossAdapter(BrowserSessions sessions,
                        ConfigStore configStore,
                        BossUrlBuilder urlBuilder,
                        ObjectMapper json) {
-        this.session = session;
-        this.executor = executor;
+        // 成对取：会话与它自己的调度线程不允许分头注入，否则可能把本平台的页面操作
+        // 提交到另一个平台那条线程上（PlatformBrowser 注释里有完整成因）
+        PlatformBrowser browser = sessions.of(PLATFORM);
+        this.session = browser.session();
+        this.executor = browser.executor();
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;

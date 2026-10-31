@@ -1,6 +1,6 @@
 package com.chatjob.config;
 
-import com.chatjob.platform.PlatformInfo;
+import com.chatjob.platform.PlatformAdapters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -33,9 +33,11 @@ public class DataRootReporter implements ApplicationRunner {
     private static final String DB_FILE = "chat-job.db";
 
     private final Environment environment;
+    private final PlatformAdapters adapters;
 
-    public DataRootReporter(Environment environment) {
+    public DataRootReporter(Environment environment, PlatformAdapters adapters) {
         this.environment = environment;
+        this.adapters = adapters;
     }
 
     @Override
@@ -49,10 +51,10 @@ public class DataRootReporter implements ApplicationRunner {
         paths.put("数据库", databaseFile());
         paths.put("日志", configuredPath("logging.file.name"));
         // 每个平台一个 profile 子目录（2a）：只打根目录会让人以为两个平台共用一个 profile，
-        // 而这恰好是 2a 要消灭的事实
+        // 而这恰好是 2a 要消灭的事实。2b 起列的是「实际装配的平台」，不是写死的清单
         Path profileRoot = configuredPath("chat-job.browser.user-data-dir");
         if (profileRoot != null) {
-            for (String platform : PlatformInfo.KNOWN) {
+            for (String platform : adapters.platforms()) {
                 paths.put("浏览器档案/" + platform, profileRoot.resolve(platform));
             }
         }

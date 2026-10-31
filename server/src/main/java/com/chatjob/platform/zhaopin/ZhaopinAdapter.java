@@ -2,6 +2,8 @@ package com.chatjob.platform.zhaopin;
 
 import com.chatjob.driver.BlockedException;
 import com.chatjob.driver.BrowserSession;
+import com.chatjob.driver.BrowserSessions;
+import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
 import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
@@ -25,7 +27,6 @@ import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.WaitUntilState;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -39,9 +40,9 @@ import java.util.function.BooleanSupplier;
 /**
  * 智联招聘的实现。只做平台动作，不做决策（与 {@link com.chatjob.platform.boss.BossAdapter} 同构）。
  *
- * <p>由 {@code chat-job.active-platform=zhaopin} 决定是否装配 —— 两个适配器同时存在会让
- * {@code PlatformAdapter} 注入点变成"两个候选 bean"，Spring 直接起不来，所以用一个配置项
- * 明确二选一，而不是靠 {@code @Primary} 猜。
+ * <p><b>装配条件与 Boss 一致</b>：阶段 2b 起两个适配器<b>同时</b>注册，由
+ * {@link com.chatjob.platform.PlatformAdapters} 按平台索引；{@code chat-job.active-platform}
+ * 退化成一个「没传 platform 时的缺省值」，不再是二选一开关。
  *
  * <p>与 Boss 的三处结构性差异（都是页面事实，不是风格选择）：
  * <ol>
@@ -58,7 +59,6 @@ import java.util.function.BooleanSupplier;
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(prefix = "chat-job", name = "active-platform", havingValue = ZhaopinAdapter.PLATFORM)
 public class ZhaopinAdapter implements PlatformAdapter {
 
     public static final String PLATFORM = "zhaopin";
@@ -86,13 +86,14 @@ public class ZhaopinAdapter implements PlatformAdapter {
     /** 平台自己标的「我已投过」，投递前最便宜的一道判据（覆盖不全，详情页/面板仍是权威） */
     private final Map<String, Boolean> appliedFlags = new ConcurrentHashMap<>();
 
-    public ZhaopinAdapter(BrowserSession session,
-                          PlaywrightExecutor executor,
+    public ZhaopinAdapter(BrowserSessions sessions,
                           ConfigStore configStore,
                           ZhaopinUrlBuilder urlBuilder,
                           ObjectMapper json) {
-        this.session = session;
-        this.executor = executor;
+        // 与 BossAdapter 同一条规则：会话与调度线程按平台成对取，不分头注入
+        PlatformBrowser browser = sessions.of(PLATFORM);
+        this.session = browser.session();
+        this.executor = browser.executor();
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;

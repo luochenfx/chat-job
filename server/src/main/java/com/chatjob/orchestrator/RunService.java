@@ -1,7 +1,6 @@
 package com.chatjob.orchestrator;
 
 import com.chatjob.driver.BlockedException;
-import com.chatjob.driver.BrowserSession;
 import com.chatjob.driver.PatchrightDriver;
 import com.chatjob.driver.SelfCheck;
 import com.chatjob.evaluate.ActiveLevel;
@@ -16,6 +15,7 @@ import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.PlatformAdapter;
+import com.chatjob.platform.PlatformAdapters;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.DeliveryEntity;
@@ -24,9 +24,8 @@ import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
 import com.chatjob.watcher.UnreadWatcher;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.config.ConfigurableBeanFactory;
+import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
@@ -42,16 +41,27 @@ import java.util.concurrent.ThreadLocalRandom;
  *
  * <p>四条硬规则，任何改动都不能破坏：
  * <ol>
- *   <li>同一时刻只有一个未终结的 Run（DB 部分唯一索引 + 内存标志双保险），等待时段与值守待命的那条也算。</li>
+ *   <li>同一时刻<b>每个平台</b>只有一个未终结的 Run（DB 部分唯一索引 + 内存标志双保险），
+ *       等待时段与值守待命的那条也算。这是本类在 2b 之后唯一变化的约束范围：
+ *       原来写的是「全库一个」，而 {@code uk_run_running ON run(platform)} 从建表起算的就是
+ *       「每个平台一个持有者」。</li>
  *   <li>扫描中止条件按优先级判：投递配额 → 评估上限 → 组合耗尽。三者只中止<b>扫描</b>，
  *       Run 进入待命继续值守；熔断优先于全部，且不降级为待命。</li>
  *   <li>任何异常都终止 Run，不重试穿越。绕过一次验证码的代价远大于当天少投几十个岗。</li>
  *   <li>窗口外启动 / 窗口到点 = 挂起等待，不是收工：状态落库、由调度唤醒，进程重启也不丢
- *       （见 {@link #wakeWaitingRuns()}）。</li>
+ *       （见 {@link RunServices#wakeWaitingRuns()}）。</li>
  * </ol>
+ *
+ * <p><b>2b：按平台实例化（prototype）</b>。本类内部 {@code worker / stopRequested /
+ * pauseRequested / dutyEnded / pausedFrom / currentRunId} 六个字段是「只有一个任务」的假设，
+ * 但它们描述的是<b>一条流水线</b>的内部状态，而不是全进程的状态 —— 所以不必改写，
+ * 只要每个平台各有一份这个对象（ADR-0003 Consequences）。实例由
+ * {@link RunServices} 按平台创建并绑定适配器；<b>本类不做任何 {@code if (platform == ...)}</b>，
+ * 平台差异全部在 {@link PlatformAdapter} 的实现里。
  */
 @Slf4j
 @Service
+@Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
 public class RunService {
 
     /** 每处理这么多张卡片做一次未读检查 */
@@ -62,14 +72,22 @@ public class RunService {
     private final RunStore runStore;
     private final JobStore jobStore;
     private final ConfigStore configStore;
-    private final PlatformAdapter adapter;
+    private final PlatformAdapters adapters;
     private final AiJudge aiJudge;
     private final UnreadWatcher unreadWatcher;
     private final Notifier notifier;
     private final SelfCheck selfCheck;
     private final PatchrightDriver patchright;
-    private final BrowserSession session;
     private final com.chatjob.web.SseHub sse;
+
+    /**
+     * 本实例服务的平台适配器。由 {@link #bind(String)} 在创建后一次性赋值。
+     *
+     * <p>为什么不是构造参数：prototype bean 由 Spring 创建，而「这次要哪个平台」是
+     * registry 在取实例那一刻知道的（registry 以平台为键）。构造期注入 {@code platform}
+     * 需要为每个平台各写一个 bean 定义，接入第三个平台就要再改一处配置。
+     */
+    private volatile PlatformAdapter adapter;
 
     /** 落在日志与界面上的巡检时刻用 HH:mm:ss：只说 HH:mm 会让人算不出「还有多久」 */
     private static final DateTimeFormatter HHMMSS = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -95,25 +113,47 @@ public class RunService {
     public RunService(RunStore runStore,
                       JobStore jobStore,
                       ConfigStore configStore,
-                      PlatformAdapter adapter,
+                      PlatformAdapters adapters,
                       AiJudge aiJudge,
                       UnreadWatcher unreadWatcher,
                       Notifier notifier,
                       SelfCheck selfCheck,
                       PatchrightDriver patchright,
-                      BrowserSession session,
                       com.chatjob.web.SseHub sse) {
         this.runStore = runStore;
         this.jobStore = jobStore;
         this.configStore = configStore;
-        this.adapter = adapter;
+        this.adapters = adapters;
         this.aiJudge = aiJudge;
         this.unreadWatcher = unreadWatcher;
         this.notifier = notifier;
         this.selfCheck = selfCheck;
         this.patchright = patchright;
-        this.session = session;
         this.sse = sse;
+    }
+
+    /**
+     * 绑定本实例服务的平台。由 {@link RunServices#of(String)} 在取实例后立即调用，只允许一次。
+     *
+     * <p>重复绑定直接报错而不是覆盖：两个平台共用一实例的后果是「A 平台的 Run 在主循环里
+     * 操作 B 平台的浏览器」，而症状只会表现为页面上的随机错位，几乎不可能从日志反推。
+     */
+    public RunService bind(String platform) {
+        if (this.adapter != null) {
+            throw new IllegalStateException("RunService 已绑定平台 " + this.adapter.platform()
+                    + "，不能重新绑定为 " + platform);
+        }
+        this.adapter = adapters.of(platform);
+        return this;
+    }
+
+    /** 防御式取用：未绑定就调用说明装配走错了路，宁可当场炸，也不要用 null 平台跑出一轮假数据 */
+    private PlatformAdapter adapter() {
+        PlatformAdapter bound = adapter;
+        if (bound == null) {
+            throw new IllegalStateException("RunService 未绑定平台：必须经 RunServices.of(platform) 获取实例");
+        }
+        return bound;
     }
 
     public record StartRequest(String platform, String mode) {
@@ -122,7 +162,7 @@ public class RunService {
     // ---------------------------------------------------------------- 生命周期
 
     public synchronized RunEntity start(String mode) {
-        String platform = adapter.platform();
+        String platform = adapter().platform();
         runStore.active(platform).ifPresent(run -> {
             if (RunStatus.WAITING_DUTY.name().equals(run.getStatus())) {
                 throw new IllegalStateException("已有一条任务在等待值守时段（id=" + run.getId()
@@ -198,7 +238,7 @@ public class RunService {
         pauseRequested = false;
         // 等待态没有线程在盯着 stopRequested（挂起时线程早已退出），不在这里直接落库，
         // 它会一直挂到明天窗口打开才「跑起来又收工」—— 用户点停止却什么都没发生。
-        RunEntity waiting = runStore.waiting(adapter.platform()).orElse(null);
+        RunEntity waiting = runStore.waiting(adapter().platform()).orElse(null);
         if (waiting != null && (worker == null || !worker.isAlive())) {
             finish(waiting, RunStatus.CANCELLED, "CANCELLED", "用户主动停止（等待值守时段中）");
             currentRunId = null;
@@ -211,6 +251,12 @@ public class RunService {
         }
     }
 
+    /**
+     * 本平台「当前（或最近一次）」的 Run。
+     *
+     * <p>2b 之后退回最近一条时必须带平台：{@code recent(1)} 是全库最新，会把
+     * <b>另一个平台</b>的 Run 显示在本平台的任务页上（这条坑 RunStore.latest 的注释里已写明）。
+     */
     public RunEntity current() {
         Long id = currentRunId;
         if (id != null) {
@@ -220,7 +266,7 @@ public class RunService {
                 return run;
             }
         }
-        return runStore.recent(1).stream().findFirst().orElse(null);
+        return runStore.latest(adapter().platform()).orElse(null);
     }
 
     public List<CombinationRunEntity> combinationsOf(Long runId) {
@@ -246,14 +292,15 @@ public class RunService {
                 return;
             }
 
-            SelfCheck.Result check = selfCheck.run();
+            // 自检必须检「本平台这一份浏览器」：两个平台并行时，A 平台的指纹通过不能替 B 平台作保
+            SelfCheck.Result check = selfCheck.run(adapter().platform());
             if (!check.ok()) {
                 finish(run, RunStatus.FAILED, "SELF_CHECK_FAILED", String.join("；", check.failures()));
                 notifier.notify("run-failed", "启动自检未通过", String.join("\n", check.failures()));
                 return;
             }
 
-            LoginState login = adapter.probeLogin();
+            LoginState login = adapter().probeLogin();
             if (!login.loggedIn()) {
                 finish(run, RunStatus.LOGIN_LOST, "LOGIN_LOST", login.reason());
                 notifier.notify("login-lost", "登录态失效，任务未启动", login.reason());
@@ -589,8 +636,8 @@ public class RunService {
 
             int resumeCard = (i == startIndex && run.getLastCardIndex() != null) ? run.getLastCardIndex() : 0;
             try {
-                adapter.openSearch(new SearchQuery(combo.getCity(), null, combo.getKeyword()));
-                ScrollOutcome scroll = adapter.scrollUntilEnd(
+                adapter().openSearch(new SearchQuery(combo.getCity(), null, combo.getKeyword()));
+                ScrollOutcome scroll = adapter().scrollUntilEnd(
                         new ScrollParams(cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
                                 cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds()),
                         this::shouldStop);
@@ -674,7 +721,7 @@ public class RunService {
             }
 
             act(run, "读取第 " + (card + 1) + " 张卡的岗位详情");
-            JobDetail detail = adapter.fetchDetail(card);
+            JobDetail detail = adapter().fetchDetail(card);
             if (detail == null) {
                 log(run, "WARN", "第 " + (card + 1) + " 张卡片没抓到详情，跳过");
                 continue;
@@ -823,7 +870,7 @@ public class RunService {
         boolean allowRepeat = cfg.getRepeatChatEnabled() != null && cfg.getRepeatChatEnabled() == 1;
         DeliveryOptions options = new DeliveryOptions(allowRepeat, configStore.repeatMessages(cfg));
         act(run, "投递中：" + job.getJobName() + " @ " + job.getCompanyName());
-        DeliveryResult result = adapter.deliver(detail, greeting, options, this::shouldStop);
+        DeliveryResult result = adapter().deliver(detail, greeting, options, this::shouldStop);
         jobStore.finishDelivery(delivery, result, score, aiReason, aiRaw);
 
         publish(run, "delivery.updated", Map.of(
@@ -902,20 +949,23 @@ public class RunService {
     }
 
     /**
-     * 等待态的唤醒器。
+     * 等待态的唤醒器（<b>本平台</b>那一条）。
      *
      * <p>为什么不让线程 sleep 到明天：线程活不过进程重启，而「昨晚点的启动、今早九点还在等着」
      * 恰恰是这个功能最有价值的场景。等待态落库 + 这里每 30s 轮询一次，重启后也能接上。
      *
      * <p>synchronized 与 start()/stop() 同一把锁：唤醒本质上就是「替用户再点一次启动」，
      * 必须和人工启动互斥，否则会同时起两个 worker 抢同一个浏览器档案。
+     *
+     * <p>2b：本方法不再自带 {@code @Scheduled} —— 本类是 prototype，给它挂调度注解会变成
+     * 「每创建一份实例就多注册一个定时任务」。定时的唯一入口是
+     * {@link RunServices#wakeWaitingRuns()}，它遍历已装配平台逐个调到这里。
      */
-    @Scheduled(fixedDelay = 30_000, initialDelay = 15_000)
-    public synchronized void wakeWaitingRuns() {
+    public synchronized void wakeIfWaiting() {
         if (worker != null && worker.isAlive()) {
             return;
         }
-        RunEntity waiting = runStore.waiting(adapter.platform()).orElse(null);
+        RunEntity waiting = runStore.waiting(adapter().platform()).orElse(null);
         if (waiting == null) {
             return;
         }
@@ -941,15 +991,22 @@ public class RunService {
     }
 
     /**
-     * 进程重启后的收尾：把库里「没有任何线程持有」的 Run 标为失败。
+     * 进程重启后的收尾：把库里「没有任何线程持有」的 Run 标为失败（<b>本平台</b>那几条）。
      *
      * <p>单进程部署下，启动那一刻必然不持有任何线程，所以 CREATED/RUNNING/PAUSED/STANDBY 全是上一轮的孤儿。
      * 不清掉它们会两处出事：uk_run_running 唯一索引挡住新 Run 的创建；active() 让用户看到
      * 「已有进行中的任务」却找不到那个任务。等待态（WAITING_DUTY）不在此列 —— 它本来就该留着等。
+     *
+     * <p>2b：{@code orphaned()} 是全局查询，这里按平台过滤 —— 每个平台一份实例，各自收各自的，
+     * 合计与改造前的「一次全清」等价。不自带 {@code @EventListener}：prototype 上注册监听
+     * 会随实例创建次数重复触发。唯一入口是 {@link RunServices#recoverAfterRestart()}。
      */
-    @EventListener(ApplicationReadyEvent.class)
-    public synchronized void recoverAfterRestart() {
+    public synchronized void recoverOrphans() {
+        String platform = adapter().platform();
         for (RunEntity run : runStore.orphaned()) {
+            if (!platform.equals(run.getPlatform())) {
+                continue;
+            }
             finish(run, RunStatus.FAILED, "SERVICE_RESTART", "服务重启，上一轮中断；如需继续请重新启动");
             publish(run, "run.finished", Map.of(
                     "runId", run.getId(),
@@ -1106,9 +1163,17 @@ public class RunService {
                 status + " / " + reason + " / " + message);
     }
 
+    /**
+     * 唯一的运行日志出口。
+     *
+     * <p>并发之后两条时间线会在同一个文件里交错（spec 0004 §5.1 把「日志交错难以排查」
+     * 列为 2b 的上线前提之一），所以每条都带平台前缀：{@code [zhaopin] [run 12] ...}。
+     * 用 {@code run.getPlatform()} 而不是本实例绑定的平台 —— 两者理论上相同，
+     * 但日志的读者只有 Run 这一张脸，写它自己的来源最不容易错。
+     */
     private void log(RunEntity run, String level, String message) {
         runStore.log(run.getId(), level, message);
-        log.info("[run {}] {}", run.getId(), message);
+        log.info("[{}] [run {}] {}", run.getPlatform(), run.getId(), message);
     }
 
     private void publish(RunEntity run, String type, Object data) {
@@ -1141,7 +1206,7 @@ public class RunService {
     }
 
     public DutyStatus dutyStatus() {
-        DutyWindow window = DutyWindow.of(configStore.platformConfig(adapter.platform()));
+        DutyWindow window = DutyWindow.of(configStore.platformConfig(adapter().platform()));
         LocalTime now = LocalTime.now();
         if (!window.contains(now)) {
             return new DutyStatus(window.describe(), false, window.nextOpenHint(now),
@@ -1155,8 +1220,15 @@ public class RunService {
                 window.closesInMinutes(now), -1);
     }
 
-    public BrowserSession session() {
-        return session;
+    /**
+     * 本实例服务的平台。
+     *
+     * <p>替代原来的 {@code session()}：会话不该从编排层借道传出（那是 driver 层的对象，
+     * 借出去之后谁在哪个线程上操作页面就说不清了）。要查「这个平台的浏览器起来没有」，
+     * 走 {@code BrowserSessions.existing(platform)}。
+     */
+    public String platform() {
+        return adapter().platform();
     }
 
     /**
@@ -1165,7 +1237,7 @@ public class RunService {
      * 「界面报无响应、日志还在滚」，最消耗信任。
      */
     public int staleAfterSeconds(RunEntity run) {
-        PlatformConfigEntity cfg = configStore.platformConfig(adapter.platform());
+        PlatformConfigEntity cfg = configStore.platformConfig(adapter().platform());
         RunStatus status = run == null || run.getStatus() == null ? null : RunStatus.valueOf(run.getStatus());
         return ActivityStaleness.staleAfterSeconds(status,
                 cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds(),

@@ -15,11 +15,15 @@ public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfC
                             @DefaultValue("boss") String activePlatform) {
 
     /**
-     * 当前启用的平台标识（{@code boss} / {@code zhaopin}）。
+     * 缺省平台标识（{@code boss} / {@code zhaopin}）。
      *
-     * <p>它是「装配期」的开关，不是运行期可切的业务开关：两个适配器同时注册会让
-     * {@code PlatformAdapter} 注入点出现两个候选 bean，Spring 在启动期就直接失败。
-     * 所以改平台＝改配置＋重启，回滚也是同理 —— 这一点在 spec 0004 阶段 1 里写明了。
+     * <p><b>阶段 2b 之后它不再是「启用哪个平台」的开关</b>：两个适配器同时装配，
+     * 由 {@code PlatformAdapters} 按平台索引，编排层与浏览器按平台各取一份。
+     * 它只在调用方<b>没有显式指定平台</b>时起作用 —— 控制台没带 {@code platform} 参数、
+     * 命令行没给 {@code -Dchat-job.active-platform} 的那类请求，落到这里。
+     *
+     * <p>保留默认值是为了「只关心一个平台」的调用点（脚本、单平台调试）不必每次带参数，
+     * 而不是为了二选一 —— 那个语义在 2b 里已经删掉了。
      */
     public String activePlatform() {
         return activePlatform == null || activePlatform.isBlank() ? "boss" : activePlatform.trim();

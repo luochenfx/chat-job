@@ -23,8 +23,9 @@ import java.util.Map;
  *
  * <p>它不是 Spring 单例组件，而是由 {@link BrowserSessions} 按平台创建并持有：
  * 每份有自己的 {@link Playwright}、{@link BrowserContext}、profile 目录与调度线程。
- * 「当前装配的那个平台」那一份由 {@code BrowserWiring} 暴露成 {@code @Primary} bean，
- * 让只关心单平台的调用点（RunService、SelfCheck、适配器）保持原样注入。
+ * <b>谁来用它，就按自己的平台去取</b>（{@code BrowserSessions.of(platform)}，见
+ * {@link PlatformBrowser}）——阶段 2b 之前那套 {@code @Primary} 单值注入已经删除，
+ * 因为在两个平台并存时它只能指向其中一个，另一个会在别人的 profile 上操作页面。
  *
  * <p>三个刻意的取舍：
  * <ul>

@@ -55,8 +55,9 @@ chat-job:
   # 命令行 -Dchat-job.home= 或环境变量 CHAT_JOB_HOME 可显式覆盖。
   # 写成 ${user.dir} 只是兜底：没有 HomeEnvironmentPostProcessor 时（例如裸单测）不至于解析失败。
   home: ${user.dir}
-  # 当前启用的平台：boss / zhaopin。装配期二选一（两个适配器同时注册会让注入点出现两个候选 bean），
-  # 所以换平台要改这里并重启；环境变量 CHAT_JOB_ACTIVE_PLATFORM 可覆盖。
+  # 缺省平台：boss / zhaopin。阶段 2b 起两个平台的适配器同时装配，这里只决定
+  # 「调用方没有显式指定平台时落到哪个」——控制台不带 platform 参数、脚本不加参数时用它。
+  # 环境变量 CHAT_JOB_ACTIVE_PLATFORM 可覆盖。
   active-platform: ${CHAT_JOB_ACTIVE_PLATFORM:boss}
   driver:
     # patchright driver 目录，构建期由 scripts/install-patchright.mjs 生成

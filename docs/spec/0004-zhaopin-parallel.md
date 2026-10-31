@@ -165,6 +165,37 @@ Boss 一条流水线一天能扫的组合有限，而且每个平台的岗位池
 
 判「bsk 看不看得到这个浏览器」的正确顺序：先看该 profile 的 `Default/Extensions`，再看 `bsk browsers`。反过来做，会把「空 profile 没扩展」误判成「bsk 不具备观测能力」—— 我第一版就栽在这里。
 
+**阶段 2b 实施记录（2026-10-31，真实浏览器 + 两平台各一条活跃 Run 取证）**
+
+落地结构与计划一致（`PlatformAdapter` 改成按平台索引、`RunService` 改成 prototype + registry、那 6 个单任务字段一行没改），六处按实际情况调整：
+
+| 项 | 计划 | 实际做法 | 依据 |
+|---|---|---|---|
+| 适配器注入形状 | `Map<String, PlatformAdapter>` 注入 | **`PlatformAdapters` 组件**（内部就是那张 Map，另带归一化与顺序） | 直接注入 `Map<String, PlatformAdapter>` 时 key 取的是 **bean 名**（`bossAdapter`），而 `of("boss")` 要的是平台标识；另写一个显式 `Map` bean 又会与 Spring 的 Map 自动装配语义撞车。做成组件与 `BrowserSessions` 同构，key 直接取 `adapter.platform()` |
+| 定时与启动收尾 | 留在 `RunService` | **搬到 `RunServices`**（`wakeWaitingRuns` 每 30s 遍历平台、`recoverAfterRestart` 遍历平台收孤儿） | prototype 上挂 `@Scheduled`/`@EventListener` 会**随实例创建次数重复注册** —— 三个平台就是三份定时器，且随控制台点开几个平台而增长 |
+| `@Primary` 单值会话 | 2b 删除项 | **已删除**（`BrowserWiring` 整个文件）；两个适配器与 `SelfCheck` 改为 `BrowserSessions.of(自己的平台)` | 两个适配器同时装配后，那个 bean 只可能指向其中一个平台；另一个适配器会在**别人的 profile** 上操作页面，症状是随机 `Object doesn't exist`，且只在两平台同时跑时复现 |
+| 自检 | 未提及 | `SelfCheck.run(platform)`，检查结果里带 `platform` | 指纹是**浏览器实例**的属性。原来注入单值会话，并行后等于「A 平台的自检替 B 平台作保」 |
+| 日志平台前缀 | 2c | **提前到 2b**：`RunService.log()` 唯一出口改成 `[boss] [run 39] …` | spec §5.1 把「日志交错难以排查」列为 2b 的上线前提；这一处只改一行，等到 2c 再做等于带着已知风险上线 |
+| `RunService.current()` 兜底 | 未提及 | `recent(1)` → **`latest(platform)`** | `recent(1)` 是全库最新，并行后会把**另一个平台**的 Run 显示在本平台任务页上（`RunStore.latest` 的注释早已写明这条坑） |
+
+API 形状（2c 只改前端，不再动后端）：新建/查当前带可选 `platform`（缺省 `chat-job.active-platform`），暂停/继续/取消只给 `runId` 并由 id 反查平台 —— 传错平台的后果是暂停了另一条流水线而界面看起来毫无变化。
+
+验证方式与结果（四方交叉，全部来自同一次真实运行）：
+
+- **代码**：新增 `PlatformAdaptersTest`（4 例：按平台取、大小写归一、未知平台当场 400 而非返回 null、顺序按 `KNOWN` 且未声明平台沉到末尾）。全量单测 **255 例通过**（原 251 + 4）。
+- **日志**：`[adapters] 已装配平台: [boss, zhaopin]（未指定平台时缺省 boss）`；两平台各一条 `[playwright-boss]` / `[playwright-zhaopin]` 线程上的 `浏览器已启动（profile: …\boss / …\zhaopin）`；`[boss] [run 39]` 与 `[zhaopin] [run 40]` 两条日志流交错且可分辨；`[runs] 重启收尾完成，已装配平台 [boss, zhaopin]`。
+- **库**：run 39 / 40 同时 `RUNNING`，`select platform,count(*) … group by platform` = `boss:1, zhaopin:1` —— `uk_run_running` 按平台各放一条，不冲突。
+- **页面（bsk）**：`9a198826 自动化浏览器`（EXT 0.3.3）`tab list` → `BOSS直聘「福州招聘」` / `https://www.zhipin.com/web/geek/jobs?city=…&query=java`；`f1c52653 自动化浏览器2`（EXT 0.4.0）→ `https://i.zhaopin.com/im` + `https://www.zhaopin.com/jobs/?jl=681&kw=java`。两个实例各停自己平台，无交叉。
+- **故障隔离（两个方向都测了）**：
+  - 杀掉 zhaopin 的浏览器进程树（`taskkill /T /F`）→ zhaopin run 40 从第 N 张卡起逐张「没抓到详情，跳过」，组合跑完后 `COMPLETED`；**boss run 39 全程照跑**（`last_activity_at` 持续前进，仍在「等待 8 秒后处理第 2 张卡」）。
+  - 反过来 cancel boss run 39 → boss 在卡片边界 `CANCELLED`，**zhaopin run 41 仍在「读取第 4 张卡的岗位详情」**。
+- **重启**：直接杀 JVM 后重启，run 35（boss，`RUNNING`）被标 `FAILED / SERVICE_RESTART`，收尾由 `RunServices` 按平台分片执行，合计等价于改造前的一次全清。
+
+一条与代码无关、但会误导排查的环境坑：**强杀浏览器后若有 msedge 子进程残留，该 profile 后续每次启动都会让 Playwright 报
+`Protocol error (Network.setCacheDisabled): session closed`，进而 `pipe closed` 自检失败**。现象很像「2b 把平台装配弄坏了」（同一时刻另一平台却完全正常）。判据是看进程而不是看日志：
+`Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ? { $_.CommandLine -like '*browser-data\<平台>*' }`，
+清干净残留后立刻恢复（实测 zhaopin 在清理后一次起成功）。所以「一个平台起不来」先查残留进程，再怀疑装配。
+
 ### 阶段 3：收尾
 
 | 项 | 内容 |
