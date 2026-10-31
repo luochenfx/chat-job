@@ -185,9 +185,14 @@ public class RunService {
         }
 
         PlatformConfigEntity cfg = configStore.platformConfig(platform);
-        List<CombinationPlanner.Combo> combos = CombinationPlanner.plan(
-                configStore.readList(cfg.getCities()), configStore.readList(cfg.getKeywords()));
-        if (combos.isEmpty()) {
+        // 关闭扫描的平台不建组合：城市与关键词是扫描的输入，只值守时它们为空也不影响启动
+        // （spec 0005 / ADR-0005 第 8 条）。这条校验留着会给「只想守住已有会话的新平台」一个
+        // 没有意义的启动门槛。
+        boolean scanEnabled = configStore.platformScanEnabled(platform);
+        List<CombinationPlanner.Combo> combos = scanEnabled
+                ? CombinationPlanner.plan(configStore.readList(cfg.getCities()), configStore.readList(cfg.getKeywords()))
+                : List.of();
+        if (scanEnabled && combos.isEmpty()) {
             throw new IllegalStateException("搜索条件为空：请先在平台配置里填写城市与关键词");
         }
 
@@ -323,30 +328,50 @@ public class RunService {
                     "mode", run.getMode()));
             log(run, "INFO", "任务启动，模式 " + modeLabel(run.getMode()));
             logDutyDeadline(run);
-            act(run, "开始扫描");
+
+            // 本次运行要不要扫描，只在启动这一刻读一次。运行中把它关掉由两个卡片/组合边界生效；
+            // 关掉后重新打开要等下次启动 —— 这个值在整轮里不再变，是为了让「循环要不要扫」
+            // 与传给 StandbyGate 的判断始终是同一个（spec 0005 §3.3 第 1 条）。
+            boolean scanEnabled = configStore.platformScanEnabled(platform);
+            if (!scanEnabled) {
+                // 只值守：不建组合、不开搜索页，日志里也不出现「开始扫描」「开始组合」
+                if ("DRY_RUN".equals(run.getMode())) {
+                    // 演练会真点开会话，没有可扫的内容时它的唯一产出也没有了，直接收尾不进待命
+                    finish(run, RunStatus.COMPLETED, "SCAN_DISABLED",
+                            "演练模式：该平台未启用扫描，没有可演练的内容");
+                    return;
+                }
+                enterStandby(run, StandbyGate.StopReason.SCAN_DISABLED);
+            } else {
+                act(run, "开始扫描");
+            }
 
             // 值守期是「扫描 + 值守」两条腿：扫描因配额 / 评估上限 / 组合耗尽停下时，
             // 只回到待命，不结束整轮；待命期配额被调高或跨了自然日，再从这里回到扫描。
+            // 关闭扫描的平台只有值守这一条腿：整个循环不经过扫描分支，只反复待命巡检。
+            StandbyGate.StopReason reason = scanEnabled ? null : StandbyGate.StopReason.SCAN_DISABLED;
             while (true) {
-                ensureScanDay(run);
-                StandbyGate.StopReason stop = executeCombinations(run);
+                if (scanEnabled) {
+                    ensureScanDay(run);
+                    reason = executeCombinations(run);
 
-                if (stopRequested) {
-                    finish(run, RunStatus.CANCELLED, "CANCELLED", "用户主动停止");
-                    return;
+                    if (stopRequested) {
+                        finish(run, RunStatus.CANCELLED, "CANCELLED", "用户主动停止");
+                        return;
+                    }
+                    if ("DRY_RUN".equals(run.getMode())) {
+                        // 演练模式不进入待命：它会真点开会话清红点，整夜待命会把第二天的未读消息提前标记为已读
+                        finishDryRun(run, reason);
+                        return;
+                    }
+                    if (dutyEnded) {
+                        park(run, "DUTY_END");
+                        return;
+                    }
+                    enterStandby(run, reason);
                 }
-                if ("DRY_RUN".equals(run.getMode())) {
-                    // 演练模式不进入待命：它会真点开会话清红点，整夜待命会把第二天的未读消息提前标记为已读
-                    finishDryRun(run, stop);
-                    return;
-                }
-                if (dutyEnded) {
-                    park(run, "DUTY_END");
-                    return;
-                }
-                enterStandby(run, stop);
 
-                StandbyExit exit = standbyLoop(run, stop);
+                StandbyExit exit = standbyLoop(run, reason, scanEnabled);
                 if (exit == StandbyExit.STOPPED) {
                     finish(run, RunStatus.CANCELLED, "CANCELLED", "用户主动停止");
                     return;
@@ -355,7 +380,7 @@ public class RunService {
                     // 挂起是「收起页面」，不是结束：状态已由 park 落库，finally 不会推 run.finished
                     return;
                 }
-                // RESCAN：状态已置回 RUNNING，回到循环顶部接着扫
+                // RESCAN：状态已置回 RUNNING，回到循环顶部接着扫（scanEnabled 为 false 时不会走到这里）
             }
         } catch (BlockedException e) {
             RunStatus status = switch (e.kind()) {
@@ -403,8 +428,10 @@ public class RunService {
      * 并行意味着两个线程交替操作同一批页面，历史上那正是「导航被打断成 net::ERR_ABORTED」的来源。
      *
      * <p>待命期不碰搜索页（不调 {@code openSearch}），{@code listPage} 保持上次扫描停在的位置。
+     *
+     * @param scanEnabled 本轮是否参与扫描，取自 {@code runLoop} 启动时那一次读取
      */
-    private StandbyExit standbyLoop(RunEntity run, StandbyGate.StopReason reason) {
+    private StandbyExit standbyLoop(RunEntity run, StandbyGate.StopReason reason, boolean scanEnabled) {
         int round = 0;
         long enteredAt = System.currentTimeMillis();
         boolean collectMetrics = configStore.aiConfig().getCollectEffectMetrics() != null
@@ -419,7 +446,10 @@ public class RunService {
                 return StandbyExit.STOPPED;
             }
 
-            // 每轮重读配置：配额、评估上限、巡检间隔都可能在待命期被改
+            // 每轮重读配置：配额、评估上限、巡检间隔都可能在待命期被改。
+            // 扫描开关故意不在这里重读：它在启动时定下「这一轮扫不扫」，重读会让
+            // 「循环要不要扫」（runLoop 的局部变量）与「能不能回扫」（这里的入参）分成两个值，
+            // 出现「发了回扫事件、状态改回 RUNNING，却没有真的去扫」。
             PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
             DutyWindow window = DutyWindow.of(cfg);
             LocalTime now = LocalTime.now();
@@ -428,7 +458,7 @@ public class RunService {
             int evaluated = runStore.evaluatedToday(run.getPlatform());
 
             StandbyGate.Action action = StandbyGate.decide(now, window, reason, run.getScanDay(), RunStore.today(),
-                    delivered, quota(cfg), evaluated, evalLimit(cfg));
+                    delivered, quota(cfg), evaluated, evalLimit(cfg), scanEnabled);
             if (action == StandbyGate.Action.PARK) {
                 park(run, "DUTY_END");
                 return StandbyExit.PARKED;
@@ -474,8 +504,12 @@ public class RunService {
     }
 
     /**
-     * 进入值守待命。三种扫描中止原因共用这一个出口 —— 分开写就会有人漏改一处，
+     * 进入值守待命。四种扫描中止原因共用这一个出口 —— 分开写就会有人漏改一处，
      * 而漏改的那一处正好是「配额用完就收工」的老行为。
+     *
+     * <p>{@link StandbyGate.StopReason#SCAN_DISABLED} 与其余三种不是一类事：其余三种是
+     * 「今天不扫了」，这一种是「从来没有扫」。所以横幅与通知标题都要另写一句，
+     * 沿用「扫描已结束（…）」会与实际不符，读日志的人会去翻组合表，而那张表是空的。
      */
     private void enterStandby(RunEntity run, StandbyGate.StopReason reason) {
         PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
@@ -483,20 +517,18 @@ public class RunService {
         int delivered = runStore.deliveredToday(run.getPlatform());
         int evaluated = runStore.evaluatedToday(run.getPlatform());
         StandbyGate.StopReason why0 = reason == null ? StandbyGate.StopReason.COMBOS_EXHAUSTED : reason;
-        String why = switch (why0) {
-            case QUOTA -> "今日主动投递配额已用完（" + delivered + "/" + quota(cfg) + "）";
-            case EVAL_LIMIT -> "今日评估已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
-            case COMBOS_EXHAUSTED -> "搜索组合已全部扫完";
-        };
+        String interval = intervalLabel(ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds()));
         String tail = window.alwaysOn()
                 ? "值守时段为全天，不会挂起"
                 : "到 " + DutyWindow.format(window.end()) + " 停止操作页面并挂起";
-        String message = "扫描已结束（" + why + "），值守继续：每 "
-                + intervalLabel(ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds()))
-                + "检查一次未读消息，" + tail;
+        boolean neverScanned = why0 == StandbyGate.StopReason.SCAN_DISABLED;
+        String message = neverScanned
+                ? "未启用扫描，本次只值守：每 " + interval + "检查一次未读消息，" + tail
+                : "扫描已结束（" + whyOf(why0, cfg, delivered, evaluated) + "），值守继续：每 "
+                + interval + "检查一次未读消息，" + tail;
 
         runStore.markStandby(run, message);
-        act(run, "值守待命：等下一轮巡检");
+        act(run, neverScanned ? "值守待命：该平台未启用扫描，只做巡检" : "值守待命：等下一轮巡检");
         log(run, "INFO", message);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("reason", why0.name());
@@ -504,7 +536,23 @@ public class RunService {
         data.put("evaluated", evaluated);
         data.put("quota", quota(cfg));
         publish(run, "run.standby", data);
-        notify(run, "standby", "扫描已结束，值守继续", message);
+        notify(run, "standby", neverScanned ? "未启用扫描，值守中" : "扫描已结束，值守继续", message);
+    }
+
+    /**
+     * 「扫描为什么停」的一句话，横幅与结束文案共用。
+     *
+     * <p>不共用就会出现两份「配额已用完 / 评估已达上限 / 组合已扫完」的措辞，改一处漏一处；
+     * 而那种漏改在日志里表现为同一件事有两种说法，排查时会当成两件事。
+     */
+    private String whyOf(StandbyGate.StopReason reason, PlatformConfigEntity cfg, int delivered, int evaluated) {
+        return switch (reason) {
+            case QUOTA -> "今日主动投递配额已用完（" + delivered + "/" + quota(cfg) + "）";
+            case EVAL_LIMIT -> "今日评估已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
+            case COMBOS_EXHAUSTED -> "搜索组合已全部扫完";
+            // 只值守的 Run 是从这里进待命的，横幅另写了文案；保留这一支是为了让 switch 覆盖全枚举
+            case SCAN_DISABLED -> "未启用扫描";
+        };
     }
 
     /**
@@ -603,6 +651,8 @@ public class RunService {
             case QUOTA -> "今日主动投递配额";
             case EVAL_LIMIT -> "今日评估上限";
             case COMBOS_EXHAUSTED -> "组合耗尽";
+            // 单独文案在 executeCombinations 里：那里「留待回扫时继续」这半句不成立，不能复用整句
+            case SCAN_DISABLED -> "未启用扫描";
         };
     }
 
@@ -610,7 +660,11 @@ public class RunService {
      * 演练模式跑完即结束，不进入待命。
      *
      * <p>演练会真点开会话清红点，整夜待命会把第二天的未读消息提前标记为已读 —— 那会让演练本身失真。
-     * 三种中止原因在演练下都收敛成 {@code COMPLETED}，与改造前的行为一致。
+     * 三个中止原因在演练下都收敛成 {@code COMPLETED}，与改造前的行为一致。
+     *
+     * <p>{@code SCAN_DISABLED} 在这里只有一个来源：跑到一半扫描被关掉。启动时就没开扫描的那个
+     * 分支在 {@code runLoop} 入口直接收尾，走不到这里 —— 所以两者文案不同，前者不能说
+     * 「没有可演练的内容」，它已经演练过几张卡了。
      */
     private void finishDryRun(RunEntity run, StandbyGate.StopReason stop) {
         switch (stop == null ? StandbyGate.StopReason.COMBOS_EXHAUSTED : stop) {
@@ -618,6 +672,8 @@ public class RunService {
                     "演练模式：今日主动投递配额已用完，演练结束（不进入待命）");
             case EVAL_LIMIT -> finish(run, RunStatus.COMPLETED, "EVAL_LIMIT_REACHED",
                     "演练模式：今日评估已达上限，演练结束（不进入待命）");
+            case SCAN_DISABLED -> finish(run, RunStatus.COMPLETED, "SCAN_DISABLED",
+                    "演练模式：扫描已在运行中被关闭，演练结束（不进入待命）");
             case COMBOS_EXHAUSTED -> finish(run, RunStatus.COMPLETED, "COMPLETED", "组合队列已跑完");
         }
     }
@@ -633,6 +689,13 @@ public class RunService {
             }
             awaitResume(run);
             CombinationRunEntity combo = combos.get(i);
+            // 组合入口也要判扫描开关，而不是只判卡片边界：再往下一步就是 openSearch，
+            // 关掉扫描之后不得再有任何搜索页导航（spec 0005 §3.5）。放在「开始组合」之前，
+            // 所以关掉之后日志里不会再出现这一行 —— 验收时正是看它。
+            if (!configStore.platformScanEnabled(run.getPlatform())) {
+                log(run, "INFO", "该平台已关闭扫描，停止扫描；组合 #" + combo.getSeq() + " 未开始");
+                return StandbyGate.StopReason.SCAN_DISABLED;
+            }
             long comboStartedAt = System.currentTimeMillis();
             combo.setStatus("RUNNING");
             combo.setStartedAt(ConfigStore.now());
@@ -659,8 +722,13 @@ public class RunService {
                     // 配额 / 评估到顶：这个组合没跑完，既不能记 DONE，也不能推进断点 ——
                     // 待命期配额被调高后要回到这张卡继续，而不是从下一个组合重来
                     combo.setStatus("SKIPPED");
-                    log(run, "INFO", "组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
-                            + "」处中止，剩余卡片留待回扫时继续");
+                    if (stop == StandbyGate.StopReason.SCAN_DISABLED) {
+                        // 「留待回扫时继续」在这里不成立：关掉扫描的 Run 不会被 StandbyGate 送回扫描
+                        log(run, "INFO", "组合 #" + combo.getSeq() + " 中止：该平台已关闭扫描，剩余卡片不再处理");
+                    } else {
+                        log(run, "INFO", "组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
+                                + "」处中止，剩余卡片留待回扫时继续");
+                    }
                     return stop;
                 }
 
@@ -711,6 +779,14 @@ public class RunService {
             // 卡片边界是唯一可靠的收工点：这里之前的所有动作要么不发消息，要么已经发完了
             if (checkDutyWindow(run, cfg)) {
                 return null;
+            }
+            // 扫描开关也在卡片边界生效，与配额同一处：这是「上一张卡已经处理完」之后第一个安全点，
+            // 半条招呼语比晚几秒停止更糟。这里必须返回 SCAN_DISABLED 而不是 null ——
+            // executeCombinations 把 null 当作「这个组合超时」，会推进到下一个组合继续导航。
+            // 读配置而不读 runLoop 里的局部变量：那个值只在启动时读一次，运行中关掉不会变。
+            if (!configStore.platformScanEnabled(run.getPlatform())) {
+                log(run, "INFO", "该平台已关闭扫描，在第 " + (card + 1) + " 张卡前停止；值守继续");
+                return StandbyGate.StopReason.SCAN_DISABLED;
             }
             // 配额与评估上限的检查位置不变（卡片边界）—— 那里之前的所有动作要么不发消息，
             // 要么已经发完，是唯一可靠的断点。命中后只中止扫描：值守照旧（spec 0003 3.2）。

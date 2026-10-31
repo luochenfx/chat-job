@@ -339,6 +339,63 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
 被写成默认值，已按 `data/backup/chat-job-before-p1-verify.db` 与 `run_log` 里的实际运行记录（组合
 「福州 / java」、配额 30/30、时段 09:00–19:00）逐项恢复。控制台一直是整份对象 PUT，不受影响。
 
+**P1 实施记录（2026-11-01，真实服务 + 真实库 + 真实浏览器）**
+
+落点：
+
+| 文件 | 实际改动 |
+|---|---|
+| `StandbyGate` | `StopReason` 加 `SCAN_DISABLED`；`decide` 尾加 `scanEnabled`，第 2 条判定放在 `PARK` 之后、跨日之前 |
+| `RunService.start` | 关闭扫描时不生成组合（`plan` 不调用），并跳过「搜索条件为空」校验 |
+| `RunService.runLoop` | 启动时读一次 `scanEnabled`；为 false 时 `DRY_RUN` 直接 `finish(COMPLETED / SCAN_DISABLED)`，否则 `enterStandby(SCAN_DISABLED)`；循环内扫描段整段包在 `if (scanEnabled)` 里；`reason` 变量提到循环外 |
+| `RunService.standbyLoop` | 新参数 `scanEnabled` 透传给 `decide` |
+| `RunService.executeCombinations` | 组合循环顶部（写「开始组合」之前）判开关，返回 `SCAN_DISABLED` |
+| `RunService.processCards` | 卡片边界（时段检查之后、配额之前）判开关，返回 `SCAN_DISABLED` |
+| `RunService.enterStandby` | 抽出 `whyOf`；`SCAN_DISABLED` 用另一句横幅与通知标题 |
+| `RunService.stopLabel` / `finishDryRun` | 各补 `SCAN_DISABLED` 一支；`finishDryRun` 的文案与入口分支分开写 |
+| `StandbyGateTest` | 既有 8 处调用尾部补 `true`；新增 3 例 |
+
+取证（`java -jar server/target/chat-job.jar --server.port=8099`，库为 `data/chat-job.db`）：
+
+- Flyway：`Current version of schema "main": 14` → `up to date. No migration necessary`（P1 无新迁移）；
+- **验收 9**（演练 + 扫描关）：run 48 → `COMPLETED / SCAN_DISABLED`，`combination_run` 0 行，日志只有 3 行，
+  无「开始扫描」「开始组合」，末行为「演练模式：该平台未启用扫描，没有可演练的内容」；
+- **验收 1**（只值守，正常模式）：run 49 / 51 / 53 → `STANDBY`，横幅「未启用扫描，本次只值守：每 30 秒检查
+  一次未读消息，到 23:59 停止操作页面并挂起」，`combination_run` 0 行；run 51 的 SSE 抓到
+  `run.standby {"reason":"SCAN_DISABLED","delivered":0,"evaluated":0,"quota":30}`；
+- **验收 3**（不回扫）：run 51 的 `scan_day` 在内存里是 null（只值守时的正常值，也是 R2 的触发条件），
+  同时把库里的 `scan_day` 手工改成 `2026-10-31`；下一轮仍是巡检，没有「已跨自然日…恢复扫描」，
+  状态仍 `STANDBY`，库里的 `scan_day` 也没有被 `ensureScanDay` 覆盖 —— 说明整个循环没有进入扫描分支；
+- **验收 5**（运行中关扫描）：run 50 / 52 都是扫描进行中（组合 #0 已 `openSearch` + `scrollUntilEnd`，
+  300 张卡 / 40 轮）把开关关掉，日志顺序为
+  「该平台已关闭扫描，在第 1 张卡前停止；值守继续」→「组合 #0 中止：该平台已关闭扫描，剩余卡片不再处理」，
+  没有进入第 2 个组合，`combination_run.evaluated = 0`。演练模式按 `finishDryRun` 收尾为
+  `COMPLETED / SCAN_DISABLED`；
+- **验收 10**（时段外启动）：run 54 的值守时段临时设为 `02:50–23:59`，02:46 启动 → `WAITING_DUTY`；
+  02:50 由调度唤醒 → 直接 `STANDBY`，日志无「开始扫描」；
+- 页面（bsk 观测 boss profile 那个实例的标签页）：扫描关时标签页是 `zhipin.com/web/geek/chat`；
+  扫描开时是 `zhipin.com/web/geek/jobs?city=101230100&salary=405&query=java`。只值守期间没有
+  `/web/geek/jobs` 的新导航；`threadPage` 每轮巡检结束就关闭，所以会话页标签是瞬时的，
+  观测窗口要落在巡检过程中；
+- 全量单测 **273 例通过**（`StandbyGateTest` +3）。
+
+实施中确认、并决定写进代码注释的两条边界：
+
+1. **扫描开关只在启动时读一次。** 只值守的 Run 在运行中把扫描打开，本轮仍然不扫，要重新启动。
+   反过来（扫描开着时关掉）由组合入口与卡片边界即刻生效。这样做的理由是让「循环要不要扫」
+   与「`StandbyGate` 能不能回扫」始终是同一个值，否则会出现「发了 `run.rescan`、状态改回 `RUNNING`，
+   却没有真的去扫」。
+2. **停止请求在巡检轮次内不抢占。** run 49 点停止后约 30 秒才落 `CANCELLED`，因为那一刻正在一轮
+   涵盖 40 个会话的巡检里。与扫描期的「卡片边界」是同一约定：手上这一轮做完再停。
+
+本次未取证的验收项，如实记录：
+
+- 5.2 第 2 条「给 HR 发一条消息 → 在巡检间隔内被回复」需要对方真的发消息进来，本次只取到巡检本身
+  的证据（日志「值守待命第 N 轮：会话 40，回复 0」），「被回复」这一环没有现场证据；
+- 5.2 第 4、6 条属 P2（关闭值守），本次未实现；
+- 控制台的徽标、`—` 口径、任务页提示属 P3，本次未改，`task.vue` 的 `describe()` 暂时还显示不出
+  `SCAN_DISABLED` 这个新原因。
+
 ### 4.3 测试
 
 沿用既有口径：**不用 mock 框架，hand-written fakes**。

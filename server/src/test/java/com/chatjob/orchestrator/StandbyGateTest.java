@@ -12,6 +12,7 @@ import static com.chatjob.orchestrator.StandbyGate.Action.WATCH;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.COMBOS_EXHAUSTED;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.EVAL_LIMIT;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.QUOTA;
+import static com.chatjob.orchestrator.StandbyGate.StopReason.SCAN_DISABLED;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -29,19 +30,19 @@ class StandbyGateTest {
 
     @Test
     void 配额用完且在时段内_继续待命() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, 30, 30, 80, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, 30, 30, 80, 150, true))
                 .isEqualTo(WATCH);
     }
 
     @Test
     void 配额被调高_回扫() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, 30, 35, 80, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, 30, 35, 80, 150, true))
                 .isEqualTo(SCAN);
     }
 
     @Test
     void 评估上限被调高_回扫() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, EVAL_LIMIT, TODAY, TODAY, 12, 30, 150, 200))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, EVAL_LIMIT, TODAY, TODAY, 12, 30, 150, 200, true))
                 .isEqualTo(SCAN);
     }
 
@@ -51,27 +52,51 @@ class StandbyGateTest {
      */
     @Test
     void 组合已扫完_即使还有配额也不回扫() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, TODAY, TODAY, 3, 30, 40, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, TODAY, TODAY, 3, 30, 40, 150, true))
                 .isEqualTo(WATCH);
     }
 
     @Test
     void 跨自然日_无论如何回扫() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, YESTERDAY, TODAY, 30, 30, 150, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, YESTERDAY, TODAY, 30, 30, 150, 150, true))
                 .isEqualTo(SCAN);
     }
 
     /** 从没扫过（scan_day 为空的旧数据）等同于跨日：要扫，但不复位组合队列 */
     @Test
     void 扫描日为空_按新的一天回扫() {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, null, TODAY, 0, 30, 0, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, null, TODAY, 0, 30, 0, 150, true))
                 .isEqualTo(SCAN);
     }
 
     /** 时段外不操作页面是硬约束，优先级高于「配额刚被调高」 */
     @Test
     void 时段外_挂起优先于一切() {
-        assertThat(StandbyGate.decide(LocalTime.of(23, 30), WINDOW, QUOTA, TODAY, TODAY, 0, 30, 0, 150))
+        assertThat(StandbyGate.decide(LocalTime.of(23, 30), WINDOW, QUOTA, TODAY, TODAY, 0, 30, 0, 150, true))
+                .isEqualTo(PARK);
+    }
+
+    /**
+     * 只值守的 Run 的 {@code scan_day} 一直是 null，而 null 在上面那行等价于跨日。
+     * 不拦住这一条，它第一次待命循环就会转去扫描 —— 这正是扫描开关最容易失效的地方。
+     */
+    @Test
+    void 扫描关闭_扫描日为空也不回扫() {
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, SCAN_DISABLED, null, TODAY, 0, 30, 0, 150, false))
+                .isEqualTo(WATCH);
+    }
+
+    /** 扫描关闭时配额被调高也不回扫：投递是扫描的一部分，不扫就没有配额可谈 */
+    @Test
+    void 扫描关闭_配额被调高也不回扫() {
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, 30, 35, 80, 150, false))
+                .isEqualTo(WATCH);
+    }
+
+    /** 扫描关闭不改变挂起规则：时段外仍然收起页面，第 1 条优先于第 2 条 */
+    @Test
+    void 扫描关闭_时段外仍挂起() {
+        assertThat(StandbyGate.decide(LocalTime.of(23, 30), WINDOW, SCAN_DISABLED, TODAY, TODAY, 0, 30, 0, 150, false))
                 .isEqualTo(PARK);
     }
 
@@ -82,7 +107,7 @@ class StandbyGateTest {
     @ParameterizedTest(name = "已投递 {0} / 配额 {1} → WATCH")
     @CsvSource({"30, 20", "30, 30"})
     void 配额持平或调小_继续待命(int delivered, int quota) {
-        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, delivered, quota, 0, 150))
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, QUOTA, TODAY, TODAY, delivered, quota, 0, 150, true))
                 .isEqualTo(WATCH);
     }
 }
