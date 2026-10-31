@@ -611,7 +611,7 @@ class UnreadWatcherTest {
         boolean toneCheck = true;
 
         FakeConfig(boolean enabled) {
-            super(null, null, null, null, new ObjectMapper());
+            super(null, null, null, null, null, new ObjectMapper());
             this.enabled = enabled;
         }
 

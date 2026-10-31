@@ -22,7 +22,7 @@ class ConfigStoreTest {
      * 读的是库里的行，而「没配过时的默认值」本身就与库无关。
      */
     private static ConfigStore store() {
-        return new ConfigStore(null, null, null, null, new ObjectMapper());
+        return new ConfigStore(null, null, null, null, null, new ObjectMapper());
     }
 
     @Test

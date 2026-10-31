@@ -3,10 +3,12 @@ package com.chatjob.store;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.chatjob.store.entity.AiConfigEntity;
 import com.chatjob.store.entity.BlacklistEntity;
+import com.chatjob.store.entity.NotifyConfigEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.ProviderEntity;
 import com.chatjob.store.mapper.AiConfigMapper;
 import com.chatjob.store.mapper.BlacklistMapper;
+import com.chatjob.store.mapper.NotifyConfigMapper;
 import com.chatjob.store.mapper.PlatformConfigMapper;
 import com.chatjob.store.mapper.ProviderMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -118,17 +120,20 @@ public class ConfigStore {
 
     private final PlatformConfigMapper platformConfigMapper;
     private final AiConfigMapper aiConfigMapper;
+    private final NotifyConfigMapper notifyConfigMapper;
     private final ProviderMapper providerMapper;
     private final BlacklistMapper blacklistMapper;
     private final ObjectMapper json;
 
     public ConfigStore(PlatformConfigMapper platformConfigMapper,
                        AiConfigMapper aiConfigMapper,
+                       NotifyConfigMapper notifyConfigMapper,
                        ProviderMapper providerMapper,
                        BlacklistMapper blacklistMapper,
                        ObjectMapper json) {
         this.platformConfigMapper = platformConfigMapper;
         this.aiConfigMapper = aiConfigMapper;
+        this.notifyConfigMapper = notifyConfigMapper;
         this.providerMapper = providerMapper;
         this.blacklistMapper = blacklistMapper;
         this.json = json;
@@ -527,6 +532,39 @@ public class ConfigStore {
             return DEFAULT_AI_REPLY_MAX_PER_SWEEP;
         }
         return Math.min(configured, MAX_AI_REPLY_MAX_PER_SWEEP);
+    }
+
+    // ------------------------------------------------------------ 告警配置
+
+    /**
+     * 告警配置，<b>没有就落一行默认值</b>，与 {@link #aiConfig()} 同一口径。
+     *
+     * <p>读它的有两类人：控制台（三个开关 + 「配没配」）与通知器（每次发送前取地址）。
+     * 两类都需要这一行存在，所以这里直接建，不像平台配置那样分「读写」和「只看一眼」两条路。
+     */
+    public NotifyConfigEntity notifyConfig() {
+        List<NotifyConfigEntity> list = notifyConfigMapper.selectList(Wrappers.emptyWrapper());
+        if (!list.isEmpty()) {
+            return list.get(0);
+        }
+        NotifyConfigEntity created = new NotifyConfigEntity();
+        created.setWecomWebhookCipher("");
+        created.setAlertAbnormal(1);
+        created.setAlertStandby(1);
+        created.setAlertDutyEnd(1);
+        created.setUpdatedAt(now());
+        notifyConfigMapper.insert(created);
+        log.info("已创建告警配置默认值");
+        return created;
+    }
+
+    public void saveNotifyConfig(NotifyConfigEntity entity) {
+        entity.setUpdatedAt(now());
+        if (entity.getId() == null) {
+            notifyConfigMapper.insert(entity);
+        } else {
+            notifyConfigMapper.updateById(entity);
+        }
     }
 
     // ------------------------------------------------------------ 提供商

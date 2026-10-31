@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>系统</h1>
-        <p>浏览器与登录状态、消息通知、数据清理</p>
+        <p>浏览器与登录状态、告警通知、数据清理</p>
       </div>
       <button class="btn" :disabled="busy" @click="load">刷新</button>
     </div>
@@ -135,13 +135,82 @@
         </div>
       </div>
 
+      <!--
+        「告警通知」而不是「消息通知」：这里发的是系统自己的事（没跑起来、登录失效、
+        进入待命、时段结束），与值守时要处理的 HR 消息是两件事。旧名字会让人以为
+        「HR 发来消息时会提醒我」，而那个功能并没有做（CONTEXT.md「告警」词条）。
+      -->
       <div class="card">
-        <h2>消息通知</h2>
+        <h2>告警通知</h2>
         <p class="hint">
-          通过企业微信群机器人发送；没有配置时只写日志。同类消息 5 分钟内会合并成一条，
-          正文里会写明是哪个平台
+          通过企业微信群机器人发到手机。没配置时告警只写运行日志，手机上收不到。
+          同类消息 {{ throttleText }}内合并成一条，正文里会写明是哪个平台
         </p>
-        <button class="btn" :disabled="busy" @click="testNotify">发送测试消息</button>
+
+        <div class="notify-status">
+          <span class="tag" :class="notify.configured ? 'ok' : 'warn'">{{ statusLabel }}</span>
+          <span class="hint-inline" :style="notify.source === 'broken' ? 'color: var(--danger)' : ''">
+            {{ sourceLabel }}
+          </span>
+        </div>
+
+        <div class="field">
+          <label for="wecom-webhook">企业微信群机器人 Webhook</label>
+          <input
+            id="wecom-webhook"
+            v-model="notifyForm.webhook"
+            type="text"
+            spellcheck="false"
+            placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"
+          />
+          <div class="desc">
+            已保存的地址不会显示在框里。留空表示不改动，要换地址才需要填
+          </div>
+        </div>
+
+        <!-- 三组开关：异常要人处理，待命与时段结束每天必然发生，能单独关掉才不会
+             逼着人把整个告警静音（关了就等于出事也没人知道） -->
+        <div class="switches">
+          <label class="switch" title="任务没跑起来或跑挂了：驱动不可用、自检未通过、登录失效、熔断、异常终止">
+            <input v-model="notifyForm.alertAbnormal" type="checkbox" />
+            <span>异常告警<b>{{ notifyForm.alertAbnormal ? '开' : '关' }}</b></span>
+          </label>
+          <label class="switch" title="扫描结束、值守继续。每天一次">
+            <input v-model="notifyForm.alertStandby" type="checkbox" />
+            <span>进入待命<b>{{ notifyForm.alertStandby ? '开' : '关' }}</b></span>
+          </label>
+          <label class="switch" title="值守时段结束，当天不再操作页面。每天一次">
+            <input v-model="notifyForm.alertDutyEnd" type="checkbox" />
+            <span>时段结束<b>{{ notifyForm.alertDutyEnd ? '开' : '关' }}</b></span>
+          </label>
+        </div>
+
+        <div class="row wrap" style="margin-top: 16px">
+          <button class="btn" :disabled="busy || !notifyDirty" @click="saveNotify">保存</button>
+          <!-- 测试发的是「已保存的地址」，框里还有没保存的内容时按钮没有意义 -->
+          <button
+            class="btn"
+            :disabled="busy || webhookPending || !notify.configured"
+            :title="webhookPending ? '先把上面填的地址保存下来' : ''"
+            @click="testNotify"
+          >
+            发送测试消息
+          </button>
+          <!-- 只在地址来自控制台时给清除：地址来自配置文件时，清库什么也不会变 -->
+          <button
+            v-if="notify.source === 'db'"
+            class="btn danger"
+            :disabled="busy"
+            @click="clearWebhook"
+          >
+            清除地址
+          </button>
+        </div>
+        <div v-if="webhookPending" class="hint-inline" style="margin-top: 8px">
+          上面填的地址还没保存，测试按钮发的是已保存的那一个
+        </div>
+
+        <div class="hint-inline" style="margin-top: 12px">{{ lastDeliveryText }}</div>
       </div>
     </div>
 
@@ -208,6 +277,68 @@ const checks = reactive<Record<string, any>>({})
 const cleanupResult = ref<any>(null)
 const busy = ref(false)
 
+/**
+ * 告警配置。`notify` 是服务端说的生效状态（含「地址来自配置文件」这种来源信息），
+ * `notifyForm` 是表单。两者分开：输入框里是「准备保存的地址」，它永远不从服务端回填 ——
+ * 地址里带 key，回显就等于把凭据交给页面、截图和浏览器缓存。
+ */
+const notify = ref<any>({
+  configured: false,
+  source: 'none',
+  alertAbnormal: true,
+  alertStandby: true,
+  alertDutyEnd: true,
+  throttleWindowSeconds: 300,
+  lastDelivery: null
+})
+const notifyForm = reactive({
+  webhook: '',
+  alertAbnormal: true,
+  alertStandby: true,
+  alertDutyEnd: true
+})
+
+/** 框里有内容＝有没保存的地址。测试按钮此时发的是旧地址，必须挡住 */
+const webhookPending = computed(() => notifyForm.webhook.trim() !== '')
+
+const notifyDirty = computed(
+  () =>
+    webhookPending.value ||
+    notifyForm.alertAbnormal !== notify.value.alertAbnormal ||
+    notifyForm.alertStandby !== notify.value.alertStandby ||
+    notifyForm.alertDutyEnd !== notify.value.alertDutyEnd
+)
+
+const statusLabel = computed(() => {
+  if (notify.value.configured) return '已配置'
+  return notify.value.source === 'broken' ? '配置已失效' : '未配置'
+})
+
+const sourceLabel = computed(() => {
+  switch (notify.value.source) {
+    case 'db':
+      return '地址来自控制台'
+    case 'yaml':
+      // 说得具体一点：用户改的是这里，但生效的是文件里那份
+      return '地址来自 application.yaml（或启动参数），在下面保存会覆盖它'
+    case 'broken':
+      return '已保存的地址解不开（可能换了 Windows 账户或电脑），请重新填写'
+    default:
+      return '还没有地址，告警只写运行日志'
+  }
+})
+
+const throttleText = computed(() => {
+  const seconds = Number(notify.value.throttleWindowSeconds || 300)
+  return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`
+})
+
+const lastDeliveryText = computed(() => {
+  const d = notify.value.lastDelivery
+  if (!d) return '本次启动后还没有发送过告警'
+  return `最近一次发送：${d.at} · ${d.sent ? '成功' : '没发出去'} · ${d.detail}`
+})
+
 const cards = computed<any[]>(() => overview.value?.platforms || [])
 /** driver 是两平台共用的一份，指标准取全局条；取不到再退回 status */
 const driverReady = computed<boolean>(() => {
@@ -225,14 +356,28 @@ async function load() {
   busy.value = true
   try {
     await ensure().catch(() => {})
-    const [s, o] = await Promise.all([call('/system/status'), call('/system/overview')])
+    const [s, o, n] = await Promise.all([
+      call('/system/status'),
+      call('/system/overview'),
+      call('/config/notify')
+    ])
     status.value = s
     overview.value = o
+    applyNotify(n)
   } catch (e: any) {
     show(e.message, true)
   } finally {
     busy.value = false
   }
+}
+
+function applyNotify(n: any) {
+  notify.value = n
+  // 开关按服务端的值回填（它才是生效值），地址永不回填
+  notifyForm.alertAbnormal = n?.alertAbnormal !== false
+  notifyForm.alertStandby = n?.alertStandby !== false
+  notifyForm.alertDutyEnd = n?.alertDutyEnd !== false
+  notifyForm.webhook = ''
 }
 
 async function runSelfCheck(platform: string) {
@@ -285,8 +430,45 @@ function labelOf(platform: string) {
 async function testNotify() {
   busy.value = true
   try {
-    await call('/system/notify-test', { method: 'POST' })
-    show('已发送（没有配置企业微信机器人时只写日志）')
+    const res = await call('/system/notify-test', { method: 'POST' })
+    // 服务端回的是「这次到底发出去了没有」，不再无条件报成功
+    show(res?.message || (res?.delivered ? '已发送' : '没有发出去'), !res?.delivered)
+    await load()
+  } catch (e: any) {
+    show(e.message, true)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function saveNotify() {
+  busy.value = true
+  try {
+    const body: any = {
+      alertAbnormal: notifyForm.alertAbnormal,
+      alertStandby: notifyForm.alertStandby,
+      alertDutyEnd: notifyForm.alertDutyEnd
+    }
+    // 留空＝不修改：不把空串发上去，接口那边也按同样口径处理
+    const webhook = notifyForm.webhook.trim()
+    if (webhook) body.webhook = webhook
+    await call('/config/notify', { method: 'PUT', body })
+    show('已保存')
+    await load()
+  } catch (e: any) {
+    show(e.message, true)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function clearWebhook() {
+  if (!confirm('清除已保存的 Webhook 地址？清除后告警只写运行日志，手机上收不到。')) return
+  busy.value = true
+  try {
+    await call('/config/notify/webhook', { method: 'DELETE' })
+    show('已清除')
+    await load()
   } catch (e: any) {
     show(e.message, true)
   } finally {
@@ -317,5 +499,29 @@ onMounted(load)
   border: 1px solid #e8cdc7;
   border-radius: var(--radius);
   background: var(--danger-soft);
+}
+
+/* 状态一行、来源一行：挤在同一行时来源那句会被压成三四行，标签被挤成竖条 */
+.notify-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+/* 三枚开关一组：与配置页的三个平台开关同一观感，间距比卡片外的小，
+   读起来是「同一组状态」而不是三个独立选项 */
+.switches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.switches b {
+  margin-left: 5px;
+  font-weight: 500;
+  color: var(--ink);
 }
 </style>

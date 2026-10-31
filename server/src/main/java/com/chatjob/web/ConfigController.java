@@ -2,6 +2,8 @@ package com.chatjob.web;
 
 import com.chatjob.config.SecretCipher;
 import com.chatjob.driver.BrowserSessions;
+import com.chatjob.notify.Notifier;
+import com.chatjob.notify.NotifySettings;
 import com.chatjob.orchestrator.DutyWindow;
 import com.chatjob.orchestrator.RunStatus;
 import com.chatjob.orchestrator.RunStore;
@@ -9,6 +11,7 @@ import com.chatjob.platform.PlatformSwitches;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.AiConfigEntity;
+import com.chatjob.store.entity.NotifyConfigEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.ProviderEntity;
 import com.chatjob.watcher.AiReplier;
@@ -35,6 +38,7 @@ import java.util.Map;
  *
  * <p>API Key 永远不回发。接口只告诉你"配没配"，避免出现参考项目那种
  * 明文 Key 直接躺在 GET 响应里、再被浏览器缓存或截图带走的情况。
+ * 告警 webhook 同理 —— 它带 key，拿到就能往群里发任意消息。
  */
 @Slf4j
 @RestController
@@ -47,16 +51,21 @@ public class ConfigController {
     private final ObjectMapper json;
     private final RunStore runStore;
     private final BrowserSessions sessions;
+    private final NotifySettings notifySettings;
+    private final Notifier notifier;
 
     public ConfigController(ConfigStore configStore, OptionStore optionStore,
                             SecretCipher cipher, ObjectMapper json,
-                            RunStore runStore, BrowserSessions sessions) {
+                            RunStore runStore, BrowserSessions sessions,
+                            NotifySettings notifySettings, Notifier notifier) {
         this.configStore = configStore;
         this.optionStore = optionStore;
         this.cipher = cipher;
         this.json = json;
         this.runStore = runStore;
         this.sessions = sessions;
+        this.notifySettings = notifySettings;
+        this.notifier = notifier;
     }
 
     // ---------------------------------------------------------------- 提供商
@@ -219,6 +228,82 @@ public class ConfigController {
         out.put("ok", true);
         out.put("toneTermsDropped", droppedTerms);
         return out;
+    }
+
+    // ---------------------------------------------------------------- 告警配置
+
+    public record NotifyConfigBody(String webhook, Boolean alertAbnormal,
+                                   Boolean alertStandby, Boolean alertDutyEnd) {
+    }
+
+    /**
+     * 告警配置 + 当前生效状态。
+     *
+     * <p>回的是「生效值」而不是「库里那行」：库为空时生效值是 application.yaml 里那份，
+     * 两者混为一谈就会出现「页面说未配置、实际还在往老群发」。{@code source} 就是用来说清这件事的。
+     */
+    @GetMapping("/notify")
+    public Map<String, Object> notifyConfig() {
+        NotifyConfigEntity entity = configStore.notifyConfig();
+        NotifySettings.Resolved resolved = notifySettings.resolve();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("configured", resolved.configured());
+        out.put("source", resolved.source().name().toLowerCase(java.util.Locale.ROOT));
+        // 三个开关按「null 即开」回发，与 ConfigStore 的读法一致
+        out.put("alertAbnormal", entity.getAlertAbnormal() == null || entity.getAlertAbnormal() != 0);
+        out.put("alertStandby", entity.getAlertStandby() == null || entity.getAlertStandby() != 0);
+        out.put("alertDutyEnd", entity.getAlertDutyEnd() == null || entity.getAlertDutyEnd() != 0);
+        // 节流窗口只读：它是「防刷屏」的实现手段，用户要控制的是上面三个开关。
+        // 但要回发给界面，否则提示文案里那句「5 分钟」在 yaml 改成别的值之后就是假话
+        out.put("throttleWindowSeconds", notifySettings.throttleWindowSeconds());
+        Notifier.Delivery delivery = notifier.lastDelivery();
+        if (delivery == null) {
+            // 不用 Map.of：它的值不允许 null，detail 万一为空会在这里抛 NPE，
+            // 把「还没发过」变成 500，反而是最难排查的那种
+            out.put("lastDelivery", null);
+        } else {
+            Map<String, Object> last = new LinkedHashMap<>();
+            last.put("at", delivery.at());
+            last.put("sent", delivery.sent());
+            last.put("detail", delivery.detail());
+            out.put("lastDelivery", last);
+        }
+        return out;
+    }
+
+    /**
+     * 保存告警配置。
+     *
+     * <p>webhook 不回显，所以「没传」与「传空串」都表示<b>不修改</b> —— 删除走
+     * {@code DELETE /notify/webhook}。用空串编码「清除」会把「用户没动这个框」和
+     * 「用户要删掉地址」压成同一件事。
+     */
+    @PutMapping("/notify")
+    public Map<String, Object> saveNotifyConfig(@RequestBody NotifyConfigBody body) {
+        NotifyConfigEntity entity = configStore.notifyConfig();
+        if (body.webhook() != null && !body.webhook().isBlank()) {
+            entity.setWecomWebhookCipher(cipher.encrypt(NotifySettings.requireWebhookUrl(body.webhook())));
+        }
+        if (body.alertAbnormal() != null) {
+            entity.setAlertAbnormal(body.alertAbnormal() ? 1 : 0);
+        }
+        if (body.alertStandby() != null) {
+            entity.setAlertStandby(body.alertStandby() ? 1 : 0);
+        }
+        if (body.alertDutyEnd() != null) {
+            entity.setAlertDutyEnd(body.alertDutyEnd() ? 1 : 0);
+        }
+        configStore.saveNotifyConfig(entity);
+        return Map.of("ok", true, "configured", notifySettings.configured());
+    }
+
+    @DeleteMapping("/notify/webhook")
+    public Map<String, Object> clearWebhook() {
+        NotifyConfigEntity entity = configStore.notifyConfig();
+        entity.setWecomWebhookCipher("");
+        configStore.saveNotifyConfig(entity);
+        log.info("告警 webhook 已清除");
+        return Map.of("ok", true);
     }
 
     // ---------------------------------------------------------------- 平台配置

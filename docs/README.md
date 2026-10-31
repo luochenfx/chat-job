@@ -39,9 +39,10 @@
 | 值守回复 | 关键词规则 + 文案池、敏感词优先拦截；可选「AI 回复」开关（默认关）；出站四重校验；未读任务落库 → 退避重试 3 次 → `GAVE_UP`，控制台可手动重试 | `watcher/`（`UnreadWatcher`、`ReplyRuleEngine`、`AiReplier`、`ReplyGuard`、`UnreadTaskStore`） |
 | 自动发简历 | 仅当规则动作显式设为 `SEND_RESUME` 时点一次「发简历」，发完不补话；不交给 AI 决定。确认气泡是可选步骤（对方已索要过简历时不弹），成败一律看「简历卡片 +1（20 秒内）」 | `watcher/UnreadWatcher.java`、`BossAdapter.sendResume`、`web/ReplyRuleController.java` |
 | 可见的活动状态 | `current_action` / `last_activity_at` / `scan_day` 三列 + `staleAfterSeconds`：等待期间也写「在等什么」，前端据此区分「在等」与「无响应」 | `orchestrator/RunService.java`（`park()` / `act()`，均为私有）、`web/RunController.java`、`console/composables/useRunStatus.ts`、`console/composables/useActivity.ts` |
-| 通知与自检 | 企业微信群机器人告警（可节流，节流键含平台）、driver 指纹自检、登录态探测与扫码入口、数据清理 | `notify/`、`driver/SelfCheck.java`、`web/SystemController.java` |
+| 自检与登录 | driver 指纹自检、登录态探测与扫码入口、数据清理 | `driver/SelfCheck.java`、`web/SystemController.java` |
+| 告警通知 | 企业微信群机器人，地址在「系统」页配置（控制台保存即生效；留空则回落 `chat-job.notify-config.wecom-webhook`）。三个类别开关：异常 / 进入待命 / 时段结束，默认全开，测试消息不受约束。同类消息默认 5 分钟合并一条，节流键含平台；页面上能看到「最近一次发送」的结果 | `notify/`（`NotifySettings`、`AlertCategory`、`WecomRobotNotifier`）、`web/ConfigController.java`、`web/SystemController.java` |
 | 控制台 | 概览 / 任务 / 岗位 / 配置 / 系统 五页；概览按平台并排展示，其余页面单平台切换；任务页有 SSE 实时事件与运行日志。平台配置页把「平台启用 / 扫描 / 值守」三枚开关排成一组，只值守时扫描侧字段整组禁用并说明；概览卡标注「仅值守 / 仅扫描」，只值守平台的扫描侧计数显示 `—`。选中平台持久化优先级：URL `?platform=` → localStorage → 平台清单第一项 | `console/pages/`、`console/composables/usePlatform.ts`、`console/composables/useRunStream.ts`、`console/components/PlatformSwitch.vue` |
-| 凭据保护 | API Key 与 Cookie 密文落库（Windows 用 DPAPI，其他平台退化为 AES-GCM + 本地 key 文件），GET 接口只返回「是否已配置」 | `config/SecretCipher.java`、`web/ConfigController.java` |
+| 凭据保护 | API Key、Cookie 与告警 webhook 密文落库（Windows 用 DPAPI，其他平台退化为 AES-GCM + 本地 key 文件），GET 接口只返回「是否已配置」 | `config/SecretCipher.java`、`web/ConfigController.java` |
 
 **未接通项与容易误判的口径**（按 spec 或直觉判断容易出错的地方）：
 
@@ -107,7 +108,9 @@ web ── orchestrator ── evaluate ── platform(boss | zhaopin) ── d
 3. **本机安装 Chrome 或 Edge**。`chat-job.browser.channel=auto` 会按 chrome → msedge 探测，解析结果显示在「系统」页；也可在 `application.yaml` 里显式指定 `channel` 或 `executable-path`。
 4. **首次构建需联网**：`scripts/install-patchright.mjs` 用 `npm pack patchright-core@1.62.1` 下载 driver，`npm install` 也要拉 Nuxt 依赖；装好之后运行阶段不需要外网（除模型调用与平台访问）。
 5. 一个 BOSS 直聘账号（建议小号试跑），以及一个兼容 OpenAI Chat Completions 的模型服务（Base URL / 模型名 / API Key）。启用智联还需要为 `browser-data/zhaopin` 单独扫码登录一次——独立 profile 不与 Boss 共享登录态。
-6. 可选：企业微信群机器人 Webhook（填在 `chat-job.notify-config.wecom-webhook`，不填则通知被跳过）。
+6. 可选：企业微信群机器人 Webhook。在「系统」页「告警通知」里填，保存即生效；不填则告警只写运行日志。
+   也可以继续写在 `application.yaml`（`chat-job.notify-config.wecom-webhook`）或启动参数里——
+   库里没配时以那份为准，控制台保存后会覆盖它（ADR-0006）。
 
 > 第 2 条只针对**从源码构建**。绿色版自带 jlink JRE 与 node，对方机器只需要 Windows 10/11 + Edge 或 Chrome。
 
@@ -313,7 +316,7 @@ cd console && npm run build
 | 分组 | 接口 |
 |---|---|
 | 任务 | `POST /api/runs?platform=`（body `{"mode":"NORMAL"\|"DRY_RUN"}`）、`POST /api/runs/{id}/pause\|resume\|cancel`（只按 id 反查平台）、`GET /api/runs/current?platform=`、`GET /api/runs?limit=&platform=`、`GET /api/runs/{id}/events`（SSE）、`GET /api/runs/{id}/logs?afterId=&limit=` |
-| 配置 | `GET\|POST /api/config/providers`、`DELETE /api/config/providers/{id}`、`GET\|PUT /api/config/ai`、`GET\|PUT /api/config/platform/{platform}`（路径必填）、`GET /api/config/dictionary?platform=&type=`（两个参数必填）、`POST /api/config/dictionary/reload` |
+| 配置 | `GET\|POST /api/config/providers`、`DELETE /api/config/providers/{id}`、`GET\|PUT /api/config/ai`、`GET\|PUT /api/config/notify`（webhook 不回显，留空即不改）、`DELETE /api/config/notify/webhook`（清除地址）、`GET\|PUT /api/config/platform/{platform}`（路径必填）、`GET /api/config/dictionary?platform=&type=`（两个参数必填）、`POST /api/config/dictionary/reload` |
 | 岗位 | `GET /api/jobs?limit=&platform=`、`GET /api/jobs/{id}/deliveries`、`POST /api/jobs/{id}/reset`、`GET\|POST /api/blacklist`、`DELETE /api/blacklist/{id}` |
 | 值守 | `GET\|POST /api/reply/rules`、`DELETE /api/reply/rules/{id}`、`GET\|POST /api/reply/sensitive`、`DELETE /api/reply/sensitive/{id}`、`GET /api/reply/unmatched`、`GET /api/reply/logs`、`GET /api/watcher/stats`、`GET /api/watcher/unread-tasks`、`POST /api/watcher/unread-tasks/{id}/retry` |
 | 系统 | `GET /api/system/status?platform=`、`POST /api/system/self-check?platform=`、`POST /api/system/probe-login?platform=`、`POST /api/system/open-login?platform=`、`GET /api/system/platform?platform=`、`GET /api/system/platforms`（平台清单，来自 `PlatformInfo.KNOWN`）、`GET /api/system/overview`（概览页一次取全，含 `global` 与各 `platforms[]`）、`GET /api/system/counters?platform=`、`POST /api/system/notify-test`、`POST /api/system/cleanup` |

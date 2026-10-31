@@ -153,11 +153,26 @@ public class SystemController {
                 "hint", "已打开登录页，请在浏览器窗口里扫码；登录完成后点「检测登录状态」确认");
     }
 
+    /**
+     * 发一条测试消息。
+     *
+     * <p>回的是<b>这次到底发出去了没有</b>，不是「请求处理完了」。原来无论有没有配置
+     * 都返回 {@code ok:true}，用户点了按钮、看到成功、以为通了，实际一条都没发出去 ——
+     * 告警失效最典型的发现方式就是「出事那天才发现从来没配上」。
+     *
+     * <p>没配置不算错误：它不是客户端写错，也不是服务端坏了，是一种合法但没有效果的状态，
+     * 所以仍是 200，只是把原因说清楚。
+     */
     @PostMapping("/notify-test")
     public Map<String, Object> notifyTest() {
         notifier.notify("test", "chat-job 通知测试",
                 "如果你能看到这条消息，说明企业微信机器人配置正确。");
-        return Map.of("ok", true);
+        Notifier.Delivery delivery = notifier.lastDelivery();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("delivered", delivery != null && delivery.sent());
+        out.put("message", delivery == null ? "没有走到发送这一步" : delivery.detail());
+        return out;
     }
 
     public record CleanupBody(Integer scannedDays, Integer logDays) {
