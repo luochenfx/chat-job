@@ -265,6 +265,10 @@ public class SystemController {
         out.put("platform", platform);
         out.put("label", info.label());
         out.put("enabled", enabled(cfg));
+        // 两个开关随卡片一起下发：概览要标「仅值守 / 仅扫描」，若不在同一份快照里，
+        // 徽标会和状态栏读到不同时刻的配置（这张卡每 5 秒被轮询一次）
+        out.put("scanEnabled", on(cfg.getScanEnabled()));
+        out.put("watchEnabled", on(cfg.getWatchEnabled()));
         out.put("run", runCard(platform));
         // 两个数字口径不同，一个都不能省（ADR-0004）：delivered 只数主动投递，
         // resumeOnRequest 只数值守里应对方索要发出的简历。合并会让被动应答消耗主动投递配额
@@ -279,18 +283,27 @@ public class SystemController {
     }
 
     private Map<String, Object> descriptor(PlatformInfo.Info info) {
+        PlatformConfigEntity cfg = configStore.peekPlatformConfig(info.platform());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("platform", info.platform());
         out.put("label", info.label());
         out.put("filters", info.filters());
         out.put("note", info.note());
-        out.put("enabled", enabled(configStore.peekPlatformConfig(info.platform())));
+        out.put("enabled", enabled(cfg));
+        // 各页共用这份清单，概览徽标与任务页的启动提示都从这里取，不再单独请求配置
+        out.put("scanEnabled", on(cfg.getScanEnabled()));
+        out.put("watchEnabled", on(cfg.getWatchEnabled()));
         return out;
     }
 
     /** enabled 缺省按启用：与 {@code platform_config.enabled} 的建表默认值 1 一致 */
     private static boolean enabled(PlatformConfigEntity cfg) {
-        return cfg.getEnabled() == null || cfg.getEnabled() != 0;
+        return on(cfg.getEnabled());
+    }
+
+    /** platform_config 里的开关列都是 0/1，缺省按开：与各列的建表默认值 1 一致 */
+    private static boolean on(Integer flag) {
+        return flag == null || flag != 0;
     }
 
     private Map<String, Object> runCard(String platform) {

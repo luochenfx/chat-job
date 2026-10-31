@@ -61,6 +61,24 @@ public class PlatformSwitches {
                 + "也不会启动它的任务。要跑它请先在「配置 → 平台配置」里启用";
     }
 
+    /**
+     * 扫描与值守不能同时关闭（spec 0005 / ADR-0005 第 4 条）。
+     *
+     * <p>为什么拒绝而不是存下来：平台启用、扫描、值守全关之后，它与「停用」的差别只剩
+     * 浏览器没有被主动关掉（停用会关浏览器），保留这个状态只会让「停用」有两种写法。
+     * 报错里点名平台并指向平台开关，是因为这时要做的是「整体停用」，不是再调这两个开关。
+     *
+     * <p>与 {@link #disabledMessage} 放在同一个类里：两者都在做「开关 + 一句能照做的报错文案」，
+     * 分开会让同一类文案散到两个包。
+     */
+    public static void requireSomethingOn(String platform, boolean scanOn, boolean watchOn) {
+        if (!scanOn && !watchOn) {
+            throw new IllegalArgumentException("「" + PlatformInfo.of(platform).label()
+                    + "」的扫描与值守不能同时关闭：那样它启动后什么都不做。"
+                    + "要整体停用它，请用平台开关");
+        }
+    }
+
     /** 与 {@link PlatformAdapters#platformKey(String)} 同一套归一化：大小写与空格不该产生两个平台 */
     public static String key(String platform) {
         return platform == null ? "" : platform.trim().toLowerCase(Locale.ROOT);

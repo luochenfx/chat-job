@@ -6,9 +6,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 平台开关的判定（spec 0004 阶段 3）。
+ * 平台开关的判定（spec 0004 阶段 3、spec 0005）。
  *
- * <p>这里只测三件纯逻辑：缺省、拒绝时抛什么、文案里有没有平台名。
+ * <p>这里只测纯逻辑：缺省、拒绝时抛什么、文案里有没有平台名，以及扫描与值守不能同时关。
  * 「读到库里那一列」这件事不在这里测 —— 那是 {@code ConfigStore} 的活，
  * 打桩读配置只会把断言退化成「自己塞进去的值又读回来」。
  */
@@ -46,5 +46,24 @@ class PlatformSwitchesTest {
         assertThatThrownBy(() -> of(false).require(" BOSS "))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("BOSS 直聘");
+    }
+
+    @Test
+    void 扫描与值守都关_拒绝并指向平台开关() {
+        // 两者都关的平台启动后什么都不做，与「停用」只差浏览器没被关掉；
+        // 报错要能指向真正的处置动作（整体停用），否则收到报错的人只会去再调这两个开关
+        assertThatThrownBy(() -> PlatformSwitches.requireSomethingOn("zhaopin", false, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("智联招聘")
+                .hasMessageContaining("同时关闭")
+                .hasMessageContaining("平台开关");
+    }
+
+    @Test
+    void 只关一个_放行() {
+        // 三种合法组合都不该抛：只值守、只扫描、都开
+        PlatformSwitches.requireSomethingOn("boss", false, true);
+        PlatformSwitches.requireSomethingOn("boss", true, false);
+        PlatformSwitches.requireSomethingOn("boss", true, true);
     }
 }

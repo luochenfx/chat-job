@@ -15,7 +15,18 @@ public class PlatformConfigEntity {
     @TableId(type = IdType.AUTO)
     private Long id;
     private String platform;
+    /** 平台开关：这个平台能不能被启动。0 = 停用（关浏览器、不建 Run） */
     private Integer enabled;
+    /**
+     * 扫描开关（V14）：该平台是否加载岗位列表、执行投递判定、主动投递。
+     * 与 {@link #enabled} 互不派生 —— 后者管「能不能启动」，它管「启动之后扫不扫」。
+     */
+    private Integer scanEnabled;
+    /**
+     * 值守开关（V14）：该平台是否巡检未读、发消息、发简历。
+     * 关闭后平台侧的未读标记保持原样，不会出现「读过但不回」。
+     */
+    private Integer watchEnabled;
     private String cities;
     private String keywords;
     private String jobType;

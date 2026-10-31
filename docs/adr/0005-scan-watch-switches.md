@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted（2026-11-01，spec 0005；代码未实现）。
+accepted（2026-11-01，spec 0005）。实现进度：P0（`V14` 两列、`ConfigStore` 两个读法、`ConfigController` 读写与双关拒绝、`SystemController` 两个 DTO）已完成；P1–P3（开关真正改变运行行为、控制台）未实现。
 
 ## Context
 

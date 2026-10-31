@@ -225,6 +225,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 |---|---|---|
 | 缺省平台（调用方未传 `platform` 时） | `boss` | `chat-job.active-platform`（`application.yaml`，可用环境变量 `CHAT_JOB_ACTIVE_PLATFORM` 覆盖） |
 | 平台开关 | 启用 | `platform_config.enabled`（V1 建表即有，阶段 3 起真正生效） |
+| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。**本次只落数据与读写接口**：两列可读写、两个都关时拒绝保存；按开关改变运行行为属 spec 0005 的 P1–P3，尚未实现 |
 | 日投递配额 / 日评估上限 | 30 / 150（**每平台各一份**） | `platform_config`（V1） |
 | 卡片间隔基准 / 滚动轮上限 / 单组合时间上限 | 10 秒（实际随机 5–10 秒）/ 300 轮 / 1200 秒 | 同上 |
 | HR 活跃度下限 | 本月 | 同上 |
@@ -291,12 +292,12 @@ cd console && npm run build
 | [`spec/0002-ai-reply.md`](spec/0002-ai-reply.md) | 值守 AI 回复与实施记录（含出站四重校验） |
 | [`spec/0003-run-standby.md`](spec/0003-run-standby.md) | 值守期：扫描收工后值守继续 + 可见的运行态 |
 | [`spec/0004-zhaopin-parallel.md`](spec/0004-zhaopin-parallel.md) | 智联接入与多平台并行：阶段划分、实施记录与最终审查 |
-| [`spec/0005-scan-watch-switches.md`](spec/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（**代码未实现**） |
+| [`spec/0005-scan-watch-switches.md`](spec/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（**P0 已实现**：两列 + 读取方法 + 读写接口；P1–P3 未实现） |
 | [`adr/0001-patchright-as-playwright-driver.md`](adr/0001-patchright-as-playwright-driver.md) | 为什么用 patchright 当 playwright 的 driver |
 | [`adr/0002-standby-instead-of-finish.md`](adr/0002-standby-instead-of-finish.md) | 配额用完不结束，改为值守待命 |
 | [`adr/0003-parallel-platforms.md`](adr/0003-parallel-platforms.md) | 每个平台一条独立流水线，并行运行 |
 | [`adr/0004-delivery-vs-resume-on-request.md`](adr/0004-delivery-vs-resume-on-request.md) | 投递只算主动投递，应对方要求发的简历不进投递表 |
-| [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（设计定稿，**代码未实现**） |
+| [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0 已实现，P1–P3 未实现） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

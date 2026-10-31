@@ -192,11 +192,46 @@ public class ConfigStore {
                 Wrappers.<PlatformConfigEntity>lambdaQuery().eq(PlatformConfigEntity::getPlatform, platform));
     }
 
-    /** 新平台的默认配置。唯一一处默认值定义，insert 与 peek 都从它来 */
-    private PlatformConfigEntity defaults(String platform) {
+    /**
+     * 扫描开关（spec 0005）：该平台是否参与扫描。
+     *
+     * <p>只读、不写库，理由同 {@link #platformEnabled}：它会在 Run 的卡片边界被逐张调用，
+     * 走会 insert 的 {@link #platformConfig} 就变成「每张卡读一次配置顺带写一次库」。
+     *
+     * <p>它与 {@code PlatformSwitches} 判的不是同一件事：那个判「能不能启动」，这个判
+     * 「启动之后扫不扫」。所以两者不合并，读侧也各自保留一个方法。
+     *
+     * <p>没配过按开：与 {@code scan_enabled} 的建表默认值 1 一致，也与 {@link #defaults} 同源。
+     */
+    public boolean platformScanEnabled(String platform) {
+        Integer v = peekPlatformConfig(platform).getScanEnabled();
+        return v == null || v != 0;
+    }
+
+    /**
+     * 值守开关（spec 0005）：该平台是否参与值守。
+     *
+     * <p>口径与 {@link #platformScanEnabled} 完全相同（只读、缺省按开），分开只是因为
+     * 两者的生效点不同：扫描在卡片边界，值守在待命循环的每秒检查与插空巡检。
+     */
+    public boolean platformWatchEnabled(String platform) {
+        Integer v = peekPlatformConfig(platform).getWatchEnabled();
+        return v == null || v != 0;
+    }
+
+    /**
+     * 新平台的默认配置。唯一一处默认值定义，insert 与 peek 都从它来。
+     *
+     * <p>包内可见是为了让 {@code ConfigStoreTest} 直接断言这份默认值，不必为了读它连库。
+     */
+    PlatformConfigEntity defaults(String platform) {
         PlatformConfigEntity created = new PlatformConfigEntity();
         created.setPlatform(platform);
         created.setEnabled(1);
+        // 两个开关的默认值与 V14 的列默认值一致：这里是「没配过的平台」的默认值来源，
+        // 漏设的话读到 null，两处默认值就从这一刻开始分叉
+        created.setScanEnabled(1);
+        created.setWatchEnabled(1);
         created.setCities("[]");
         created.setKeywords("[]");
         created.setJobType("");

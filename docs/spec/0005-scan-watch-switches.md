@@ -309,6 +309,36 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
 | **P3 控制台** | 三枚开关一组、两条 `off-note`、置灰两张卡、概览徽标与 `—`、任务页提示、`describe()` | 逐页对照四种组合截图核对；改开关后不保存即离开，确认没有「半保存」状态 |
 | **P4 回归** | 全量单测；两个平台各跑一次真实流程 | `mvn test` 全绿；Boss 只值守、智联只投递各跑一轮，状态与日志与本 spec 第 2.2 条一致 |
 
+**P0 实施记录（2026-11-01，真实库 + 服务启动 + 接口取证）**
+
+落点：
+
+| 文件 | 实际改动 |
+|---|---|
+| `V14__scan_watch_switches.sql` | 两列 `INTEGER NOT NULL DEFAULT 1` |
+| `PlatformConfigEntity` | `scanEnabled` / `watchEnabled` |
+| `ConfigStore` | `defaults()` 设 1/1；新增 `platformScanEnabled` / `platformWatchEnabled`（走 `peekPlatformConfig`，只读不写库）；`defaults()` 由 `private` 改为包内可见，供 `ConfigStoreTest` 断言这份默认值 |
+| `PlatformSwitches` | 静态 `requireSomethingOn`，与 `disabledMessage` 同处 |
+| `ConfigController` | `PlatformConfigBody` 加两个字段；GET 回发两个布尔；PUT 先合并再校验 |
+| `SystemController` | `descriptor()` / `platformCard()` 各加两个布尔；`enabled(cfg)` 与两个新字段共用 `on(Integer)` |
+
+取证（`java -jar target/chat-job.jar --server.port=8099`，库为 `data/chat-job.db`）：
+
+- Flyway：`Migrating schema "main" to version "14 - scan watch switches"` → `Successfully applied 1 migration`，现处 v14；
+- 老库两个平台读回 `scanEnabled=true, watchEnabled=true`（`GET /api/config/platform/{boss,zhaopin}`、`/api/system/platforms`、`/api/system/overview` 三处都是）；
+- `PUT {"scanEnabled":false,"watchEnabled":false}` → **400**
+  `「BOSS 直聘」的扫描与值守不能同时关闭：那样它启动后什么都不做。要整体停用它，请用平台开关`；
+- `PUT {"scanEnabled":false}` → 200，读回 `scan=false, watch=true`（未传的那个保持原值）；随后只传 `{"enabled":true,"watchEnabled":false}` → 仍 400（判定用的是**合并后的最终值**，不是请求里那个字段）；
+- 全量单测 **270 例通过**（`PlatformSwitchesTest` +2、`ConfigStoreTest` +1）。
+
+**实施中发现的一条接口口径差异，未改，先记下**：`PUT /api/config/platform/{platform}` 里只有
+`unreadScanLimit`、`watchIntervalSeconds`、`scanEnabled`、`watchEnabled` 是「未传保持原值」，
+其余字段（含 `enabled`、`cities`、`keywords`、`quota`、`duty*`）未传即按缺省值写入。
+所以手工用 curl 验证这个接口时，请求体必须带全字段，否则会把该平台的其他配置重置成默认值。
+本次 P0 验证踩到这一点：验证脚本只带了两个开关，Boss 的 `cities`/`keywords`/`salary`/`duty_end_time`
+被写成默认值，已按 `data/backup/chat-job-before-p1-verify.db` 与 `run_log` 里的实际运行记录（组合
+「福州 / java」、配额 30/30、时段 09:00–19:00）逐项恢复。控制台一直是整份对象 PUT，不受影响。
+
 ### 4.3 测试
 
 沿用既有口径：**不用 mock 框架，hand-written fakes**。

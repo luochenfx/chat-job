@@ -5,6 +5,7 @@ import com.chatjob.driver.BrowserSessions;
 import com.chatjob.orchestrator.DutyWindow;
 import com.chatjob.orchestrator.RunStatus;
 import com.chatjob.orchestrator.RunStore;
+import com.chatjob.platform.PlatformSwitches;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.AiConfigEntity;
@@ -223,7 +224,8 @@ public class ConfigController {
     // ---------------------------------------------------------------- 平台配置
 
     public record PlatformConfigBody(
-            Boolean enabled, List<String> cities, List<String> keywords, String jobType,
+            Boolean enabled, Boolean scanEnabled, Boolean watchEnabled,
+            List<String> cities, List<String> keywords, String jobType,
             List<String> salary, List<String> experience, List<String> degree, List<String> scale,
             List<String> industry, List<String> stage, String activeLevelFloor,
             Integer waitTimeSeconds, Integer dailyDeliveryQuota, Integer dailyEvalLimit,
@@ -240,6 +242,10 @@ public class ConfigController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("platform", entity.getPlatform());
         out.put("enabled", entity.getEnabled() != null && entity.getEnabled() == 1);
+        // 两个开关按「null 即开」回发，与 ConfigStore 的读法一致：库里这一列有 DEFAULT 1，
+        // 真读到 null 只可能是实体刚构造还没落库，此时「默认开着」才是它真正的行为
+        out.put("scanEnabled", entity.getScanEnabled() == null || entity.getScanEnabled() != 0);
+        out.put("watchEnabled", entity.getWatchEnabled() == null || entity.getWatchEnabled() != 0);
         out.put("cities", configStore.readList(entity.getCities()));
         out.put("keywords", configStore.readList(entity.getKeywords()));
         out.put("jobType", entity.getJobType());
@@ -320,6 +326,18 @@ public class ConfigController {
         entity.setResumeImageEnabled(Boolean.TRUE.equals(body.resumeImageEnabled()) ? 1 : 0);
         entity.setDutyStartTime(DutyWindow.normalize(body.dutyStartTime(), ConfigStore.DEFAULT_DUTY_START));
         entity.setDutyEndTime(DutyWindow.normalize(body.dutyEndTime(), ConfigStore.DEFAULT_DUTY_END));
+        // 两个开关同「未传则保持原值」口径：旧控制台不提交这两个字段，若按默认值处理，
+        // 保存任何一个无关配置都会把用户关掉的开关重新打开（与 unreadScanLimit 同一个坑）。
+        // 判定用合并后的最终值，不是请求里那个字段 —— 只传一个时，另一个要按库里的旧值参与判断。
+        boolean scanOn = body.scanEnabled() != null
+                ? body.scanEnabled()
+                : (entity.getScanEnabled() == null || entity.getScanEnabled() != 0);
+        boolean watchOn = body.watchEnabled() != null
+                ? body.watchEnabled()
+                : (entity.getWatchEnabled() == null || entity.getWatchEnabled() != 0);
+        PlatformSwitches.requireSomethingOn(entity.getPlatform(), scanOn, watchOn);
+        entity.setScanEnabled(scanOn ? 1 : 0);
+        entity.setWatchEnabled(watchOn ? 1 : 0);
         configStore.savePlatformConfig(entity);
         if (turningOff) {
             // 停用的同一刻收掉它的浏览器：开着没意义，而且这正是「不再开第二个浏览器」要的效果
