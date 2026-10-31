@@ -17,6 +17,7 @@ import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.PlatformAdapters;
 import com.chatjob.platform.PlatformInfo;
+import com.chatjob.platform.PlatformSwitches;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.DeliveryEntity;
@@ -80,6 +81,8 @@ public class RunService {
     private final SelfCheck selfCheck;
     private final PatchrightDriver patchright;
     private final com.chatjob.web.SseHub sse;
+    /** 平台开关：停用的平台不启动任务（spec 0004 阶段 3） */
+    private final PlatformSwitches switches;
 
     /**
      * 本实例服务的平台适配器。由 {@link #bind(String)} 在创建后一次性赋值。
@@ -120,7 +123,8 @@ public class RunService {
                       Notifier notifier,
                       SelfCheck selfCheck,
                       PatchrightDriver patchright,
-                      com.chatjob.web.SseHub sse) {
+                      com.chatjob.web.SseHub sse,
+                      PlatformSwitches switches) {
         this.runStore = runStore;
         this.jobStore = jobStore;
         this.configStore = configStore;
@@ -131,6 +135,7 @@ public class RunService {
         this.selfCheck = selfCheck;
         this.patchright = patchright;
         this.sse = sse;
+        this.switches = switches;
     }
 
     /**
@@ -164,6 +169,9 @@ public class RunService {
 
     public synchronized RunEntity start(String mode) {
         String platform = adapter().platform();
+        // 停用的平台不允许新建任务。放在这里而不是控制器里：唤醒、重试、未来的任何入口
+        // 都要过这道闸，漏一处就是「关掉的平台自己又跑起来了」
+        switches.require(platform);
         runStore.active(platform).ifPresent(run -> {
             if (RunStatus.WAITING_DUTY.name().equals(run.getStatus())) {
                 throw new IllegalStateException("已有一条任务在等待值守时段（id=" + run.getId()

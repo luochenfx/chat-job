@@ -1,7 +1,10 @@
 package com.chatjob.web;
 
 import com.chatjob.config.SecretCipher;
+import com.chatjob.driver.BrowserSessions;
 import com.chatjob.orchestrator.DutyWindow;
+import com.chatjob.orchestrator.RunStatus;
+import com.chatjob.orchestrator.RunStore;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.AiConfigEntity;
@@ -10,6 +13,7 @@ import com.chatjob.store.entity.ProviderEntity;
 import com.chatjob.watcher.AiReplier;
 import com.chatjob.watcher.ReplyGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,6 +35,7 @@ import java.util.Map;
  * <p>API Key 永远不回发。接口只告诉你"配没配"，避免出现参考项目那种
  * 明文 Key 直接躺在 GET 响应里、再被浏览器缓存或截图带走的情况。
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/config")
 public class ConfigController {
@@ -39,13 +44,18 @@ public class ConfigController {
     private final OptionStore optionStore;
     private final SecretCipher cipher;
     private final ObjectMapper json;
+    private final RunStore runStore;
+    private final BrowserSessions sessions;
 
     public ConfigController(ConfigStore configStore, OptionStore optionStore,
-                            SecretCipher cipher, ObjectMapper json) {
+                            SecretCipher cipher, ObjectMapper json,
+                            RunStore runStore, BrowserSessions sessions) {
         this.configStore = configStore;
         this.optionStore = optionStore;
         this.cipher = cipher;
         this.json = json;
+        this.runStore = runStore;
+        this.sessions = sessions;
     }
 
     // ---------------------------------------------------------------- 提供商
@@ -263,6 +273,21 @@ public class ConfigController {
     public Map<String, Object> savePlatformConfig(@PathVariable String platform,
                                                   @RequestBody PlatformConfigBody body) {
         PlatformConfigEntity entity = configStore.platformConfig(platform);
+        boolean turningOff = body.enabled() != null && !body.enabled()
+                && (entity.getEnabled() == null || entity.getEnabled() != 0);
+        // 停用前先看这个平台有没有未结束的 Run：有的话「关掉开关」会留下一条还在跑的任务，
+        // 而它的浏览器已经打开、值守还在继续 —— 开关等于没关，人却以为关了
+        if (turningOff) {
+            runStore.latest(platform).ifPresent(run -> {
+                RunStatus status = RunStatus.valueOf(run.getStatus());
+                if (!status.isTerminal()) {
+                    throw new IllegalArgumentException("「"
+                            + com.chatjob.platform.PlatformInfo.of(entity.getPlatform()).label()
+                            + "」还有未结束的任务（#" + run.getId() + "，" + run.getStatus()
+                            + "）：请先停止它，再停用这个平台");
+                }
+            });
+        }
         entity.setEnabled(Boolean.TRUE.equals(body.enabled()) ? 1 : 0);
         entity.setCities(configStore.writeList(body.cities()));
         entity.setKeywords(configStore.writeList(body.keywords()));
@@ -296,6 +321,17 @@ public class ConfigController {
         entity.setDutyStartTime(DutyWindow.normalize(body.dutyStartTime(), ConfigStore.DEFAULT_DUTY_START));
         entity.setDutyEndTime(DutyWindow.normalize(body.dutyEndTime(), ConfigStore.DEFAULT_DUTY_END));
         configStore.savePlatformConfig(entity);
+        if (turningOff) {
+            // 停用的同一刻收掉它的浏览器：开着没意义，而且这正是「不再开第二个浏览器」要的效果
+            sessions.existing(entity.getPlatform()).ifPresent(browser -> {
+                try {
+                    browser.session().close();
+                    log.info("[{}] 平台已停用，浏览器会话已关闭", entity.getPlatform());
+                } catch (Exception e) {
+                    log.warn("[{}] 停用后关闭浏览器失败: {}", entity.getPlatform(), e.getMessage());
+                }
+            });
+        }
         return Map.of("ok", true);
     }
 

@@ -1,6 +1,7 @@
 package com.chatjob.orchestrator;
 
 import com.chatjob.platform.PlatformAdapters;
+import com.chatjob.platform.PlatformSwitches;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -9,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -35,10 +37,13 @@ public class RunServices {
     private final Map<String, RunService> byPlatform = new ConcurrentHashMap<>();
     private final ObjectProvider<RunService> provider;
     private final PlatformAdapters adapters;
+    private final PlatformSwitches switches;
 
-    public RunServices(ObjectProvider<RunService> provider, PlatformAdapters adapters) {
+    public RunServices(ObjectProvider<RunService> provider, PlatformAdapters adapters,
+                       PlatformSwitches switches) {
         this.provider = provider;
         this.adapters = adapters;
+        this.switches = switches;
     }
 
     /**
@@ -61,10 +66,19 @@ public class RunServices {
         return byPlatform.values().stream().anyMatch(RunService::isRunning);
     }
 
+    /** 某平台是否建有流水线（不建新的） */
+    public Optional<RunService> existing(String platform) {
+        return Optional.ofNullable(byPlatform.get(adapters.platformKey(platform)));
+    }
+
     /** 全进程只有这一份：遍历已装配平台，把各自挂起的 Run 唤醒 */
     @Scheduled(fixedDelay = 30_000, initialDelay = 15_000)
     public void wakeWaitingRuns() {
         for (String platform : adapters.platforms()) {
+            // 停用的平台连唤醒都不做：唤醒的终点是开浏览器（ADR-0003 第 5 条）
+            if (!switches.isEnabled(platform)) {
+                continue;
+            }
             try {
                 of(platform).wakeIfWaiting();
             } catch (Exception e) {

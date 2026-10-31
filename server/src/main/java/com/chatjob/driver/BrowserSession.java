@@ -1,6 +1,7 @@
 package com.chatjob.driver;
 
 import com.chatjob.config.AppProperties;
+import com.chatjob.platform.PlatformSwitches;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -47,6 +48,11 @@ public class BrowserSession {
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
     /**
+     * 平台开关。停用的平台在这里被拦住 —— 这里是「浏览器真的被拉起来」的唯一入口，
+     * 比在每个调用点各判一次可靠（漏一处就是「关掉的平台又开了一个 Chrome」）。
+     */
+    private final PlatformSwitches switches;
+    /**
      * 该平台专属的 profile 目录（{@code <root>/<platform>}）。
      *
      * <p>在构造期算好而不是每次用时算：它同时出现在日志、异常信息与控制台里，
@@ -66,12 +72,14 @@ public class BrowserSession {
     private volatile String unavailableReason;
 
     public BrowserSession(String platform, AppProperties props, PlaywrightExecutor executor,
-                          PatchrightDriver patchright, BrowserChannel browserChannel) {
+                          PatchrightDriver patchright, BrowserChannel browserChannel,
+                          PlatformSwitches switches) {
         this.platform = platform;
         this.props = props;
         this.executor = executor;
         this.patchright = patchright;
         this.browserChannel = browserChannel;
+        this.switches = switches;
         this.userDataDir = Paths.get(props.browser().userDataDirFor(platform)).toAbsolutePath();
     }
 
@@ -103,6 +111,8 @@ public class BrowserSession {
         if (isReady()) {
             return;
         }
+        // 停用的平台到这里为止：这是启动链路的最后一道，也是唯一一道必然经过的
+        switches.require(platform);
         executor.run(this::initOnThread);
     }
 

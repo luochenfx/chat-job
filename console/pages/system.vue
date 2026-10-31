@@ -40,7 +40,10 @@
         </thead>
         <tbody>
           <tr v-for="c in cards" :key="c.platform">
-            <td>{{ c.label }}</td>
+            <td>
+              {{ c.label }}
+              <span v-if="c.enabled === false" class="tag">已停用</span>
+            </td>
             <td>
               <span class="tag" :class="c.browserReady ? 'ok' : ''">
                 {{ c.browserReady ? '已启动' : '未启动' }}
@@ -62,10 +65,33 @@
               <span v-else class="hint-inline">未运行</span>
             </td>
             <td>
+              <!-- 停用的平台不给这三个按钮：它们都会去开那个平台的浏览器，
+                   而开关关掉的正是「为它开浏览器」这件事 -->
               <div class="row" style="gap: 6px; justify-content: flex-end">
-                <button class="btn sm" :disabled="busy" @click="probeLogin(c.platform)">探测登录</button>
-                <button class="btn sm" :disabled="busy" @click="openLogin(c.platform)">打开登录页</button>
-                <button class="btn sm" :disabled="busy" @click="runSelfCheck(c.platform)">运行自检</button>
+                <button
+                  class="btn sm"
+                  :disabled="busy || c.enabled === false"
+                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  @click="probeLogin(c.platform)"
+                >
+                  探测登录
+                </button>
+                <button
+                  class="btn sm"
+                  :disabled="busy || c.enabled === false"
+                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  @click="openLogin(c.platform)"
+                >
+                  打开登录页
+                </button>
+                <button
+                  class="btn sm"
+                  :disabled="busy || c.enabled === false"
+                  :title="c.enabled === false ? '该平台已停用' : ''"
+                  @click="runSelfCheck(c.platform)"
+                >
+                  运行自检
+                </button>
               </div>
             </td>
           </tr>

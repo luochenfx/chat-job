@@ -225,7 +225,10 @@
             <label>单轮 AI 回复上限（条）</label>
             <input v-model.number="ai.aiReplyMaxPerSweep" type="number" min="1" max="10" />
             <div class="desc">
-              一轮值守最多花几次模型调用。超出的未读退回待处理，不消耗重试次数，下一轮继续
+              一轮值守最多花几次模型调用。超出的未读退回待处理，不消耗重试次数，下一轮继续。
+              <!-- ADR-0003 第 4 条：两个平台各建一份预算，不共享。 -->
+              <b>每个平台各自算一份</b>，{{ platforms.length }} 个平台同时值守时，一轮最多花
+              {{ platforms.length || 1 }} × {{ ai.aiReplyMaxPerSweep || 0 }} 次
             </div>
           </div>
         </div>
@@ -304,8 +307,22 @@
       <div class="scope-bar">
         <span class="scope-key">正在配置</span>
         <PlatformSwitch v-model="platformPick" :platforms="platforms" />
+        <!--
+          开关与其余字段同批保存：它不是「立刻生效的总闸」，而是这个平台配置的一部分。
+          单独给开关做即时保存，就会出现「改了城市没保存、开关却已经关了」的错位。
+        -->
+        <label class="switch" :title="switchHint">
+          <input v-model="platform.enabled" type="checkbox" />
+          <span>{{ platform.enabled === false ? '已停用' : '已启用' }}</span>
+        </label>
         <span class="scope-note">下面五张卡只属于这个平台；搜索条件与配额都是每平台一份</span>
         <span v-if="dirty" class="tag warn">有未保存改动</span>
+      </div>
+
+      <!-- 停用后果写在开关正下方：只写一个「已停用」标签，人不知道它关掉了什么 -->
+      <div v-if="platform.enabled === false" class="off-note">
+        停用后不再为「{{ platformLabel }}」开浏览器，也不启动它的扫描与值守；另一个平台照常跑。
+        正在跑的任务要先停止，否则停用会被拒绝。
       </div>
 
       <div class="card">
@@ -497,7 +514,8 @@ const {
   labelOf,
   note: platformNote,
   supports,
-  select
+  select,
+  refresh: refreshPlatforms
 } = usePlatform()
 
 /** 分段控件的 v-model：写的时候先过 dirty 拦截，再切换并重新加载该平台的配置 */
@@ -588,6 +606,8 @@ const riskyToneHits = computed(() => {
  */
 function defaultPlatformConfig() {
   return {
+    // 开关与其余字段同属一份配置：没配过按启用（与 platform_config.enabled 的建表默认值 1 一致）
+    enabled: true,
     cities: [],
     keywords: [],
     jobType: '',
@@ -612,6 +632,13 @@ function defaultPlatformConfig() {
     dutyEndTime: '22:00'
   }
 }
+
+/** 开关的悬浮说明：停用后果不写在提示里，人就以为它只是「暂时不显示」 */
+const switchHint = computed(() =>
+  platform.enabled === false
+    ? '停用：不再为它开浏览器，也不启动它的扫描与值守'
+    : '启用：这个平台会参与扫描与值守'
+)
 
 const platform = reactive<any>(defaultPlatformConfig())
 
@@ -880,6 +907,8 @@ async function savePlatform() {
   try {
     await call(`/config/platform/${platformSlug.value}`, { method: 'PUT', body: platform })
     show('平台配置已保存')
+    // 开关变了要立刻重拉清单：否则分段控件上那个「已停用」要等下次进页面才出现
+    await refreshPlatforms().catch(() => {})
     // 回读一次：后端对 watchIntervalSeconds 等字段有钳制，不回读的话界面显示的是用户填的、
     // 库里存的是钳制后的 —— 两个数字不一致，而且人会按界面上那个数去推算行为
     await loadPlatform()
@@ -915,6 +944,18 @@ onMounted(loadAll)
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+/* 停用后果：紧跟在开关那一行下面，与作用域条同宽、但视觉上从属于它 */
+.off-note {
+  margin: -6px 0 var(--gap);
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn, #b7791f);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--ink-2);
 }
 
 .scope-key {

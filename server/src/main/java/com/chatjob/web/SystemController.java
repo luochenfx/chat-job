@@ -13,6 +13,7 @@ import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.PlatformAdapters;
 import com.chatjob.platform.PlatformInfo;
+import com.chatjob.platform.PlatformSwitches;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
@@ -58,11 +59,13 @@ public class SystemController {
     private final RunServices runServices;
     private final Notifier notifier;
     private final JdbcTemplate jdbc;
+    private final PlatformSwitches switches;
 
     public SystemController(PatchrightDriver patchright, BrowserChannel browserChannel, BrowserSessions sessions,
                             SelfCheck selfCheck, PlatformAdapters adapters, RunStore runStore, JobStore jobStore,
                             ReplyStore replyStore, OptionStore optionStore, ConfigStore configStore,
-                            RunServices runServices, Notifier notifier, JdbcTemplate jdbc) {
+                            RunServices runServices, Notifier notifier, JdbcTemplate jdbc,
+                            PlatformSwitches switches) {
         this.patchright = patchright;
         this.browserChannel = browserChannel;
         this.sessions = sessions;
@@ -76,6 +79,7 @@ public class SystemController {
         this.runServices = runServices;
         this.notifier = notifier;
         this.jdbc = jdbc;
+        this.switches = switches;
     }
 
     /**
@@ -116,14 +120,22 @@ public class SystemController {
         return out;
     }
 
+    /**
+     * 自检 / 探测 / 打开登录页都要先过开关：这三个动作的共同点是「会去开那个平台的浏览器」，
+     * 而停用的平台不该再被拉起来 —— 否则开关关掉的只是任务，浏览器照样起。
+     */
     @PostMapping("/self-check")
     public SelfCheck.Result selfCheck(@RequestParam(required = false) String platform) {
-        return selfCheck.run(adapters.platformKey(platform));
+        String key = adapters.platformKey(platform);
+        switches.require(key);
+        return selfCheck.run(key);
     }
 
     @PostMapping("/probe-login")
     public LoginState probeLogin(@RequestParam(required = false) String platform) {
-        return adapter(platform).probeLogin();
+        String key = adapters.platformKey(platform);
+        switches.require(key);
+        return adapter(key).probeLogin();
     }
 
     /**
@@ -134,6 +146,7 @@ public class SystemController {
      */
     @PostMapping("/open-login")
     public Map<String, Object> openLogin(@RequestParam(required = false) String platform) {
+        switches.require(adapters.platformKey(platform));
         PlatformAdapter adapter = adapter(platform);
         adapter.openLogin();
         return Map.of("ok", true, "platform", adapter.platform(),

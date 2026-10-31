@@ -173,6 +173,20 @@ public class ConfigStore {
         return existing != null ? existing : defaults(platform);
     }
 
+    /**
+     * 平台开关（spec 0004 阶段 3）：该平台现在要不要跑。
+     *
+     * <p>只读，绝不写库 —— 它会被浏览器启动链路调用（每次 {@code ensureReady}），
+     * 一旦走 {@link #platformConfig} 那条会 insert 的路径，没配过的平台会被凭空建出一行。
+     *
+     * <p>没配过按启用：与 {@code enabled} 的建表默认值 1 一致，也与
+     * {@link #defaults} 同源，所以「界面显示的开关」和「真跑起来判的那一次」不会分叉。
+     */
+    public boolean platformEnabled(String platform) {
+        PlatformConfigEntity cfg = peekPlatformConfig(platform);
+        return cfg.getEnabled() == null || cfg.getEnabled() != 0;
+    }
+
     private PlatformConfigEntity find(String platform) {
         return platformConfigMapper.selectOne(
                 Wrappers.<PlatformConfigEntity>lambdaQuery().eq(PlatformConfigEntity::getPlatform, platform));

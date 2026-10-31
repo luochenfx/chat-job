@@ -2,6 +2,7 @@ package com.chatjob.driver;
 
 import com.chatjob.config.AppProperties;
 import com.chatjob.config.ProjectHome;
+import com.chatjob.platform.PlatformSwitches;
 import com.microsoft.playwright.Page;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -69,7 +70,9 @@ class PlatformBrowserIsolationTest {
                 new AppProperties.NotifyProps("", 300),
                 "boss");
 
-        BrowserSessions sessions = new BrowserSessions(props, new PatchrightDriver(props), new BrowserChannel(props));
+        // 开关恒开：这一组测的是「两个平台各自隔离」，不涉及停用语义
+        BrowserSessions sessions = new BrowserSessions(props, new PatchrightDriver(props),
+                new BrowserChannel(props), new PlatformSwitches(p -> true));
         try {
             PlatformBrowser boss = sessions.of("boss");
             PlatformBrowser zhaopin = sessions.of("zhaopin");

@@ -44,6 +44,16 @@ export function usePlatform() {
     return inflight
   }
 
+  /**
+   * 强制重拉清单。只有一处会用到它：配置页刚改过某个平台的开关 ——
+   * 清单里的 enabled 是缓存的，不刷新的话分段控件上的「已停用」会等到下次进页面才出现。
+   */
+  async function refresh(): Promise<PlatformDesc[]> {
+    const list = await call<PlatformDesc[]>('/system/platforms')
+    platforms.value = list || []
+    return platforms.value
+  }
+
   function stored(): string {
     // 构建期（nuxt generate 预渲染外壳）没有 window，读不到就当没有记忆
     if (typeof window === 'undefined') return ''
@@ -106,5 +116,5 @@ export function usePlatform() {
     await router.replace({ query: { ...route.query, platform: slug } })
   }
 
-  return { platforms, ensure, platform, current, label, note, labelOf, supports, select, known }
+  return { platforms, ensure, refresh, platform, current, label, note, labelOf, supports, select, known }
 }

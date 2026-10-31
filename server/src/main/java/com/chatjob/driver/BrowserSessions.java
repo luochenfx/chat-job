@@ -1,6 +1,7 @@
 package com.chatjob.driver;
 
 import com.chatjob.config.AppProperties;
+import com.chatjob.platform.PlatformSwitches;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -41,11 +42,14 @@ public class BrowserSessions {
     private final AppProperties props;
     private final PatchrightDriver patchright;
     private final BrowserChannel browserChannel;
+    private final PlatformSwitches switches;
 
-    public BrowserSessions(AppProperties props, PatchrightDriver patchright, BrowserChannel browserChannel) {
+    public BrowserSessions(AppProperties props, PatchrightDriver patchright, BrowserChannel browserChannel,
+                           PlatformSwitches switches) {
         this.props = props;
         this.patchright = patchright;
         this.browserChannel = browserChannel;
+        this.switches = switches;
     }
 
     /**
@@ -57,7 +61,7 @@ public class BrowserSessions {
         String key = normalize(platform);
         return byPlatform.computeIfAbsent(key, p -> {
             PlaywrightExecutor executor = new PlaywrightExecutor(p);
-            BrowserSession session = new BrowserSession(p, props, executor, patchright, browserChannel);
+            BrowserSession session = new BrowserSession(p, props, executor, patchright, browserChannel, switches);
             log.debug("[{}] 已建立独立浏览器上下文声明（profile: {}，线程: {}）",
                     p, session.userDataDir(), executor.threadName());
             return new PlatformBrowser(p, executor, session);
