@@ -1008,6 +1008,13 @@ public class RunService {
             if (!platform.equals(run.getPlatform())) {
                 continue;
             }
+            // 组合表不会跟着 Run 一起收尾：进程被强杀时组合循环的 finally 不会执行，
+            // 断在半路的那个组合会永远停在 RUNNING。Run 标成失败之后，这一行就成了
+            // 界面上的谎言（「进行中」而那一轮已经结束），所以在 finish 之前先收掉
+            int abandoned = runStore.abandonRunningCombinations(run.getId());
+            if (abandoned > 0) {
+                log(run, "WARN", "上一轮中断时有 " + abandoned + " 个组合停在扫描中间，已记为「已中断」");
+            }
             finish(run, RunStatus.FAILED, "SERVICE_RESTART", "服务重启，上一轮中断；如需继续请重新启动");
             publish(run, "run.finished", Map.of(
                     "runId", run.getId(),

@@ -47,6 +47,15 @@ export function idleText(seconds: number): string {
 }
 
 export interface ActivityView {
+  /**
+   * 「当前动作」那格该显示什么。
+   *
+   * <p>单独一个字段，是因为 Run 结束后 {@code currentAction} 仍留着最后一句
+   * （「等待 9 秒后处理第 14 张卡」），直接摆在「当前动作」里等于说这一轮还在跑。
+   * 已结束的 Run 一律换成结束语义，只有异常退出才保留最后一句 —— 那句是死在哪一步的唯一线索。
+   */
+  action: string
+  /** 跟在动作后面的那个标签；已结束的普通终止态没有可补的话，留空 */
   text: string
   tone: '' | 'ok' | 'warn' | 'danger'
   stale: boolean
@@ -63,27 +72,58 @@ export function activityView(
 ): ActivityView {
   const { nowMs, staleAfterSeconds, withLabel = true } = opts
   const status = run?.status
-  if (!status) return { text: '', tone: '', stale: false }
+  if (!status) return { action: '', text: '', tone: '', stale: false }
 
   const view = runStatusView(status)
-  // 暂停与挂起本来就该安静，做陈旧判定只会误报
-  if (status === 'PAUSED') return { text: '已暂停：扫描与值守都停', tone: 'warn', stale: false }
-  if (status === 'WAITING_DUTY') {
-    return { text: '已挂起：值守期没有结束，窗口打开会自动继续', tone: 'warn', stale: false }
+  // 库里存的是「最后一次动作」，不是「现在在做的动作」。终止之后还把它当现在时显示，
+  // 看到的人会以为这一轮仍在跑 —— 这正是要分开两个字段的原因
+  const lastAction = String(run?.currentAction ?? '').trim()
+
+  if (!view.active) {
+    // 失败就是「没人点停止，它自己没了」：driver 掉线、自检挂掉、异常、服务被关掉
+    // （进程被关掉时是重启收尾把它标成 FAILED/SERVICE_RESTART，所以这里能看出来）
+    if (status === 'FAILED') {
+      return {
+        action: lastAction || `已结束：${view.label}`,
+        text: '疑似异常退出',
+        tone: 'danger',
+        stale: false
+      }
+    }
+    // 手动停止、跑完、熔断、登录失效都有明确原因，直接说结果，不再复述最后一句动作
+    return { action: `已结束：${view.label}`, text: '', tone: '', stale: false }
   }
-  if (!view.active) return { text: `已结束：${view.label}`, tone: '', stale: false }
+
+  // 暂停与挂起本来就该安静，做陈旧判定只会误报
+  if (status === 'PAUSED') {
+    return { action: lastAction, text: '已暂停：扫描与值守都停', tone: 'warn', stale: false }
+  }
+  if (status === 'WAITING_DUTY') {
+    return {
+      action: lastAction,
+      text: '已挂起：值守期没有结束，窗口打开会自动继续',
+      tone: 'warn',
+      stale: false
+    }
+  }
 
   const idle = idleSeconds(run?.lastActivityAt, nowMs)
-  if (idle == null) return { text: '刚启动，还没有动作', tone: '', stale: false }
+  if (idle == null) return { action: lastAction, text: '刚启动，还没有动作', tone: '', stale: false }
 
   const stale = !!staleAfterSeconds && idle > staleAfterSeconds
   if (stale) {
     const minutes = Math.max(1, Math.floor(idle / 60))
-    return { text: `⚠️ 无响应 ${minutes} 分钟（阈值 ${staleAfterSeconds} 秒）`, tone: 'danger', stale: true }
+    return {
+      action: lastAction,
+      text: `⚠️ 无响应 ${minutes} 分钟（阈值 ${staleAfterSeconds} 秒）`,
+      tone: 'danger',
+      stale: true
+    }
   }
 
   const ago = `${idleText(idle)}前有动作`
   return {
+    action: lastAction,
     text: withLabel ? `${view.label} · ${ago}` : ago,
     tone: withLabel && view.judgedIdle ? 'ok' : '',
     stale: false

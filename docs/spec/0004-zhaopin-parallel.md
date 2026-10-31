@@ -207,7 +207,8 @@ API 形状（2c 只改前端，不再动后端）：新建/查当前带可选 `p
 | 通知带平台名 | 2c 改标题 | **改 `Notifier` 契约**：加 `platform` 参数（4 参），3 参版本降为 default，节流键改为 `kind|平台` | 原实现按 `kind` 节流：BOSS 熔断后 5 分钟内智联熔断会被合并掉，而那是两条流水线 —— 只加标题前缀会让「合并」这件事更隐蔽。`WecomRobotNotifierTest` 4 例锁住标题与节流键 |
 | `{id}` 停错 | 期望 404 | 实际 400（`Run 不存在: 99999`） | `GlobalExceptionHandler` 把 `IllegalArgumentException` 映射成 400。结论不变：不存在的 id 不会落到缺省平台 |
 | 概览的「多久没动」 | 复用任务页逻辑 | 抽成 `composables/useActivity.ts`（`useTickClock` / `idleText` / `activityView`），两页共用 | 两处各写一遍的话，「暂停该不该做陈旧判定」这类规则改一处就分叉：概览说卡住、任务页说正常 |
-| 概览卡不传陈旧阈值 | — | `activityView(..., { withLabel:false })` 且不传 `staleAfterSeconds`；已结束的 Run 不显示该标签 | `/system/overview` 契约里没有阈值，而卡头已有状态标签。概览只回答「还活着吗」，判「卡死」留在任务页（那里有后端下发的阈值） |
+| 概览卡不传陈旧阈值 | — | `activityView(..., { withLabel:false })` 且不传 `staleAfterSeconds`；已结束的 Run 由 `action`/`text` 两个字段改写（见下条） | `/system/overview` 契约里没有阈值，而卡头已有状态标签。概览只回答「还活着吗」，判「卡死」留在任务页（那里有后端下发的阈值） |
+| 终止态的「当前动作」 | 只处理「多久没动」 | 复查后补：已结束的 Run 不再把 `current_action`（过去时）当现在时显示 —— 手动停止/跑完/熔断/登录失效 → 「已结束：<状态名>」；**FAILED 保留最后一句 + 红色「疑似异常退出」** | 实测看到「已取消」的卡里写着「等待 9 秒后处理第 14 张卡」。进程被关掉时 `current_action` 停在死前那一步（重启收尾标成 `FAILED/SERVICE_RESTART`），这句没有别的记录可替代，所以只在 FAILED 保留 |
 | 通知测试按钮 | — | 仍走 3 参（无平台），日志为 `[通知未配置] chat-job 通知测试` | 证明 default 方法没有把「无平台」写成空的 `[]` |
 
 前端落地点（files 全部在 `console/`）：
@@ -245,6 +246,38 @@ API 形状（2c 只改前端，不再动后端）：新建/查当前带可选 `p
     对「BOSS 直聘」行点探测 → 该行「浏览器 已启动」，智联行仍「未启动」。
 - **进程**：探测后 `bsk browsers` 多出 `9a198826 自动化浏览器（EXT 0.3.3）`——0.3.3 就是
   `browser-data/boss` 那一份扩展，说明控制台点的是 BOSS 自己的 profile 而不是共用的一个。
+
+**复查修正（同日）：终止态的「当前动作」**
+
+第一版把已结束的 Run 的标签写对了，但「当前动作」那格仍绑 `run.currentAction`，
+于是「已取消」的卡里写着「等待 9 秒后处理第 14 张卡」。改成按状态分摆法后，用两次真实运行取证：
+
+| 场景 | 造法 | 库里的证据 | 页面显示 |
+|---|---|---|---|
+| 手动停止 | 概览卡上「停止」 | run 43 `CANCELLED / 用户主动停止`，`current_action` 仍是「等待 9 秒后处理第 14 张卡」 | 「当前动作」= **已结束：已取消**，无标签（长文案也不再出现） |
+| 进程被关掉 | `taskkill /F` 杀 java（run 45 正跑到「AI 判定中：… @ …」）→ 重启 | 重启收尾把它标成 `FAILED / SERVICE_RESTART`，`current_action` 保留死前那句；日志 `[zhaopin] [run 45] FAILED / SERVICE_RESTART / 服务重启，上一轮中断` | 「当前动作」= 那句原样保留 + 红色 **疑似异常退出**；任务页同一句不截断，概览单行省略（`title` 带全文） |
+
+顺带修了概览「当前动作」的换行问题：动作文案里带岗位名与公司名，折成两行会把并排两张卡的
+「浏览器 / 组合」行错开，现在这一行固定单行 + 省略号。
+
+**同一轮的收尾缺口：组合停在「进行中」**
+
+强杀那次还在任务页留了一个尾巴：组合队列里那一行状态停在 `RUNNING`。原因是组合循环
+把 `RUNNING` 写进库之后，收尾写在 `finally` 里 —— 进程没了，finally 不执行，
+而 `recoverOrphans()` 只修 Run、不看组合表，界面于是出现「Run 已失败、组合还在扫」。
+
+| 项 | 做法 | 依据 |
+|---|---|---|
+| 新增 `RunStore.abandonRunningCombinations(runId)` | 把该 Run 仍为 `RUNNING` 的组合改成 `INTERRUPTED` 并补 `finished_at`，返回行数 | 只按 `run_id + status='RUNNING'` 收，不碰其它状态、不跨 Run |
+| `recoverOrphans()` 调用它 | 在标 FAILED 之前调，并往运行日志写一行「上一轮中断时有 N 个组合停在扫描中间，已记为「已中断」」 | 收尾这件事必须留痕，否则人只看到状态变了却不知道发生过什么 |
+| 状态名用 `INTERRUPTED` 而不是 `SKIPPED` | 前端加中文映射（未开始/进行中/已完成/已跳过/失败/已中断） | `SKIPPED` 的既有含义是配额到顶、值守到点这类**计划内收手**；与「进程没了」混用会让「为什么跳过」无从回答 |
+| 前端再兜一层 | Run 已结束而组合仍是 `RUNNING`（旧数据）时显示「已中断」 | 数据修复只在重启时跑；展示层不该因为库里一行脏数据就把「结束」说成「进行中」 |
+| `RunStoreAbandonCombinationsTest` | 4 例：只动 RUNNING、不跨 Run、已 SKIPPED 不被改写、没有 RUNNING 时返回 0 | 待验的是 UPDATE 的**范围**，打桩会把断言退化成「自己塞的值又读回来」 |
+
+取证（run 46，真实强杀）：跑到组合 #1、卡片 193 张时 `taskkill /F` → 重启后
+`combination_run` 那行 `RUNNING → INTERRUPTED` 且 `finished_at` 补上、`run_log` 多出两行 WARN、
+任务页组合状态显示「已中断」、Run 显示「读取第 4 张卡的岗位详情 + 疑似异常退出」。
+全量 **263 例通过**（原 259 + 新增 4）。
 
 **没覆盖到的三处**（不是通过，是没取证）：
 

@@ -108,10 +108,14 @@
 
       <!-- 「现在在干什么」+「上次动是什么时候」：等待期间日志是静默的，
            没有这一行，界面无法区分「在等」和「卡死」 -->
-      <div v-if="run && activity.text" class="row wrap" style="margin-top: 14px; gap: 10px; align-items: baseline">
+      <div
+        v-if="run && (activity.action || activity.text)"
+        class="row wrap"
+        style="margin-top: 14px; gap: 10px; align-items: baseline"
+      >
         <span class="hint-inline">当前动作</span>
-        <span>{{ run.currentAction || '—' }}</span>
-        <span class="tag" :class="activity.tone">{{ activity.text }}</span>
+        <span>{{ activity.action || '—' }}</span>
+        <span v-if="activity.text" class="tag" :class="activity.tone">{{ activity.text }}</span>
       </div>
     </div>
 
@@ -134,7 +138,7 @@
             <tr v-for="c in combinations" :key="c.id">
               <td class="num">{{ c.seq + 1 }}</td>
               <td>{{ c.city || '不限' }} / {{ c.keyword || '不限' }}</td>
-              <td><span class="tag" :class="comboClass(c.status)">{{ c.status }}</span></td>
+              <td><span class="tag" :class="comboView(c).tone">{{ comboView(c).label }}</span></td>
               <td class="num">{{ c.cardsSeen }}</td>
               <td class="num">{{ c.delivered }}</td>
             </tr>
@@ -250,8 +254,27 @@ const activity = computed(() =>
   activityView(run.value, { nowMs: nowMs.value, staleAfterSeconds: staleAfter.value })
 )
 
-function comboClass(s: string) {
-  return s === 'DONE' ? 'ok' : s === 'RUNNING' ? 'warn' : s === 'FAILED' ? 'danger' : ''
+/**
+ * 组合状态 → 标签。
+ *
+ * <p>两个理由不直接显示枚举：一是 `SKIPPED`/`INTERRUPTED` 这两个词本身就说不清
+ * 「为什么没跑完」；二是「进行中」只有在 Run 还活着时才成立 —— 服务被强杀后
+ * 库里可能还留着 RUNNING（后端重启收尾会补成 INTERRUPTED，这里再兜一层旧数据），
+ * 那一行绝不能显示成还在扫。
+ */
+const COMBO_LABEL: Record<string, string> = {
+  PENDING: '未开始',
+  RUNNING: '进行中',
+  DONE: '已完成',
+  SKIPPED: '已跳过',
+  FAILED: '失败',
+  INTERRUPTED: '已中断'
+}
+
+function comboView(c: any) {
+  const status = c.status === 'RUNNING' && !active.value ? 'INTERRUPTED' : c.status
+  const tone = status === 'DONE' ? 'ok' : status === 'FAILED' ? 'danger' : status === 'PENDING' ? '' : 'warn'
+  return { label: COMBO_LABEL[status] || status, tone }
 }
 
 // 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法

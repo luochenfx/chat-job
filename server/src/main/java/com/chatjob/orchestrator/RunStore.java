@@ -250,6 +250,27 @@ public class RunStore {
     }
 
     /**
+     * 把某个 Run 还挂着 RUNNING 的组合收尾成 INTERRUPTED。
+     *
+     * <p>只在重启收尾（{@code recoverOrphans}）里用得到，理由是一条执行路径：
+     * 组合循环把状态写成 RUNNING 之后，收尾写在 {@code finally} 里；进程被强杀时
+     * finally 不会执行，于是 combination_run 留下一行永远 RUNNING —— 界面上写着
+     * 「进行中」，而那一轮早就结束了，人就会以为还在扫那张卡。
+     *
+     * <p>不写成 SKIPPED：SKIPPED 的既有含义是「配额/到点，没跑完，剩余卡片留待回扫」，
+     * 是计划内的收手；这里是进程没了，语义不同，混用会让「为什么跳过」无从回答。
+     *
+     * @return 被收尾的行数（0 表示上一轮没停在组合扫描中间）
+     */
+    public int abandonRunningCombinations(Long runId) {
+        return jdbc.update("""
+                UPDATE combination_run
+                   SET status = 'INTERRUPTED', finished_at = ?
+                 WHERE run_id = ? AND status = 'RUNNING'
+                """, ConfigStore.now(), runId);
+    }
+
+    /**
      * 把这一轮的所有组合复位成「还没扫过」。
      *
      * <p>跨自然日恢复扫描前必须调它：昨天扫完的组合队列表现在状态还是 DONE，

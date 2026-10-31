@@ -15,7 +15,13 @@ public class CombinationRunEntity {
     private Integer seq;
     private String city;
     private String keyword;
-    /** PENDING|RUNNING|DONE|SKIPPED|FAILED */
+    /**
+     * PENDING|RUNNING|DONE|SKIPPED|FAILED|INTERRUPTED。
+     *
+     * <p>INTERRUPTED 只在一种情况下出现：进程被强杀时组合正跑到一半，重启收尾
+     * （{@code RunStore.abandonRunningCombinations}）把它从 RUNNING 改写成这个值。
+     * 与 SKIPPED 区分开，是因为 SKIPPED 是计划内的收手（配额到顶、值守到点）。
+     */
     private String status;
     private Integer cardsSeen;
     private Integer evaluated;

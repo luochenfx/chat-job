@@ -76,10 +76,15 @@
         <div class="prows">
           <div class="prow">
             <span class="prow-key">当前动作</span>
-            <span class="prow-val">
-              {{ c.run?.currentAction || (c.run ? '—' : '无') }}
-              <!-- 只有还在跑的 Run 才谈「多久没动了」：已结束的，卡头的状态标签已经说完 -->
-              <span v-if="viewOf(c).active && activityOf(c).text" class="tag" :class="activityOf(c).tone">
+            <!-- 单行 + 省略：动作文案里带岗位名与公司名，能长到折成两行；
+                 两张卡并排时一旦折行，下面的「浏览器 / 组合」就跟着错位，扫视就废了 -->
+            <span class="prow-val prow-val-action">
+              <span class="prow-action" :title="activityOf(c).action || ''">
+                {{ activityOf(c).action || (c.run ? '—' : '无') }}
+              </span>
+              <!-- 已结束的 Run 不再说「多久没动」，但它怎么结束的要说清楚：
+                   手动停止 → 已结束：已取消；进程没了 → 最后一句动作 + 疑似异常退出 -->
+              <span v-if="activityOf(c).text" class="tag" :class="activityOf(c).tone">
                 {{ activityOf(c).text }}
               </span>
             </span>
@@ -376,6 +381,28 @@ onUnmounted(() => {
 .prow-val {
   color: var(--ink-2);
   text-align: right;
+}
+
+/* 动作格子：文本可省略、标签不换行。min-width: 0 是让 flex 子项允许被压缩的前提，
+   少了它长文本会把整行撑宽而不是打省略号 */
+.prow-val-action {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.prow-action {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prow-val-action .tag {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .pcard-foot {
