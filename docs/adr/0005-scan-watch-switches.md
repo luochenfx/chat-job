@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted（2026-11-01，spec 0005）。实现进度：P0（`V14` 两列、`ConfigStore` 两个读法、`ConfigController` 读写与双关拒绝、`SystemController` 两个 DTO）已完成；P1（关闭扫描真正改变运行行为：`start` 跳过空组合校验、`runLoop` 的 `!scanEnabled` 分支、组合入口与卡片边界两处判定、`StandbyGate` 新增 `SCAN_DISABLED` 与 `scanEnabled` 入参、`enterStandby` / `stopLabel` / `finishDryRun` 文案）已完成；P2（关闭值守：`runLoop` 的 `SCAN_DONE` 与 `WATCH_DISABLED` 两条收尾、`StandbyExit.ENDED`、`standbyLoop` 顶部与 `sleepInterruptibly` 每秒检查、插空巡检跳过）已完成；P3（控制台）未实现。
+accepted（2026-11-01，spec 0005）。实现进度：P0（`V14` 两列、`ConfigStore` 两个读法、`ConfigController` 读写与双关拒绝、`SystemController` 两个 DTO）已完成；P1（关闭扫描真正改变运行行为：`start` 跳过空组合校验、`runLoop` 的 `!scanEnabled` 分支、组合入口与卡片边界两处判定、`StandbyGate` 新增 `SCAN_DISABLED` 与 `scanEnabled` 入参、`enterStandby` / `stopLabel` / `finishDryRun` 文案）已完成；P2（关闭值守：`runLoop` 的 `SCAN_DONE` 与 `WATCH_DISABLED` 两条收尾、`StandbyExit.ENDED`、`standbyLoop` 顶部与 `sleepInterruptibly` 每秒检查、插空巡检跳过）已完成；P3（控制台：三枚开关一组、概览徽标与 `—` 口径、任务页启动提示与只值守横幅、补订阅 `run.standby` / `run.rescan`）已完成。P4（回归：全量单测与两平台各跑一轮）未做。
 
 ## Context
 

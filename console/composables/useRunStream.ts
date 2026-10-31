@@ -15,6 +15,11 @@ const EVENT_TYPES = [
   'unread.detected',
   'circuit.opened',
   'duty.ended',
+  // 这两条原本不在白名单里：任务页的 describe() 早就写了它们的文案分支，但事件从来没被订阅，
+  // 于是「扫描结束，转入值守待命」与「恢复扫描」在界面上一直不出现，只在断言上看是对的。
+  // spec 0005 又给 run.standby 增加了 SCAN_DISABLED 这个原因，必须先订阅才谈得上显示。
+  'run.standby',
+  'run.rescan',
   'run.finished'
 ]
 

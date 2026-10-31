@@ -1,6 +1,6 @@
 # 文档
 
-> 面向需要改代码、调接口、定位实现问题的人。内容以**当前代码与实际接口响应**为准（核对日期 2026-10-31）。
+> 面向需要改代码、调接口、定位实现问题的人。内容以**当前代码与实际接口响应**为准（核对日期 2026-11-01）。
 > `spec/` 与 `adr/` 是设计文档与架构决策记录，其中标注「待评审」「非目标」「分期」「未取证」的条目**如实反映当时的状态**，不代表已经实现；与代码有出入时，以代码和实际接口为准。
 > 只想使用、不打算改代码的人看仓库根 [`README.md`](../README.md) 即可。
 
@@ -40,7 +40,7 @@
 | 自动发简历 | 仅当规则动作显式设为 `SEND_RESUME` 时点一次「发简历」，发完不补话；不交给 AI 决定。确认气泡是可选步骤（对方已索要过简历时不弹），成败一律看「简历卡片 +1（20 秒内）」 | `watcher/UnreadWatcher.java`、`BossAdapter.sendResume`、`web/ReplyRuleController.java` |
 | 可见的活动状态 | `current_action` / `last_activity_at` / `scan_day` 三列 + `staleAfterSeconds`：等待期间也写「在等什么」，前端据此区分「在等」与「无响应」 | `orchestrator/RunService.java`（`park()` / `act()`，均为私有）、`web/RunController.java`、`console/composables/useRunStatus.ts`、`console/composables/useActivity.ts` |
 | 通知与自检 | 企业微信群机器人告警（可节流，节流键含平台）、driver 指纹自检、登录态探测与扫码入口、数据清理 | `notify/`、`driver/SelfCheck.java`、`web/SystemController.java` |
-| 控制台 | 概览 / 任务 / 岗位 / 配置 / 系统 五页；概览按平台并排展示，其余页面单平台切换；任务页有 SSE 实时事件与运行日志。选中平台持久化优先级：URL `?platform=` → localStorage → 平台清单第一项 | `console/pages/`、`console/composables/usePlatform.ts`、`console/components/PlatformSwitch.vue` |
+| 控制台 | 概览 / 任务 / 岗位 / 配置 / 系统 五页；概览按平台并排展示，其余页面单平台切换；任务页有 SSE 实时事件与运行日志。平台配置页把「平台启用 / 扫描 / 值守」三枚开关排成一组，只值守时扫描侧字段整组禁用并说明；概览卡标注「仅值守 / 仅扫描」，只值守平台的扫描侧计数显示 `—`。选中平台持久化优先级：URL `?platform=` → localStorage → 平台清单第一项 | `console/pages/`、`console/composables/usePlatform.ts`、`console/composables/useRunStream.ts`、`console/components/PlatformSwitch.vue` |
 | 凭据保护 | API Key 与 Cookie 密文落库（Windows 用 DPAPI，其他平台退化为 AES-GCM + 本地 key 文件），GET 接口只返回「是否已配置」 | `config/SecretCipher.java`、`web/ConfigController.java` |
 
 **未接通项与容易误判的口径**（按 spec 或直觉判断容易出错的地方）：
@@ -53,6 +53,8 @@
 - **值守发简历至今没有真实数据**：全库 `reply_log` 的 `REPLY_RESUME` 为 0 条，两个平台都从未真实触发过。代码路径已就位，但未经真实运行验证（见 `spec/0004` §6「还开着的口子」）。
 - `ai_config` 与 `reply_rule` 没有平台维度：前者是单行表，后者唯一键不含 platform，两个平台共用一套。配置页已标注作用域，改表属于另一个 spec。
 - 智联这一期的筛选参数**只有城市 + 关键词**。页面上还有薪资、经验、学历等条件，但适配器不把它们拼进列表地址（`platform_config` 里留着这些字段不影响 Boss）。
+- **未启用值守的 Run 中止组合时，日志里那句「剩余卡片留待回扫时继续」不成立**：这一轮会以 `COMPLETED / SCAN_DONE` 结束，不会再回扫（`RunService.executeCombinations` 的中止文案是扫描侧通用措辞，未按值守开关分支）。
+- **概览与任务页的「组合」可能显示成 `2 / 1`**：`combination_index` 存的是当前组合 seq（0 基），`combinationTotal` 是该 Run 的组合行数，最后一轮时 `index` 会等于 `total`。这是既有口径，读的时候按「第 index+1 个」理解即可。
 
 ## 技术栈与分层
 
@@ -225,7 +227,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 |---|---|---|
 | 缺省平台（调用方未传 `platform` 时） | `boss` | `chat-job.active-platform`（`application.yaml`，可用环境变量 `CHAT_JOB_ACTIVE_PLATFORM` 覆盖） |
 | 平台开关 | 启用 | `platform_config.enabled`（V1 建表即有，阶段 3 起真正生效） |
-| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。两个都关时拒绝保存（400，文案指向平台开关）。关掉即改运行行为：扫描在卡片边界与组合入口生效，值守在待命循环的每秒检查与插空巡检生效。控制台的开关分组与徽标属 spec 0005 的 P3，尚未上线——目前只能用 `PUT /api/config/platform/{platform}`（**整份对象**，见下方排错表）改
+| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。两个都关时拒绝保存（400，文案指向平台开关）。关掉即改运行行为：扫描在卡片边界与组合入口生效，值守在待命循环的每秒检查与插空巡检生效。控制台「配置 · 平台配置」把「平台启用 / 扫描 / 值守」排成一组；概览卡在平台名旁标「仅值守 / 仅扫描」，只值守平台的「今日主动投递」「今日评估」显示 `—` 而不是 0。用 `PUT /api/config/platform/{platform}` 手工改时必须提交**整份对象**（见下方排错表）
 | 日投递配额 / 日评估上限 | 30 / 150（**每平台各一份**） | `platform_config`（V1） |
 | 卡片间隔基准 / 滚动轮上限 / 单组合时间上限 | 10 秒（实际随机 5–10 秒）/ 300 轮 / 1200 秒 | 同上 |
 | HR 活跃度下限 | 本月 | 同上 |
@@ -277,7 +279,7 @@ mvn -B -f server/pom.xml test
 cd console && npm run build
 ```
 
-`server/src/test/java/` 下共 28 个测试类；`spec/0004` 阶段 3 记载全量 267 例通过（1 例按注解跳过）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
+`server/src/test/java/` 下共 28 个测试类；全量 273 例通过（1 例按注解跳过，2026-11-01 实测）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
 
 | 脚本 | 用途 | 副作用 |
 |---|---|---|
@@ -295,12 +297,12 @@ cd console && npm run build
 | [`spec/0002-ai-reply.md`](spec/0002-ai-reply.md) | 值守 AI 回复与实施记录（含出站四重校验） |
 | [`spec/0003-run-standby.md`](spec/0003-run-standby.md) | 值守期：扫描收工后值守继续 + 可见的运行态 |
 | [`spec/0004-zhaopin-parallel.md`](spec/0004-zhaopin-parallel.md) | 智联接入与多平台并行：阶段划分、实施记录与最终审查 |
-| [`spec/0005-scan-watch-switches.md`](spec/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（**P0 已实现**：两列 + 读取方法 + 读写接口；P1–P3 未实现） |
+| [`spec/0005-scan-watch-switches.md`](spec/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0–P3 已实现：数据与读写、关闭扫描、关闭值守、控制台；P4 回归未做） |
 | [`adr/0001-patchright-as-playwright-driver.md`](adr/0001-patchright-as-playwright-driver.md) | 为什么用 patchright 当 playwright 的 driver |
 | [`adr/0002-standby-instead-of-finish.md`](adr/0002-standby-instead-of-finish.md) | 配额用完不结束，改为值守待命 |
 | [`adr/0003-parallel-platforms.md`](adr/0003-parallel-platforms.md) | 每个平台一条独立流水线，并行运行 |
 | [`adr/0004-delivery-vs-resume-on-request.md`](adr/0004-delivery-vs-resume-on-request.md) | 投递只算主动投递，应对方要求发的简历不进投递表 |
-| [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0 已实现，P1–P3 未实现） |
+| [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0–P3 已实现，P4 未做） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

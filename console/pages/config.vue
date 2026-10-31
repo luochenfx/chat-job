@@ -308,25 +308,64 @@
         <span class="scope-key">正在配置</span>
         <PlatformSwitch v-model="platformPick" :platforms="platforms" />
         <!--
-          开关与其余字段同批保存：它不是「立刻生效的总闸」，而是这个平台配置的一部分。
-          单独给开关做即时保存，就会出现「改了城市没保存、开关却已经关了」的错位。
+          三枚开关排成一组：平台启用决定「能不能启动」，扫描与值守决定「启动之后做什么」，
+          三者互不派生。并排放是为了让这层关系直接可见 —— 分开摆就得靠文字解释它们的关系。
+
+          它们与其余字段同批保存，不做即时保存：开关也属于这份平台配置，
+          单独即时保存会出现「改了城市没保存、开关却已经关了」的错位。
         -->
-        <label class="switch" :title="switchHint">
-          <input v-model="platform.enabled" type="checkbox" />
-          <span>{{ platform.enabled === false ? '已停用' : '已启用' }}</span>
-        </label>
+        <div class="switches">
+          <label class="switch" :title="enabledHint">
+            <input v-model="platform.enabled" type="checkbox" />
+            <span>平台启用<b>{{ platform.enabled === false ? '关' : '开' }}</b></span>
+          </label>
+          <label class="switch" :title="scanHint">
+            <input v-model="platform.scanEnabled" type="checkbox" />
+            <span>扫描<b>{{ platform.scanEnabled === false ? '关' : '开' }}</b></span>
+          </label>
+          <label class="switch" :title="watchHint">
+            <input v-model="platform.watchEnabled" type="checkbox" />
+            <span>值守<b>{{ platform.watchEnabled === false ? '关' : '开' }}</b></span>
+          </label>
+        </div>
         <span class="scope-note">下面五张卡只属于这个平台；搜索条件与配额都是每平台一份</span>
         <span v-if="dirty" class="tag warn">有未保存改动</span>
       </div>
 
-      <!-- 停用后果写在开关正下方：只写一个「已停用」标签，人不知道它关掉了什么 -->
+      <!--
+        后果写在开关下方，四种状态各一句。只给开关、不写后果时，人分不清「关扫描」与
+        「关值守」的差别，也看不出两个都关会怎样 —— 那正好是被后端拒绝保存的那种状态。
+        同时只能出现一条：停用时后面几行的判断都不再成立。
+      -->
       <div v-if="platform.enabled === false" class="off-note">
         停用后不再为「{{ platformLabel }}」开浏览器，也不启动它的扫描与值守；另一个平台照常跑。
-        正在跑的任务要先停止，否则停用会被拒绝。
+        正在跑的任务要先停止，否则停用会被拒绝。停用时下面两个开关不起作用。
+      </div>
+      <div v-else-if="bothOff" class="off-note danger">
+        两个都关时保存会被拒绝。要整体停用「{{ platformLabel }}」，请关掉「平台启用」——
+        那会同时关掉浏览器，与「什么都不做」不是一回事。
+      </div>
+      <div v-else-if="scanOff" class="off-note">
+        只值守：「{{ platformLabel }}」启动后不加载岗位列表、不做投递判定、不投递，也不占投递配额与评估上限；
+        它直接进入值守待命，只按巡检间隔处理未读消息。
+      </div>
+      <div v-else-if="watchOff" class="off-note">
+        只扫描：「{{ platformLabel }}」的扫描与投递照常，但组合扫完后任务直接结束（状态「已完成」），
+        不再继续盯未读消息；要再投一轮就重新点启动。
       </div>
 
-      <div class="card">
+      <!--
+        未启用扫描时整张卡用原生 disabled：控件灰化、键盘也进不去。
+        这一段全是扫描侧字段（城市、关键词、筛选、活跃度下限），只值守时它们不参与任何判定；
+        留成可编辑会让「改了会生效」变成默认假设。
+        用 fieldset 而不是给每个控件绑 disabled，是因为禁用的对象是「这一组字段」，
+        逐个绑会在新增字段时被漏掉。
+      -->
+      <fieldset class="card" :disabled="scanOff">
         <h2>搜索条件</h2>
+        <p v-if="scanOff" class="card-note">
+          该平台未启用扫描：这些字段不生效，打开扫描后才会被使用
+        </p>
         <p class="hint">
           城市填中文名，执行时才换 code。{{ platformNote || '六组筛选是全局一套、只叠加不展开' }}
         </p>
@@ -384,7 +423,7 @@
             平台文案没有「7 天」这一档，只能按档位定；映射表之外的文案归为「未知」，不参与硬过滤
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <div class="card">
         <h2>配额与节奏</h2>
@@ -392,28 +431,36 @@
           主动投递配额决定主动沟通多少岗位，评估上限决定查看多少岗位
           配额用完只是今天不再找岗位，HR 的消息照常回。
         </p>
+        <!--
+          这张卡里混了两类字段：前五项属扫描（配额、上限、节奏），后两项属值守（未读上限、巡检间隔）。
+          所以只禁用前五项，不整卡禁用 —— 整卡禁用会让人以为巡检间隔也改不了，而它照常生效。
+        -->
+        <p v-if="scanOff" class="card-note">
+          该平台未启用扫描：投递配额、评估上限、动作间隔、滚动与时长上限不生效；
+          最后两项（未读列表扫描上限、值守巡检间隔）属值守，照常生效
+        </p>
         <div class="grid cols-3">
           <div class="field">
             <label>日主动投递配额</label>
-            <input v-model.number="platform.dailyDeliveryQuota" type="number" min="1" max="200" />
+            <input v-model.number="platform.dailyDeliveryQuota" type="number" min="1" max="200" :disabled="scanOff" />
             <div class="desc">只含扫描侧发起的投递；值守里应对方索要发的简历不计入</div>
           </div>
           <div class="field">
             <label>日评估上限</label>
-            <input v-model.number="platform.dailyEvalLimit" type="number" min="10" max="1000" />
+            <input v-model.number="platform.dailyEvalLimit" type="number" min="10" max="1000" :disabled="scanOff" />
           </div>
           <div class="field">
             <label>动作间隔（秒）</label>
-            <input v-model.number="platform.waitTimeSeconds" type="number" min="3" max="60" />
+            <input v-model.number="platform.waitTimeSeconds" type="number" min="3" max="60" :disabled="scanOff" />
             <div class="desc">实际等待为 [间隔/2, 间隔] 的随机值</div>
           </div>
           <div class="field">
             <label>单组合滚动上限（轮）</label>
-            <input v-model.number="platform.scrollRoundLimit" type="number" min="20" max="2000" />
+            <input v-model.number="platform.scrollRoundLimit" type="number" min="20" max="2000" :disabled="scanOff" />
           </div>
           <div class="field">
             <label>单组合时长上限（秒）</label>
-            <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" />
+            <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" :disabled="scanOff" />
           </div>
           <div class="field">
             <label>未读列表扫描上限（条）</label>
@@ -606,8 +653,11 @@ const riskyToneHits = computed(() => {
  */
 function defaultPlatformConfig() {
   return {
-    // 开关与其余字段同属一份配置：没配过按启用（与 platform_config.enabled 的建表默认值 1 一致）
+    // 三枚开关与其余字段同属一份配置：没配过时按建表默认值给，都是开
     enabled: true,
+    // 扫描与值守互不派生：关掉哪个就只少做那件事，不影响另一个（V14 两列都是 DEFAULT 1）
+    scanEnabled: true,
+    watchEnabled: true,
     cities: [],
     keywords: [],
     jobType: '',
@@ -633,14 +683,38 @@ function defaultPlatformConfig() {
   }
 }
 
-/** 开关的悬浮说明：停用后果不写在提示里，人就以为它只是「暂时不显示」 */
-const switchHint = computed(() =>
+const platform = reactive<any>(defaultPlatformConfig())
+
+/**
+ * 两个关闭态在模板里被反复判定（off-note、置灰、悬浮说明），取个名字比处处写
+ * `=== false` 更不容易读错 —— 这两个字段来自后端，缺失时按开处理，所以只判 false。
+ */
+const scanOff = computed(() => platform.scanEnabled === false)
+const watchOff = computed(() => platform.watchEnabled === false)
+/** 两个都关是后端拒绝保存的状态：界面先说出来，别等人点了保存才看到 400 */
+const bothOff = computed(() => scanOff.value && watchOff.value)
+
+/**
+ * 三枚开关的悬浮说明。关闭态单独写一句，因为「关掉会怎样」不能从开启态反推：
+ * 关扫描不是「少扫一点」，而是连搜索页都不打开、不占配额。
+ */
+const enabledHint = computed(() =>
   platform.enabled === false
-    ? '停用：不再为它开浏览器，也不启动它的扫描与值守'
-    : '启用：这个平台会参与扫描与值守'
+    ? '关闭：不再为它开浏览器，也不启动它的扫描与值守；扫描与值守两个开关不再起作用'
+    : '开启：这个平台可以被启动。启动后做什么由扫描与值守两个开关决定'
 )
 
-const platform = reactive<any>(defaultPlatformConfig())
+const scanHint = computed(() =>
+  scanOff.value
+    ? '关闭扫描：不加载岗位列表、不做投递判定、不投递，也不占投递配额与评估上限'
+    : '开启扫描：按城市 × 关键词加载岗位列表，并逐卡决定投不投'
+)
+
+const watchHint = computed(() =>
+  watchOff.value
+    ? '关闭值守：不巡检未读、不读消息、不回消息、不发简历；平台侧的未读标记保持原样'
+    : '开启值守：扫描进行中按间隔插空巡检，扫描结束后继续巡检'
+)
 
 /** 加载完成时的快照：与当前值比较得出 dirty（切 tab / 切平台前据此拦截） */
 const snapshot = ref(JSON.stringify(platform))
@@ -953,6 +1027,45 @@ onMounted(loadAll)
   border: 1px solid var(--line);
   border-left: 3px solid var(--warn, #b7791f);
   border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+/* 两个都关＝保存一定会被拒：与「某个开关关掉的后果」不是一类信息，用错误色区分 */
+.off-note.danger {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 三枚开关一组：间距比卡片外的小，读起来是「同一组状态」而不是三个独立选项 */
+.switches {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+/* 开关后的「开 / 关」：只有滑块位置一个状态信号时，一行三枚很容易看错是哪一个 */
+.switches b {
+  margin-left: 5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* fieldset 自带 border、margin-inline 与 min-inline-size；这里只保留 .card 的观感，
+   min-width: 0 是让它在 grid 或 flex 容器里允许被压缩的前提 */
+fieldset.card {
+  min-width: 0;
+  margin-inline: 0;
+}
+
+/* 卡片内部的「这一段现在不生效」提示：比正文次要，比 tooltip 显眼 */
+.card-note {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--line-strong);
   background: var(--surface-2);
   font-size: 12px;
   color: var(--ink-2);

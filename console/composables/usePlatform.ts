@@ -16,6 +16,13 @@ export interface PlatformDesc {
   filters?: string[]
   note?: string
   enabled?: boolean
+  /**
+   * 扫描开关与值守开关（spec 0005）。两者都是「启动之后做什么」，与 enabled
+   * 的「能不能启动」并列且互不派生。缺失按开处理 —— 与后端 `platform_config`
+   * 两列的建表默认值一致。
+   */
+  scanEnabled?: boolean
+  watchEnabled?: boolean
 }
 
 const STORAGE_KEY = 'chat-job.platform'

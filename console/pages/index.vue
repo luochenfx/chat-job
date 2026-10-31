@@ -37,7 +37,18 @@
       <div v-for="c in cards" :key="c.platform" class="pcard" :class="{ off: c.enabled === false }">
         <div class="pcard-head">
           <div>
-            <div class="pcard-title">{{ c.label }}</div>
+            <div class="pcard-title">
+              {{ c.label }}
+              <!--
+                徽标紧贴平台名：概览要回答的第一个问题是「这个平台现在在做什么」，只报数字答不了。
+                只值守平台的「今日主动投递」恒为 0，没有这行标注会被读成投递失败（spec 0005 R5）。
+              -->
+              <span
+                v-if="scopeBadge(c).label"
+                class="pcard-badge"
+                :class="scopeBadge(c).tone"
+              >{{ scopeBadge(c).label }}</span>
+            </div>
             <div class="pcard-sub">
               <template v-if="c.run">
                 #{{ c.run.id }} · {{ modeText(c.run.mode) }} · {{ shortTime(c.run.startedAt) }}
@@ -57,8 +68,13 @@
                合成一个数字会让人以为今天被动的那些也消耗了配额（ADR-0004） -->
           <div class="pstat">
             <div class="pstat-label">今日主动投递</div>
-            <div class="pstat-value">
-              {{ c.delivered ?? 0 }}<span class="pstat-den"> / {{ c.quota ?? '—' }}</span>
+            <!-- 未启用扫描时这个数字不可能产生：显示 0 与「投了但全失败」在视觉上是同一件事，
+                 用 — 并在 title 里说明原因，读者不必回配置页确认 -->
+            <div class="pstat-value" :title="scanOff(c) ? '该平台未启用扫描，今日不会产生主动投递' : ''">
+              <template v-if="scanOff(c)">—</template>
+              <template v-else>
+                {{ c.delivered ?? 0 }}<span class="pstat-den"> / {{ c.quota ?? '—' }}</span>
+              </template>
             </div>
           </div>
           <div class="pstat">
@@ -67,8 +83,12 @@
           </div>
           <div class="pstat">
             <div class="pstat-label">今日评估</div>
-            <div class="pstat-value">
-              {{ c.evaluated ?? 0 }}<span class="pstat-den"> / {{ c.evalLimit ?? '—' }}</span>
+            <!-- 与主动投递同一判据：评估也只在扫描时发生 -->
+            <div class="pstat-value" :title="scanOff(c) ? '该平台未启用扫描，今日不会产生投递判定' : ''">
+              <template v-if="scanOff(c)">—</template>
+              <template v-else>
+                {{ c.evaluated ?? 0 }}<span class="pstat-den"> / {{ c.evalLimit ?? '—' }}</span>
+              </template>
             </div>
           </div>
         </div>
@@ -156,9 +176,33 @@ function shortTime(at?: string) {
 /** 组合进度：只有跑过才谈得上「第几个」 */
 function comboText(c: any) {
   if (!c.run) return '—'
-  const index = (c.run.combinationIndex ?? 0) + 1
   const total = c.run.combinationTotal ?? 0
-  return total ? `${index} / ${total}` : `${index}`
+  // total 为 0 说明这一轮没有组合（未启用扫描的平台）：此时「第 1 个」是凭 index 默认值算出来的
+  // 假信息，指向一个不存在的组合
+  if (!total) return '—'
+  return `${(c.run.combinationIndex ?? 0) + 1} / ${total}`
+}
+
+/** 该平台是否关掉了扫描。两个统计数字与组合进度都按它切换显示口径 */
+function scanOff(c: any) {
+  return c.scanEnabled === false
+}
+
+/**
+ * 平台名旁的开关徽标，一句话说清「这个平台启动后做什么」。
+ *
+ * <p>「已停用」不在这里标 —— 右侧标签区已经有一个，重复标会稀释两个徽标各自的含义。
+ * 扫描与值守都关的组合后端拒绝保存，正常不会出现；真出现（比如直接改库）也不该沉默，
+ * 用错误色标出来比显示成「正常运行」诚实。
+ */
+function scopeBadge(c: any) {
+  if (c.enabled === false) return { label: '', tone: '' }
+  const scan = c.scanEnabled !== false
+  const watch = c.watchEnabled !== false
+  if (!scan && !watch) return { label: '扫描与值守都关', tone: 'danger' }
+  if (!scan) return { label: '仅值守', tone: 'warn' }
+  if (!watch) return { label: '仅扫描', tone: 'warn' }
+  return { label: '', tone: '' }
 }
 
 /**
@@ -316,6 +360,32 @@ onUnmounted(() => {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+/* 开关徽标与卡头右侧的状态标签分开：两者都在说「这个平台怎样」，
+   同一个样式会让人以为它是又一个运行状态 */
+.pcard-badge {
+  margin-left: 8px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  vertical-align: 1px;
+}
+
+.pcard-badge.warn {
+  color: var(--warn);
+  border-color: #e6d6ae;
+  background: #fbf5e6;
+}
+
+.pcard-badge.danger {
+  color: var(--danger);
+  border-color: #e8cdc7;
+  background: var(--danger-soft);
 }
 
 .pcard-sub {

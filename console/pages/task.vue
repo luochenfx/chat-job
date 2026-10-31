@@ -3,13 +3,18 @@
     <div class="page-head">
       <div>
         <h1>任务</h1>
-        <p>一次启动 = 一段值守期：扫描找岗位、值守回消息；扫描可以停，值守不会跟着停</p>
+        <p>一次启动 = 一段值守期：扫描找岗位、值守回消息；扫描停了值守照常，除非值守开关也关着</p>
         <!-- 时段只决定「什么时候开始跑」，不再是启动门禁：窗口内说到点时刻，等待态说还要等多久 -->
         <p v-if="dutyLine" class="hint" style="margin-bottom: 0">{{ dutyLine }}</p>
       </div>
       <div class="row wrap" style="justify-content: flex-end">
         <!-- 控件与它作用的对象同屏：整页内容都是这个平台的，所以切换器放在页头 -->
         <PlatformSwitch v-model="platformPick" :platforms="platforms" />
+        <!--
+          启动前就说清这一轮会做什么。「只值守不会扫描」「只扫描扫完即结束」都是启动之后
+          才看得出差别的事，等跑起来才说已经晚了。
+        -->
+        <span v-if="startHint" class="start-hint">{{ startHint }}</span>
         <select v-model="mode" style="width: 170px" :disabled="active">
           <option value="NORMAL">正常投递</option>
           <option value="DRY_RUN">演练模式（不发消息）</option>
@@ -31,12 +36,20 @@
     </div>
 
     <!-- 待命横幅：配额/评估/组合耗尽只是「今天不再找岗位」，不是「今天不再回消息」。
-         没有这条横幅，界面只剩一个黄标签，人会以为任务已经半死了 -->
+         没有这条横幅，界面只剩一个黄标签，人会以为任务已经半死了。
+         未启用扫描的平台从来没有扫过，标题与页脚都不能沿用「扫描已结束」那套说法。 -->
     <div v-if="run?.status === 'STANDBY'" class="notice">
-      <div class="notice-title">值守待命：扫描已结束，未读消息照常回复</div>
+      <div class="notice-title">
+        {{ scanOn ? '值守待命：扫描已结束，未读消息照常回复' : '值守待命：未启用扫描，只处理未读消息' }}
+      </div>
       <p class="notice-body">{{ run.message }}</p>
       <p class="notice-foot">
-        配额或评估上限调高、或跨过零点进入新的一天，会自动恢复扫描 —— 不需要停止重来。
+        <template v-if="scanOn">
+          配额或评估上限调高、或跨过零点进入新的一天，会自动恢复扫描 —— 不需要停止重来。
+        </template>
+        <template v-else>
+          这一轮不会恢复扫描：该平台的扫描开关是关闭的，没有可恢复的扫描。
+        </template>
         要真正结束，点「停止」。
       </p>
     </div>
@@ -182,7 +195,7 @@
 const { call } = useApi()
 const { show } = useToast()
 const { events, connected, open, clear, close } = useRunStream()
-const { platforms, ensure, platform: platformSlug, label: platformLabel, select } = usePlatform()
+const { platforms, ensure, current, platform: platformSlug, label: platformLabel, select } = usePlatform()
 // 秒级时钟抽在 composable 里，概览卡与这里共用同一句「多久没动了」
 const nowMs = useTickClock()
 
@@ -210,6 +223,33 @@ let currentRunId: number | null = null
 // 状态 → 标签/色调/能不能暂停，一处定义（原来三处各写一遍，加状态必漏）
 const runView = computed(() => runStatusView(run.value?.status))
 const active = computed(() => runView.value.active)
+
+/**
+ * 当前平台的扫描开关，取自平台清单（`/api/system/platforms`）。
+ *
+ * <p>不在任务页再请求一次平台配置：清单里已经带了这两个布尔，各页共用同一份快照；
+ * 多请求一次就多一个「清单说 A、配置说 B」的时间窗。缺省按开，与后端缺省口径一致。
+ */
+const scanOn = computed(() => current.value?.scanEnabled !== false)
+
+/**
+ * 启动按钮旁的一句话：这一轮会做什么、不会做什么。
+ *
+ * <p>只在没有进行中 Run 时给 —— 跑起来之后由待命横幅与状态说明，页头再说一遍会与之矛盾
+ * （两个开关都能在运行中改，页头那句是启动时刻的判断）。
+ */
+const startHint = computed(() => {
+  if (active.value) return ''
+  const desc = current.value
+  if (!desc) return ''
+  if (desc.enabled === false) return '该平台已停用，启动会被拒绝：先在配置页启用它'
+  const scan = desc.scanEnabled !== false
+  const watch = desc.watchEnabled !== false
+  if (!scan && !watch) return '该平台的扫描与值守都关着：启动后没有可做的事'
+  if (!scan) return '该平台未启用扫描：启动后不加载岗位，直接进入值守'
+  if (!watch) return '该平台未启用值守：扫描照常，扫完组合即结束'
+  return ''
+})
 // 窗口外 + 正常模式 + 还没跑：点启动不会立刻执行，而是排到窗口打开（见模板里的 warn 块）。
 // 演练模式不发消息，本来就是窗口外唯一能立刻验证流程的方式，所以不提示。
 const dutyWarning = computed(() =>
@@ -288,7 +328,13 @@ function time(at: number) {
 
 // 事件里的 reason 是枚举，界面上要变成一句人话
 function stopReasonText(reason: string) {
-  return ({ QUOTA: '今日主动投递配额已用完', EVAL_LIMIT: '今日评估已达上限', COMBOS_EXHAUSTED: '搜索组合已扫完' } as any)[reason] || reason
+  return ({
+    QUOTA: '今日主动投递配额已用完',
+    EVAL_LIMIT: '今日评估已达上限',
+    COMBOS_EXHAUSTED: '搜索组合已扫完',
+    // 未启用扫描的平台一启动就是待命，这个原因下「扫描结束」不成立（spec 0005）
+    SCAN_DISABLED: '该平台未启用扫描'
+  } as any)[reason] || reason
 }
 
 function rescanReasonText(reason: string) {
@@ -307,7 +353,11 @@ function describe(e: { type: string; data: any }) {
         ? `值守时段已结束（${d.window}，${d.at}），已挂起；值守期未结束`
         : `不在值守时段（${d.window}，${d.at}），已挂起等待`
     case 'run.standby':
-      return `扫描结束（${stopReasonText(d.reason)}），转入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
+      // 未启用扫描的平台从未扫过，「扫描结束（…）」这句与事实不符：它只有在扫描真的
+      // 中止时才成立（spec 0005 §3.5 的文案要求）
+      return d.reason === 'SCAN_DISABLED'
+        ? `未启用扫描，进入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
+        : `扫描结束（${stopReasonText(d.reason)}），转入值守待命：主动投递 ${d.delivered} / 评估 ${d.evaluated}`
     case 'run.rescan':
       return `恢复扫描：${rescanReasonText(d.reason)}`
     case 'run.awakened':
@@ -475,3 +525,15 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
 })
 </script>
+
+<style scoped>
+/* 启动提示与按钮同一行：限宽并允许折行，否则一段长提示会把「启动」挤到下一行，
+   正好让「提示」和它解释的动作分家 */
+.start-hint {
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--warn);
+  text-align: right;
+}
+</style>
