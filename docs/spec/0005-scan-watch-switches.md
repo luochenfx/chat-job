@@ -373,6 +373,8 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
   `COMPLETED / SCAN_DISABLED`；
 - **验收 10**（时段外启动）：run 54 的值守时段临时设为 `02:50–23:59`，02:46 启动 → `WAITING_DUTY`；
   02:50 由调度唤醒 → 直接 `STANDBY`，日志无「开始扫描」；
+- 通知标题：`WecomRobotNotifier` 的日志是「[BOSS 直聘] 未启用扫描，值守中 — 未启用扫描，本次只值守：…」。
+  本机 `notify.wecom-webhook` 为空，所以只走到「通知未配置」这一支，没有真的投递；
 - 页面（bsk 观测 boss profile 那个实例的标签页）：扫描关时标签页是 `zhipin.com/web/geek/chat`；
   扫描开时是 `zhipin.com/web/geek/jobs?city=101230100&salary=405&query=java`。只值守期间没有
   `/web/geek/jobs` 的新导航；`threadPage` 每轮巡检结束就关闭，所以会话页标签是瞬时的，
