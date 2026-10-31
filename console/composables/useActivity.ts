@@ -11,15 +11,21 @@ import { runStatusView } from './useRunStatus'
  * 前端拿它做比较，不重复实现规则。
  */
 
-/** 秒级时钟：让「12 秒前有动作」在两次轮询之间也在走 */
-export function useTickClock() {
+/**
+ * 秒级时钟：让「12 秒前有动作」在两次轮询之间也在走。
+ *
+ * @param intervalMs 走字的间隔。默认 1 秒是因为「无响应 12 秒」要能看出在涨；
+ *   只显示到分钟精度的地方（岗位列表的「3 分钟前」）传 30000 —— 两百多行表格每秒
+ *   重算一遍，换来的只是分钟数早半分钟跳一次，不值。
+ */
+export function useTickClock(intervalMs = 1000) {
   const nowMs = ref(Date.now())
   let timer: ReturnType<typeof setInterval> | null = null
 
   onMounted(() => {
     timer = setInterval(() => {
       nowMs.value = Date.now()
-    }, 1000)
+    }, intervalMs)
   })
   onUnmounted(() => {
     if (timer) clearInterval(timer)

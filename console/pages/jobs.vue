@@ -32,6 +32,9 @@
             <th style="width: 92px">薪资</th>
             <th style="width: 80px">活跃度</th>
             <th style="width: 92px">状态</th>
+            <!-- 时间列紧跟状态：两格都在回答「这岗位新鲜不新鲜」，
+                 隔一列再放会让人把「扫到」读成「状态发生的时刻」 -->
+            <th style="width: 120px">时间</th>
             <th>判定 / 失败原因</th>
             <th style="width: 130px"></th>
           </tr>
@@ -52,6 +55,16 @@
             </td>
             <td>
               <span class="tag" :class="statusTag(job.deliveryStatus)">{{ statusText(job.deliveryStatus) }}</span>
+            </td>
+            <td class="when">
+              <div :title="fullTime(job.lastSeenAt)">
+                <span class="when-label">扫描</span>{{ relTime(job.lastSeenAt, nowMs) }}
+              </div>
+              <!-- 没有处置就整行不显示：状态列已经写着「未处理」，
+                   底下再来一个「处置 —」是重复；重投清掉投递记录后同样走这一支 -->
+              <div v-if="job.disposedAt" class="hint-inline" :title="fullTime(job.disposedAt)">
+                <span class="when-label">处置</span>{{ relTime(job.disposedAt, nowMs) }}
+              </div>
             </td>
             <td class="hint-inline">
               <span v-if="job.score != null">[{{ job.score }}] </span>
@@ -113,6 +126,8 @@ const { platforms, ensure } = usePlatform()
 
 const jobs = ref<any[]>([])
 const blacklist = ref<any[]>([])
+// 30 秒走一次字就够：这页的精度只到分钟，每秒重算两百多行不划算
+const nowMs = useTickClock(30000)
 const filter = ref('')
 // 空串 = 全部平台。与后端 /jobs 的缺省一致（不传就是全部）
 const platformFilter = ref('')
@@ -209,6 +224,19 @@ onMounted(refresh)
 </script>
 
 <style scoped>
+/* 两行时间共用一个列宽：标签定宽，后面的值才能对齐着扫 */
+.when {
+  font-variant-numeric: tabular-nums;
+}
+
+.when-label {
+  display: inline-block;
+  width: 26px;
+  margin-right: 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
 /* 平台标签比正文小一号、且不抢公司名：它的作用是「归属」而不是「内容」 */
 .plat {
   margin-right: 6px;
