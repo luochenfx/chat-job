@@ -156,7 +156,7 @@ Boss 一条流水线一天能扫的组合有限，而且每个平台的岗位池
 - **进程**：两棵独立的 `msedge` 进程树，`--user-data-dir` 分别指向 `…\boss` 与 `…\zhaopin`，同时存活。
 - **页面**：服务以 `active-platform=boss` 起时控制台侧栏是「BOSS 直聘」、自检灯「浏览器会话 已启动」；切 `CHAT_JOB_ACTIVE_PLATFORM=zhaopin` 重启后侧栏变为「智联招聘」，且 `browser-data/` 下才出现 `zhaopin` 目录；切回 boss 后 `probe-login` 仍返回 `loggedIn=true`（登录态没因分目录丢失）。
 - **bsk（自动化浏览器本体，二次实测已含两平台各一份扩展）**：
-  - 单平台（智联服务）：`bsk browsers` 列出 `f1c52653 自动化浏览器2（EXT 0.4.0）`；`bsk session start --browser f1c52653` + `bsk tab list` 读到服务 `open-login` 打开的 `福州招聘网…智联招聘` / `https://www.zhaopin.com/`；`bsk tab borrow` + 只读 `evaluate` 取到 `{url: https://www.zhaopin.com/, title: 智联, webdriver: false}`，页面 banner 显示已登录账号。
+  - 单平台（智联服务）：`bsk browsers` 列出 `f1c52653 自动化浏览器2（EXT 0.4.0）`；`bsk session start --browser f1c52653` + `bsk tab list` 读到服务 `open-login` 打开的 `北京招聘网…智联招聘` / `https://www.zhaopin.com/`；`bsk tab borrow` + 只读 `evaluate` 取到 `{url: https://www.zhaopin.com/, title: 智联, webdriver: false}`，页面 banner 显示已登录账号。
   - 双平台并存（`PlatformBrowserIsolationTest` + 真实 `browser-data`）：`bsk browsers` 同时列出 `9a198826 自动化浏览器（EXT 0.3.3）` 与 `f1c52653 自动化浏览器2（EXT 0.4.0）`；分别开会话读标签，`9a198826` → `BOSS直聘…` / `https://www.zhipin.com/`，`f1c52653` → `智联招聘` / `https://www.zhaopin.com/`，各自停在自己平台上，没有交叉。
 
 一条必须记住的限制：**bsk 能不能观测到某个自动化浏览器，取决于那个 profile 里有没有装、以及装的是哪一版 bsk 扩展**，与「bsk 是否支持 Playwright 浏览器」无关。
@@ -193,7 +193,7 @@ API 形状（2c 只改前端，不再动后端）：新建/查当前带可选 `p
 - **代码**：新增 `PlatformAdaptersTest`（4 例：按平台取、大小写归一、未知平台当场 400 而非返回 null、顺序按 `KNOWN` 且未声明平台沉到末尾）。全量单测 **255 例通过**（原 251 + 4）。
 - **日志**：`[adapters] 已装配平台: [boss, zhaopin]（未指定平台时缺省 boss）`；两平台各一条 `[playwright-boss]` / `[playwright-zhaopin]` 线程上的 `浏览器已启动（profile: …\boss / …\zhaopin）`；`[boss] [run 39]` 与 `[zhaopin] [run 40]` 两条日志流交错且可分辨；`[runs] 重启收尾完成，已装配平台 [boss, zhaopin]`。
 - **库**：run 39 / 40 同时 `RUNNING`，`select platform,count(*) … group by platform` = `boss:1, zhaopin:1` —— `uk_run_running` 按平台各放一条，不冲突。
-- **页面（bsk）**：`9a198826 自动化浏览器`（EXT 0.3.3）`tab list` → `BOSS直聘「福州招聘」` / `https://www.zhipin.com/web/geek/jobs?city=…&query=java`；`f1c52653 自动化浏览器2`（EXT 0.4.0）→ `https://i.zhaopin.com/im` + `https://www.zhaopin.com/jobs/?jl=681&kw=java`。两个实例各停自己平台，无交叉。
+- **页面（bsk）**：`9a198826 自动化浏览器`（EXT 0.3.3）`tab list` → `BOSS直聘「北京招聘」` / `https://www.zhipin.com/web/geek/jobs?city=…&query=java`；`f1c52653 自动化浏览器2`（EXT 0.4.0）→ `https://i.zhaopin.com/im` + `https://www.zhaopin.com/jobs/?jl=681&kw=java`。两个实例各停自己平台，无交叉。
 - **故障隔离（两个方向都测了）**：
   - 杀掉 zhaopin 的浏览器进程树（`taskkill /T /F`）→ zhaopin run 40 从第 N 张卡起逐张「没抓到详情，跳过」，组合跑完后 `COMPLETED`；**boss run 39 全程照跑**（`last_activity_at` 持续前进，仍在「等待 8 秒后处理第 2 张卡」）。
   - 反过来 cancel boss run 39 → boss 在卡片边界 `CANCELLED`，**zhaopin run 41 仍在「读取第 4 张卡的岗位详情」**。

@@ -22,7 +22,7 @@ class ZhaopinRecordTest {
     private static final String RECORD = """
             {
               "positionNumber": "CC378471810J40886738807",
-              "name": "福州java工程师",
+              "name": "北京java工程师",
               "salary60": "1-1.5万",
               "education": "本科",
               "workingExp": "5-10年",
@@ -32,7 +32,7 @@ class ZhaopinRecordTest {
               "jobDescription": "负责公司ERP系统开发，功能迭代与性能优化。",
               "positionUrl": "https://www.zhaopin.com/jobdetail/CC378471810J40886738807.htm",
               "hasAppliedPosition": false,
-              "workCity": "福州",
+              "workCity": "北京",
               "cityDistrict": "闽侯",
               "streetName": "上街",
               "jobDetailData": {
@@ -77,10 +77,10 @@ class ZhaopinRecordTest {
     void 记录转成中性模型时字段各就各位() throws Exception {
         JobDetail detail = ZhaopinRecord.toJobDetail(ZhaopinRecord.PanelView.empty(), JSON.readTree(RECORD));
         assertThat(detail.platformJobId()).isEqualTo("CC378471810J40886738807");
-        assertThat(detail.jobName()).isEqualTo("福州java工程师");
+        assertThat(detail.jobName()).isEqualTo("北京java工程师");
         assertThat(detail.companyName()).isEqualTo("电信科学技术第五研究所有限公司");
         assertThat(detail.salary()).isEqualTo("1-1.5万");
-        assertThat(detail.area()).isEqualTo("福州 闽侯 上街");
+        assertThat(detail.area()).isEqualTo("北京 闽侯 上街");
         assertThat(detail.experience()).isEqualTo("5-10年");
         assertThat(detail.degree()).isEqualTo("本科");
         assertThat(detail.hrName()).isEqualTo("陈女士");
@@ -182,7 +182,7 @@ class ZhaopinRecordTest {
                 "https://www.zhaopin.com/jobdetail/CCL1260832240J40831666816.htm?srccode=401901",
                 "java开发工程师（兼职）",
                 "8000-15000元",
-                List.of("福州·台江区", "3-5年", "学历不限", "兼职/临时", "招30人"),
+                List.of("北京·台江区", "3-5年", "学历不限", "兼职/临时", "招30人"),
                 "福建省卓正能源科技有限公司",
                 "/B轮 · 20-99人 · 产业互联网平台",
                 "黄紫金",
@@ -196,7 +196,7 @@ class ZhaopinRecordTest {
         assertThat(detail.jobName()).isEqualTo("java开发工程师（兼职）");
         assertThat(detail.companyName()).isEqualTo("福建省卓正能源科技有限公司");
         assertThat(detail.salary()).isEqualTo("8000-15000元");
-        assertThat(detail.area()).isEqualTo("福州·台江区");
+        assertThat(detail.area()).isEqualTo("北京·台江区");
         assertThat(detail.experience()).isEqualTo("3-5年");
         assertThat(detail.degree()).isEqualTo("学历不限");
         assertThat(detail.hrName()).isEqualTo("黄紫金");
@@ -210,23 +210,23 @@ class ZhaopinRecordTest {
     void 面板与列表冲突时面板优先() throws Exception {
         ZhaopinRecord.PanelView panel = new ZhaopinRecord.PanelView(
                 "CCL1260832240J40831666816", "https://www.zhaopin.com/jobdetail/CCL1260832240J40831666816.htm",
-                "面板上的岗位名", "9000-10000元", List.of("福州·鼓楼区", "1-3年", "本科"),
+                "面板上的岗位名", "9000-10000元", List.of("北京·鼓楼区", "1-3年", "本科"),
                 "面板上的公司", "", "李四", "今日活跃", "招聘专员", "继续沟通", "面板JD", "{}");
         JobDetail detail = ZhaopinRecord.toJobDetail(panel, JSON.readTree(RECORD));
         assertThat(detail.platformJobId()).isEqualTo("CCL1260832240J40831666816");
         assertThat(detail.jobName()).isEqualTo("面板上的岗位名");
         assertThat(detail.companyName()).isEqualTo("面板上的公司");
-        assertThat(detail.area()).isEqualTo("福州·鼓楼区");
+        assertThat(detail.area()).isEqualTo("北京·鼓楼区");
         assertThat(detail.activeRaw()).isEqualTo("今日活跃");
     }
 
     /** 摘要区标签顺序不固定，按内容判别而不是按位置取 */
     @Test
     void 摘要区标签按内容判别() {
-        List<String> tags = List.of("学历不限", "招30人", "1-3年", "福州·台江区", "全职");
+        List<String> tags = List.of("学历不限", "招30人", "1-3年", "北京·台江区", "全职");
         assertThat(ZhaopinRecord.pickExperience(tags)).isEqualTo("1-3年");
         assertThat(ZhaopinRecord.pickDegree(tags)).isEqualTo("学历不限");
-        assertThat(ZhaopinRecord.areaOfTags(tags)).isEqualTo("福州·台江区");
+        assertThat(ZhaopinRecord.areaOfTags(tags)).isEqualTo("北京·台江区");
         assertThat(ZhaopinRecord.pickExperience(List.of("招3人", "本科"))).isEmpty();
         assertThat(ZhaopinRecord.pickDegree(List.of("招3人"))).isEmpty();
         assertThat(ZhaopinRecord.areaOfTags(List.of("本科", "3-5年")).isEmpty()).isTrue();

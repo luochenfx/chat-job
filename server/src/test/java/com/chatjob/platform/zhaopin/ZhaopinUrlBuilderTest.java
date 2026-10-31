@@ -17,7 +17,7 @@ class ZhaopinUrlBuilderTest {
 
     private static ZhaopinUrlBuilder builder() {
         OptionStore store = OptionStore.inMemory(Map.of(
-                "zhaopin|city", Map.of("福州", "681")));
+                "zhaopin|city", Map.of("北京", "681")));
         return new ZhaopinUrlBuilder(store);
     }
 
@@ -36,7 +36,7 @@ class ZhaopinUrlBuilderTest {
 
     @Test
     void 城市码与关键词拼成列表地址() {
-        String url = builder().build(config(), "福州", "java");
+        String url = builder().build(config(), "北京", "java");
         assertThat(url).startsWith("https://www.zhaopin.com/jobs/?");
         assertThat(url).contains("jl=681");
         assertThat(url).contains("kw=java");
@@ -44,7 +44,7 @@ class ZhaopinUrlBuilderTest {
 
     @Test
     void 关键词做URL编码() {
-        String url = builder().build(config(), "福州", "Java 后端");
+        String url = builder().build(config(), "北京", "Java 后端");
         assertThat(url).contains("kw=Java+%E5%90%8E%E7%AB%AF");
     }
 
@@ -66,7 +66,7 @@ class ZhaopinUrlBuilderTest {
         cfg.setDegree("[\"本科\"]");
         cfg.setIndustry("[\"软件/IT服务\"]");
         cfg.setJobType("全职");
-        String url = builder().build(cfg, "福州", "java");
+        String url = builder().build(cfg, "北京", "java");
         assertThat(url).doesNotContain("sl=");
         assertThat(url).doesNotContain("salary");
         assertThat(url).doesNotContain("degree");
@@ -75,7 +75,7 @@ class ZhaopinUrlBuilderTest {
 
     @Test
     void 关键词为空时只拼城市() {
-        String url = builder().build(config(), "福州", " ");
+        String url = builder().build(config(), "北京", " ");
         assertThat(url).endsWith("?jl=681");
     }
 }

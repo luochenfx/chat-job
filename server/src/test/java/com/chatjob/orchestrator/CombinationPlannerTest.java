@@ -11,9 +11,9 @@ class CombinationPlannerTest {
     @Test
     void 城市乘关键词形成笛卡尔积() {
         List<CombinationPlanner.Combo> combos = CombinationPlanner.plan(
-                List.of("福州", "厦门"), List.of("Java", "后端"));
+                List.of("北京", "厦门"), List.of("Java", "后端"));
         assertThat(combos).hasSize(4);
-        assertThat(combos.get(0).city()).isEqualTo("福州");
+        assertThat(combos.get(0).city()).isEqualTo("北京");
         assertThat(combos.get(0).keyword()).isEqualTo("Java");
         assertThat(combos.get(3).city()).isEqualTo("厦门");
         assertThat(combos.get(3).keyword()).isEqualTo("后端");
@@ -30,7 +30,7 @@ class CombinationPlannerTest {
 
     @Test
     void 关键词为空时退化为不限关键词() {
-        List<CombinationPlanner.Combo> combos = CombinationPlanner.plan(List.of("福州"), List.of());
+        List<CombinationPlanner.Combo> combos = CombinationPlanner.plan(List.of("北京"), List.of());
         assertThat(combos).hasSize(1);
         assertThat(combos.get(0).keyword()).isEmpty();
     }
@@ -38,7 +38,7 @@ class CombinationPlannerTest {
     @Test
     void 空白项被剔除() {
         List<CombinationPlanner.Combo> combos = CombinationPlanner.plan(
-                java.util.Arrays.asList("福州", "  ", null), java.util.Arrays.asList("Java", ""));
+                java.util.Arrays.asList("北京", "  ", null), java.util.Arrays.asList("Java", ""));
         assertThat(combos).hasSize(1);
     }
 }

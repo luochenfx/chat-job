@@ -108,7 +108,7 @@ class RunStoreAbandonCombinationsTest {
     }
 
     private void insertCombo(long runId, int seq, String status) {
-        jdbc.update("INSERT INTO combination_run (run_id, seq, city, keyword, status) VALUES (?, ?, '福州', 'java', ?)",
+        jdbc.update("INSERT INTO combination_run (run_id, seq, city, keyword, status) VALUES (?, ?, '北京', 'java', ?)",
                 runId, seq, status);
     }
 

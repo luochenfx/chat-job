@@ -338,7 +338,7 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
 所以手工用 curl 验证这个接口时，请求体必须带全字段，否则会把该平台的其他配置重置成默认值。
 本次 P0 验证踩到这一点：验证脚本只带了两个开关，Boss 的 `cities`/`keywords`/`salary`/`duty_end_time`
 被写成默认值，已按 `data/backup/chat-job-before-p1-verify.db` 与 `run_log` 里的实际运行记录（组合
-「福州 / java」、配额 30/30、时段 09:00–19:00）逐项恢复。控制台一直是整份对象 PUT，不受影响。
+「北京 / java」、配额 30/30、时段 09:00–19:00）逐项恢复。控制台一直是整份对象 PUT，不受影响。
 
 **P1 实施记录（2026-11-01，真实服务 + 真实库 + 真实浏览器）**
 
@@ -497,7 +497,7 @@ public static void requireSomethingOn(String platform, boolean scanOn, boolean w
 
 | run | 配置 | 结果 | 日志 / 库 |
 |---|---|---|---|
-| 60 | 只扫描（配额临时 0、滚动 20 轮、间隔 3 秒，避免真实投递） | `COMPLETED / SCAN_DONE`，用时 26 秒 | 8 行日志：「任务启动」→「该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命」→「开始组合 #0 福州 / java」→「组合 #0 加载 218 张卡片（11 轮，确认到底）」→「今日主动投递已达配额 0（0），中止扫描」→「COMPLETED / SCAN_DONE / …该平台未启用值守，任务结束」；**没有任何待命或巡检日志**；`combination_run` 1 行 `SKIPPED`（cards 218 / evaluated 0 / delivered 0） |
+| 60 | 只扫描（配额临时 0、滚动 20 轮、间隔 3 秒，避免真实投递） | `COMPLETED / SCAN_DONE`，用时 26 秒 | 8 行日志：「任务启动」→「该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命」→「开始组合 #0 北京 / java」→「组合 #0 加载 218 张卡片（11 轮，确认到底）」→「今日主动投递已达配额 0（0），中止扫描」→「COMPLETED / SCAN_DONE / …该平台未启用值守，任务结束」；**没有任何待命或巡检日志**；`combination_run` 1 行 `SKIPPED`（cards 218 / evaluated 0 / delivered 0） |
 | 61 | 只值守（巡检间隔临时 600 秒） | `STANDBY` → 手动停止 `CANCELLED` | 「未启用扫描，本次只值守：每 10 分钟检查一次未读消息」→「值守待命第 1 轮：会话 0，回复 0」；`combination_run` 0 行；终止原因 `CANCELLED`（用户停止，不是 `WATCH_DISABLED`） |
 | 62 | 只值守，由页面点「启动」 | `STANDBY` | 用于验证 SSE，见上面「实时事件」 |
 

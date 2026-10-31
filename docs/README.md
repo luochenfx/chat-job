@@ -190,7 +190,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 {"run":{"id":21,"status":"WAITING_DUTY","mode":"NORMAL",
        "message":"当前 23:49 不在值守时段 09:00–19:00 内，已挂起等待；明天 09:00 之后才会真正执行"},
  "running":false,"duty":{"window":"09:00–19:00","open":false,"opensInMinutes":536},
- "combinations":[{"city":"福州","keyword":"java","status":"PENDING"}]}
+ "combinations":[{"city":"北京","keyword":"java","status":"PENDING"}]}
 ```
 
 > 上面这条也说明：**值守时段是库里的配置，不一定是出厂默认值**。本机当前配的是 `09:00–19:00`，默认值是 `09:00–22:00`。

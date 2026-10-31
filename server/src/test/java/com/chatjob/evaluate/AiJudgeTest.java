@@ -24,7 +24,7 @@ class AiJudgeTest {
     }
 
     private static JobDetail job(String description) {
-        return new JobDetail("e1", "Java 工程师", "某公司", "10-20K", "福州 · 3-5年 · 本科",
+        return new JobDetail("e1", "Java 工程师", "某公司", "10-20K", "北京 · 3-5年 · 本科",
                 "3-5年", "本科", description, "张女士", "HR", "本月", "本月活跃",
                 "{}", "https://www.zhipin.com/job_detail/e1.html");
     }

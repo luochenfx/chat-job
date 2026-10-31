@@ -381,11 +381,11 @@
         <div class="grid cols-2">
           <div class="field">
             <label>城市</label>
-            <ChipInput v-model="platform.cities" placeholder="输入城市名后回车，如：福州" :options="dict.city" />
+            <ChipInput v-model="platform.cities" placeholder="输入城市名后回车，如：北京" :options="dict.city" />
           </div>
           <div class="field">
             <label>关键词</label>
-            <ChipInput v-model="platform.keywords" placeholder="输入关键词后回车，如：Java" />
+            <ChipInput v-model="platform.keywords" placeholder="输入关键词后回车，如：销售" />
           </div>
         </div>
         <div v-if="supports('jobType')" class="field">
