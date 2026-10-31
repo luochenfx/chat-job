@@ -53,7 +53,7 @@ logging:
 chat-job:
   # 运行时数据的唯一锚点。默认由 ProjectHome 在启动时探测（<项目根>/server/target/... 反查），
   # 命令行 -Dchat-job.home= 或环境变量 CHAT_JOB_HOME 可显式覆盖。
-  # 写成 ${user.dir} 只是兜底：没有 HomeEnvironmentPostProcessor 时（例如裸单测）不至于解析失败。
+  # 写成 ${user.dir} 只是备用取值：没有 HomeEnvironmentPostProcessor 时（例如裸单测）不至于解析失败。
   home: ${user.dir}
   # 缺省平台：boss / zhaopin。阶段 2b 起两个平台的适配器同时装配，这里只决定
   # 「调用方没有显式指定平台时落到哪个」——控制台不带 platform 参数、脚本不加参数时用它。

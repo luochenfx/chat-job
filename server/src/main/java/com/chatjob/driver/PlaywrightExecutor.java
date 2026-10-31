@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 卡在哪个平台。
  *
  * <p>监控类调用（登录态心跳）走 {@link #tryRun}：线程忙就丢掉本轮，不排队 ——
- * 心跳排到投递前面会把主流程挤死。
+ * 若让它排队，它会先于投递动作执行并占用线程时间。
  */
 @Slf4j
 public class PlaywrightExecutor {

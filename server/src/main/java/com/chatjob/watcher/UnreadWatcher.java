@@ -140,7 +140,7 @@ public class UnreadWatcher {
      *       会把「上次演练判过」当成「已经处理过」。</li>
      *   <li><b>不查冷却</b>：冷却时间戳同样是真实回复留下的痕迹。</li>
      *   <li><b>不落 {@code unread_task}</b>：任务表是真实路径的补偿机制（点开即清红点，
-     *       靠任务重试兜回来）。演练建了任务却永不收尾，反而会毒化真实运行。</li>
+     *       靠任务重试补回）。演练建了任务却永不收尾，反而会污染真实运行的数据。</li>
      * </ul>
      *
      * <p><b>演练会真的调 AI</b>（花 token、计入真实成本），这是有意的：P3 之后它成了
@@ -482,7 +482,7 @@ public class UnreadWatcher {
      *
      * <p><b>命中规则在打开态不再直接发模板</b>，而是把模板当「参考素材」交给 AI（spec 3.6 第 5 步）。
      * 不这么做的话，命中「简历」「薪资」的那些会话回的全是同一句 —— 那正是本 spec 要解决的问题。
-     * 模板只在 AI 技术性失败时兜底：它是人工审核过的，比「不回」安全。
+     * 模板只在 AI 技术性失败时使用：它是人工审核过的，比「不回」安全。
      */
     private Outcome process(PlatformAdapter adapter, ReplyRuleEngine engine, UnreadThread thread,
                             UnreadTaskEntity task, boolean collectMetrics,
@@ -713,7 +713,7 @@ public class UnreadWatcher {
      * AI 技术性失败时的降级。
      *
      * <p>命中规则 → 发模板：人工审核过的文案，确定性可用，比「这条不回」安全得多。
-     * 未命中 → 记 {@code AI_FAILED} 进重试链：没有模板兜底时，重试是唯一不丢消息的路。
+     * 未命中 → 记 {@code AI_FAILED} 进重试链：没有备用模板时，重试是唯一不丢消息的路。
      *
      * <p>注意这里<b>不能</b>按 spec 3.6 那句「未命中 → 记 AI_SKIPPED」落地 ——
      * 与 3.6.2「技术性失败不算 skip，走 AI_FAILED」直接冲突。按 3.6.2 走：

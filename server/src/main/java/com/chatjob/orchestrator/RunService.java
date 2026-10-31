@@ -170,7 +170,7 @@ public class RunService {
     public synchronized RunEntity start(String mode) {
         String platform = adapter().platform();
         // 停用的平台不允许新建任务。放在这里而不是控制器里：唤醒、重试、未来的任何入口
-        // 都要过这道闸，漏一处就是「关掉的平台自己又跑起来了」
+        // 所有入口都要执行这项校验，漏一处就会出现「已停用的平台仍被拉起」
         switches.require(platform);
         runStore.active(platform).ifPresent(run -> {
             if (RunStatus.WAITING_DUTY.name().equals(run.getStatus())) {
@@ -336,7 +336,7 @@ public class RunService {
                     return;
                 }
                 if ("DRY_RUN".equals(run.getMode())) {
-                    // 演练模式不进入待命：它会真点开会话清红点，整夜待命会把第二天的未读提前吃掉
+                    // 演练模式不进入待命：它会真点开会话清红点，整夜待命会把第二天的未读消息提前标记为已读
                     finishDryRun(run, stop);
                     return;
                 }
@@ -609,7 +609,7 @@ public class RunService {
     /**
      * 演练模式跑完即结束，不进入待命。
      *
-     * <p>演练会真点开会话清红点，整夜待命会把第二天的未读提前吃掉 —— 那会让演练本身失真。
+     * <p>演练会真点开会话清红点，整夜待命会把第二天的未读消息提前标记为已读 —— 那会让演练本身失真。
      * 三种中止原因在演练下都收敛成 {@code COMPLETED}，与改造前的行为一致。
      */
     private void finishDryRun(RunEntity run, StandbyGate.StopReason stop) {
@@ -1018,7 +1018,7 @@ public class RunService {
             }
             // 组合表不会跟着 Run 一起收尾：进程被强杀时组合循环的 finally 不会执行，
             // 断在半路的那个组合会永远停在 RUNNING。Run 标成失败之后，这一行就成了
-            // 界面上的谎言（「进行中」而那一轮已经结束），所以在 finish 之前先收掉
+            // 界面上出现与事实不符的状态（Run 已结束，组合仍显示「进行中」），所以在 finish 之前先更新
             int abandoned = runStore.abandonRunningCombinations(run.getId());
             if (abandoned > 0) {
                 log(run, "WARN", "上一轮中断时有 " + abandoned + " 个组合停在扫描中间，已记为「已中断」");

@@ -105,7 +105,7 @@
 | `PAUSED` | 用户继续 | 回到暂停前的状态（内存记 `pausedFrom`） | `started_at` 不变 | — |
 | 任何进行态 | 用户停止 | `CANCELLED` | `finished_at` | `run.finished` |
 
-**`QUOTA_REACHED` 不再被写入**（枚举保留，历史数据要能读）；`COMPLETED` 只剩两条来源：演练模式跑完组合、`DUTY_END` 的旧数据。
+**`QUOTA_REACHED` 不再作为 `run.status` 写入**（枚举保留，历史数据要能读）；演练模式 `RunService.finishDryRun()` 的 QUOTA 分支仍以字符串 `QUOTA_REACHED` 作为 `terminal_reason`，状态本身是 `COMPLETED`。`COMPLETED` 只剩两条来源：演练模式跑完组合、`DUTY_END` 的旧数据。
 
 ### 3.2 扫描中止：三个原因，一个出口
 
@@ -118,6 +118,8 @@
   - 命中 `stopRequested` → `CANCELLED`；
   - 命中 `dutyEnded` → 挂起（`WAITING_DUTY`）；
   - 否则 → `STANDBY`，进 `standbyLoop`。
+
+> 落地补充：演练模式的 `terminal_reason` 按中止原因分三支 —— 配额命中 → `QUOTA_REACHED`、评估上限命中 → `EVAL_LIMIT_REACHED`、组合耗尽 → `COMPLETED`（见 `RunService.finishDryRun()`）。上面「组合队列已跑完」只对应最后一支。
 
 配额与评估上限的**检查位置不变**（仍在卡片边界，`RunService.java:371-382`）——那里之前的所有动作要么不发消息，要么已经发完，是唯一可靠的断点。
 

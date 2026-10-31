@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 /**
- * 出站四重校验（spec 0002 §3.7）。{@code sendText} 之前的最后一道闸门。
+ * 出站四重校验（spec 0002 §3.7）。{@code sendText} 之前的最后一次校验。
  *
  * <p>四检顺序即优先级：长度 → 联系方式 → 薪资与承诺 → AI 味。长度排第一是因为它<b>不是拦截
  * 而是修复</b>（能截就截），后面三检都是「命中即整条不发」。
@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
  * <p>纯函数，不碰数据库、不碰 Playwright：词表与敏感词都由 {@link GuardOptions} 传入。
  * 这样「默认词表 31 条全部逐条命中」这种断言可以直接参数化生成，不需要起 Spring 上下文。
  *
- * <p><b>这个类只是兜底，不是保证。</b>决定回复像不像人的是 prompt 里的风格约束与模型本身；
+ * <p><b>这个类只做补充校验，不能保证结果。</b>决定回复像不像人的是 prompt 里的风格约束与模型本身；
  * 这里做的是「拦住明显不该发的」，以及「拦住之后留下可归因的计数」。
  */
 public final class ReplyGuard {

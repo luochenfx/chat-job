@@ -38,7 +38,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 静态资源兜底处理器（WebConfig 里那条 /**）在找不到资源、又不属于 SPA 回落范围时
+     * 静态资源备用处理器（WebConfig 里那条 /**）在找不到资源、又不属于 SPA 回落范围时
      * 抛 NoResourceFoundException。它必须排在 Exception 之前被单独接住，否则一个拼错的
      * 接口路径会被包成 500，前端提示变成"服务器错误"，排查方向直接跑偏。
      */

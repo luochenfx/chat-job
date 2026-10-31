@@ -107,7 +107,7 @@ public class BossAdapter implements PlatformAdapter {
             } catch (Exception e) {
                 log.debug("读取 cookie 失败: {}", e.getMessage());
             }
-            // 兜底：URL 落在登录页
+            // 备用判据：URL 落在登录页
             Page page = listPage != null && !listPage.isClosed() ? listPage : null;
             if (page == null) {
                 return LoginState.lost("尚无打开的页面，且未找到登录态 cookie");
@@ -116,7 +116,7 @@ public class BossAdapter implements PlatformAdapter {
             if (url.contains("/web/user/")) {
                 return LoginState.lost("页面落在登录页: " + url);
             }
-            // 兜底：DOM 上出现已登录标记（必须带超时，裸 isVisible 会无限等）
+            // 备用判据：DOM 上出现已登录标记（必须带超时，裸 isVisible 会无限等）
             try {
                 Locator marker = page.locator(BossSelectors.LOGGED_IN_MARK).first();
                 if (marker.isVisible(new Locator.IsVisibleOptions().setTimeout(5_000))) {
@@ -181,7 +181,7 @@ public class BossAdapter implements PlatformAdapter {
                             footerVisible = true;
                         }
                     } catch (Exception ignore) {
-                        // 有的版式根本没有 footer，靠"连续无新增"兜底
+                        // 有的版式根本没有 footer，靠"连续无新增"判定
                     }
                     if (footerVisible && stable >= 2) {
                         log.info("已滚动到底部且连续 {} 轮无新增，判定加载完毕（第 {} 轮）", stable, round);

@@ -351,7 +351,7 @@ class UnreadWatcherTest {
         // 3) 不写冷却时间戳：否则真实运行的前 3 分钟会被自己演练时留下的痕迹挡住
         assertThat(f.replyStore.byId.values())
                 .allSatisfy(c -> assertThat(c.getLastOwnReplyAt()).isNull());
-        // 4) 不落任务、也不建会话：任务表是真实路径的补偿机制，演练建了却不收尾只会毒化它
+        // 4) 不落任务、也不建会话：任务表是真实路径的补偿机制，演练建了却不收尾只会污染它
         assertThat(f.mapper.rows).isEmpty();
         assertThat(f.replyStore.byKey).isEmpty();
         // 5) replied 恒为 0，「本会回复」单独计数 —— 控制台不能把演练说成已回复

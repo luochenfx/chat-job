@@ -37,7 +37,7 @@ import java.util.Map;
  * </ul>
  *
  * <p>另外 {@code --test-type} / {@code --disable-session-crashed-bubble} 这几个不是反检测，
- * 是防止"要恢复页面吗"的模态框把 CDP 挂死：那个框会让 navigate 永不返回，连超时都不触发。
+ * 是防止"要恢复页面吗"的模态框导致 CDP 调用无法返回：那个框会让 navigate 永不返回，连超时都不触发。
  */
 @Slf4j
 public class BrowserSession {
@@ -177,7 +177,7 @@ public class BrowserSession {
         });
 
         // 持久化上下文自带的启动标签页不能复用：它可能永远停在加载中，而 evaluate / locator
-        // 没有默认超时，会把线程无限期焊死。一律新建页、关掉旧页。
+        // 没有默认超时，线程会无限期等待。一律新建页、关掉旧页。
         //
         // 但顺序不能反：先关后建会让 context 出现"零个页面"的中间态，而持久化上下文里
         // 关掉最后一个页面等同于关闭浏览器 —— 之后再 newPage 只会拿到

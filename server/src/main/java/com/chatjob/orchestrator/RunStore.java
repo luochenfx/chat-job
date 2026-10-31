@@ -353,11 +353,11 @@ public class RunStore {
      *
      * <p>数据源只有 {@code daily_counter.delivered}，由 {@code RunService} 在投递确认送达后
      * {@link #incrementDelivered} 累加。<b>不要</b>改成数 {@code delivery} 表：那张表的 SKIPPED、
-     * FAILED 与演练记录都不是「投出去了」，而配额只该被真正的投递吃掉。
+     * FAILED 与演练记录都不是「投出去了」，而配额只应被真实的投递消耗。
      *
      * <p>值守里应对方索要发出的简历<b>不在这里</b>，它由 {@code ReplyStore.resumeOnRequestToday()}
      * 从 {@code reply_log} 的 {@code REPLY_RESUME} 单独计数。两者的风控语义相反：
-     * 主动外呼太频繁会被判成机器，被动应答是对方先开口。混成一个数字，刹车会先把自己刹死。
+     * 主动外呼太频繁会被判成机器，被动应答是对方先开口。混成一个数字，同一额度会先限制掉正常的主动投递。
      *
      * <p>回归守卫见 {@code RunStoreDeliveredTodayTest}。
      */

@@ -15,7 +15,7 @@ import java.util.List;
  *   <li>{@link PanelView}：点开卡片后右侧面板的原文。岗位编号、城市、经验、学历、公司、
  *       HR 活跃度、完整 JD 全在这里，是<b>主来源</b>。</li>
  *   <li>{@code <script>__INITIAL_STATE__={…}</script>} 里的 {@code positionList}（首屏 20 条）：
- *       只当兜底与富化（{@code hasAppliedPosition} 这类平台侧标记），覆盖不到滚动加载出来的卡片。</li>
+ *       只当备用来源与字段补充（{@code hasAppliedPosition} 这类平台侧标记），覆盖不到滚动加载出来的卡片。</li>
  * </ol>
  * 早期版本反过来（拿 positionList 的下标去对 DOM 卡片下标），一旦无限滚动把卡片从 20 张撑到
  * 196 张，多出来的 176 张就全部没有编号、被静默跳过 —— 这是实测踩过的坑，别再退回去。
@@ -180,7 +180,7 @@ public final class ZhaopinRecord {
         if (!number.isBlank()) {
             return number;
         }
-        // 兜底：从详情链接里抠出来（两者始终一致）
+        // 备用来源：从详情链接里解析（两者始终一致）
         String url = positionUrl(record);
         int slash = url.lastIndexOf('/');
         int dot = url.lastIndexOf('.');

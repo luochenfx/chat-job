@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted（2026-10-30，spec 0004；事实依据见 `docs/tech/0003-zhaopin-research.md` 第 7 节）。
+accepted（2026-10-30，spec 0004；事实依据已并入本文 Context）。
 
 ## Context
 
@@ -16,6 +16,16 @@ accepted（2026-10-30，spec 0004；事实依据见 `docs/tech/0003-zhaopin-rese
 但它从来没写进投递表。`grep delivery watcher/` 零命中，写 `delivery` 的只有 `orchestrator` 扫描侧。当时的原因很实际：`delivery.job_posting_id` 是 `NOT NULL`，而值守时手上只有会话，`conversation.job_posting_id` 本来就是空的（建会话时传的就是 `null`）。所以它被迫只写了 `reply_log`。
 
 **这一路是被迫走出来的，但恰好是对的。** 接智联把它显式化了 —— 智联的结构和 Boss 一样：HR 先发一条文字要简历，再跟一张带「同意」按钮的索要卡片。这件事不需要岗位、不需要评分、不需要话术，纯应答。
+
+**投递语义与发简历依据（原调研稿结论，已并入本文）**
+
+智联点「立即投递」的实测语义是发送一份简历加一句打招呼语，一步完成（成功弹窗文案「已向对方发送简历和打招呼语」）。由此定下：投递只执行投递动作，不再额外发自定义招呼语，`deliver()` 的 `greeting` 参数对智联可忽略；`delivery.greeting` 列是 `NOT NULL DEFAULT ''`，写空串合法，不需要改表。
+
+主动投递写 `delivery` 表（有 `job_posting_id`、评分、招呼语，占配额），被动给简历写 `reply_log` 的 `REPLY_RESUME`（常无岗位、无评分、不占配额）。Boss 侧从 V10 迁移起 `sendResume` 就只写 `reply_log`（`grep delivery watcher/` 零命中，写 `delivery` 的只有 `orchestrator` 扫描侧），智联只是把这个区分显式化，因此不需要迁移、不改 `delivery` 表。
+
+发简历有两条等价路径：工具栏「发简历」与索要卡片的「同意」。实现取工具栏（按钮常驻；卡片会随消息滚动、可能有多张、可能改版），卡片记为备用路径。`PlatformAdapter.sendResume` 契约不变，智联沿用 Boss 侧实现，`ResumeResult.Status` 三个值语义照旧；「简历索取」规则（关键词 `简历,发一份,看一下`）直接复用，不新增平台专属规则。
+
+**仍未取证**：全库 `reply_log` 的 `REPLY_RESUME` 为 0 条，两个平台都从未真实触发过被动发简历。因此「智联工具栏按钮会不会置灰、降级分支是否走得到、备用文案是否有意义」都还没有事实支撑，下次任一平台真的收到简历索要时必须补验。
 
 如果把它也记进投递表并计入配额：
 

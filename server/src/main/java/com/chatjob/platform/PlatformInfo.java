@@ -42,7 +42,7 @@ public final class PlatformInfo {
         String key = platform == null ? "" : platform.toLowerCase(Locale.ROOT).trim();
         return switch (key) {
             case "zhaopin" -> new Info("zhaopin", "智联招聘",
-                    // 只有城 + 关键词：其余筛选组的 code 表尚未建立（tech/0003 的 U4）
+                    // 只有城市 + 关键词：其余筛选组的 code 表尚未建立（城市码映射待补）
                     List.of("city", "keyword"),
                     "智联这一期只按「城市 + 关键词」搜索，其余筛选条件会被忽略");
             default -> new Info("boss", "BOSS 直聘",

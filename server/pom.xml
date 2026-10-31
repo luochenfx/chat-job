@@ -15,7 +15,7 @@
     <artifactId>chat-job</artifactId>
     <version>0.1.0</version>
     <name>chat-job</name>
-    <description>BOSS 直聘求职投递自动化（单机自用）</description>
+    <description>多平台求职投递自动化（单机自用，当前装配 BOSS 直聘与智联招聘）</description>
 
     <properties>
         <java.version>21</java.version>

@@ -32,6 +32,14 @@
 
 会话层还有一条硬事实：会话条目上**没有任何稳定标识**。实测 `li[role='listitem']` 只有 `role` / `class` 与 Vue 作用域属性，无 `data-key` / `data-uid`，点开会话 URL 也不变。这是本方案绕不开的限制，见 3.4。
 
+**调研事实汇总（原调研稿结论，已并入本文）**
+
+消息项是 `li.message-item`，带稳定 `data-mid`（15 位，间隔 2.5 秒两次读取一致）；系统、本人、对方三类由 DOM 类名 `item-system` / `item-myself` / `item-friend` 区分。消息列表分页 `pageSize` 为 20，会话列表使用虚拟滚动，视口外的会话扫不到。
+
+原选择器两处失效且串联，净效果是值守一条都不回、日志也不告警：`CHAT_LIST_UNREAD` 的 `.badge-count` / `.unread-count` 命中 0（真实为 `span.notice-badge`），`MESSAGE_ITEM` 的 `.chat-message-list` / `.dialog-con` 均 0（真实为 `ul.im-list li.message-item`）。修正为：未读用 `.friend-content .notice-badge` / `.dot`，消息项用 `ul.im-list li.message-item`。判定目前只取最后一条消息，身份用「序号:文本 hash」会漂移，因此启用 AI 前须把去重键换成 `data-mid`、上下文取最近 6~10 条、按类名分类，并做出站二次风控。端到端前置自检中「发现未读 → 读上下文 → 组装 → 写入」四个环节已通过。
+
+**仍未验证**：「点击发送」是否真的成功（按钮禁用依赖 CSS 类 `btn-send disabled`，`isDisabled()` 恒为 false，已列入 P5 冒烟，须真实发一条确认）；`extend.aiChatMsgMark` 的平台标注含义未确认。
+
 ### 1.4 术语
 
 - **AI 回复开关**：`ai_config.ai_reply_enabled`，单行配置，默认 0。先例是同一行的 `quality_gate_enabled`。
@@ -256,6 +264,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_unread_task_open
 | `UNAVAILABLE` | 按钮是灰的 | 业务状态不是故障，重试无意义 → 降级发兜底文案，`reason_code = RESUME_UNAVAILABLE`；没有兜底文案就记 `AI_SKIPPED` 收尾，不刷屏 |
 | `FAILED` | 点了但没等到卡片（气泡点没点过都算这一类） | 进重试链（`SEND_FAILED`），可能只是慢 |
 
+> **取证范围说明**：以下两条是开发期在真实页面上手工/脚本验证的页面行为，用于确定判据，**不等于自动值守发简历链路已被真实运行验证**。自动链路的唯一凭证是 `reply_log` 落 `REPLY_RESUME`，而全库至今为 0 条（两个平台都未真实触发过），见 `spec/0004` §6「还开着的口子」。
+>
 > **实测记录（2026-10-29）**：对真实会话「蔡女士」真点过一次完整流程（发简历 → 确认气泡 → 确定 → 卡片出现）。点完之后按钮 `aria-label` 变为「正在请求中，等待对方回复」，与预期一致。
 >
 > **实测记录（2026-10-30）**：存在「点了「发简历」不弹气泡、直接发出」的真实路径（对方已主动索要简历）。据此把气泡从「必经步骤」降级为「可选步骤」，并删除了「没弹气泡即失败」的判据 —— 详见上表。

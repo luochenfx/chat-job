@@ -54,7 +54,7 @@ public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfC
          *
          * <p>必须是两个目录而不是一个：Chrome 对同一 user-data-dir 加独占锁，第二个实例
          * 起不来（报 {@code ProcessSingleton} 冲突）。而两个平台的登录态本来也不共用 ——
-         * 都是各自扫码各自记住，混在一个 profile 里是另一种串号。
+         * 都是各自扫码各自记住，共用同一 profile 会导致两个平台读到同一份登录态。
          *
          * <p>目录名直接用平台标识，不做大小写或别名映射：它出现在日志、控制台与磁盘上，
          * 三处必须能一眼对上。

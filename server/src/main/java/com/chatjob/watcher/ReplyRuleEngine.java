@@ -121,7 +121,7 @@ public class ReplyRuleEngine {
                 ? null
                 : texts.get(ThreadLocalRandom.current().nextInt(texts.size()));
 
-        // 命中「发简历」规则：动作是发，不是回。文案降级为兜底 —— 简历按钮是灰的
+        // 命中「发简历」规则：动作是发，不是回。文案降级为备用文案 —— 简历按钮是灰的
         // （平台要求双方回复后可用）时，还得有句话能说，否则这条消息就彻底没回应了。
         if (bestRule.sendsResume()) {
             return new Decision(Action.SEND_RESUME, bestRule.id(), bestKeyword, null, picked,

@@ -38,7 +38,7 @@ public record DutyWindow(LocalTime start, LocalTime end) {
 
     private static final Pattern TIME = Pattern.compile("^(\\d{1,2}):(\\d{2})(?::\\d{2})?$");
 
-    /** 格式非法的兜底窗口，与配置默认值一致 */
+    /** 格式非法时使用的备用窗口，与配置默认值一致 */
     private static final LocalTime FALLBACK_START = LocalTime.of(9, 0);
     private static final LocalTime FALLBACK_END = LocalTime.of(22, 0);
 

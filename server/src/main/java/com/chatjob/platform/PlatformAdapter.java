@@ -26,7 +26,7 @@ public interface PlatformAdapter {
 
     String platform();
 
-    /** 结构性信号优先：登录态 cookie 存在性；DOM 探测只作兜底 */
+    /** 结构性信号优先：登录态 cookie 存在性；DOM 探测只作备用手段 */
     LoginState probeLogin();
 
     /**

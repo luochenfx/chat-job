@@ -22,7 +22,7 @@ accepted（2026-10-30，spec 0003）。
 
 ## Consequences
 
-- `QUOTA_REACHED` 不再被写入（枚举保留，历史数据要能读）；`COMPLETED` 只剩演练跑完组合这一个来源。
+- `QUOTA_REACHED` 不再作为 `run.status` 写入（枚举保留，历史数据要能读）；演练模式 `RunService.finishDryRun()` 的 QUOTA 分支仍以字符串 `QUOTA_REACHED` 作为 `terminal_reason`，状态本身是 `COMPLETED`。`COMPLETED` 的新写入来源只有演练跑完组合，`DUTY_END` 属历史数据（与 `spec/0003` 口径一致）。
 - 一次值守期可以跨多天存在，`uk_run_running` 必须把 `STANDBY` 纳入，否则同一平台可能出现两个浏览器持有者。
 - 浏览器在整段值守期内常开。这是「重启后不自动接管」能成立的前提——页面状态一直没断，才有资格谈复用；代价是跨夜的内存占用没有数据。
 - 值守的可靠性与扫描解耦后，「它在不在跑」变成了必须显式表达的东西：`run.current_action` + `last_activity_at` + 定时心跳日志，三者缺一，等待与卡死在界面上无法区分。

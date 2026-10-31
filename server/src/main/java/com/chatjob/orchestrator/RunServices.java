@@ -82,7 +82,7 @@ public class RunServices {
             try {
                 of(platform).wakeIfWaiting();
             } catch (Exception e) {
-                // 一个平台唤醒失败不能连坐另一个：并行架构的全部意义就是这个
+                // 一个平台唤醒失败不能影响另一个：并行架构的全部意义就是这个
                 log.warn("[{}] 唤醒挂起的 Run 失败: {}", platform, e.getMessage());
             }
         }

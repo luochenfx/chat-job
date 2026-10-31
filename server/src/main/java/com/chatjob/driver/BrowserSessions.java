@@ -55,7 +55,7 @@ public class BrowserSessions {
     /**
      * 取该平台的浏览器全套，没有就建一个空壳（不启动浏览器）。
      *
-     * @param platform 平台标识；空值按当前装配的平台处理，避免调用点各自兜底出不同结果
+     * @param platform 平台标识；空值按当前装配的平台处理，避免各调用点自行处理空值而得到不同结果
      */
     public PlatformBrowser of(String platform) {
         String key = normalize(platform);
@@ -79,7 +79,7 @@ public class BrowserSessions {
     }
 
     /**
-     * 应用退出时收摊：先关浏览器（它跑在自己的线程上），再停线程池。
+     * 应用退出时按顺序关闭资源：先关浏览器（它跑在自己的线程上），再停线程池。
      *
      * <p>顺序反了会留下一个关不掉的 Chrome —— {@code close()} 要靠那条线程去执行。
      */

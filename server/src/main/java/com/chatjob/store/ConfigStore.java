@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** 配置读写。所有"单行表"的默认值都在这里兜底，避免空库启动后处处判空。 */
+/** 配置读写。所有"单行表"的默认值都在这里统一提供，避免空库启动后处处判空。 */
 @Slf4j
 @Component
 public class ConfigStore {
@@ -38,7 +38,7 @@ public class ConfigStore {
 
     /**
      * 未读列表扫描条数的安全上限。不是业务限制，而是防止列表异常膨胀时
-     * 一轮值守把整个扫描节奏吃掉 —— 每条要读 3 次 DOM，500 条已经是几秒到十几秒。
+     * 一轮值守会占用整段扫描时间 —— 每条要读 3 次 DOM，500 条已经是几秒到十几秒。
      */
     public static final int MAX_UNREAD_SCAN_LIMIT = 500;
 
@@ -79,7 +79,7 @@ public class ConfigStore {
     public static final int MAX_TONE_TERMS = 200;
     public static final int MAX_TONE_TERM_CHARS = 20;
 
-    /** 表达风格长度上限。超出截断保存 —— 宁可少一段约束，也不让一次误粘把 prompt 撑爆 */
+    /** 表达风格长度上限。超出截断保存 —— 宁可少一段约束，也避免一次误粘贴让 prompt 超出长度限制 */
     public static final int MAX_AI_REPLY_STYLE_CHARS = 500;
 
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
@@ -347,7 +347,7 @@ public class ConfigStore {
     }
 
     /**
-     * AI 味词表。空结果表示「没配，用代码里的默认 31 条」，由 {@code ReplyGuard} 兜底 ——
+     * AI 味词表。空结果表示「没配，用代码里的默认 31 条」，由 {@code ReplyGuard} 提供默认值 ——
      * 默认值只有一份，放在校验器那一侧，控制台要展示时也是从那里取。
      */
     public List<String> toneTerms() {
@@ -451,7 +451,7 @@ public class ConfigStore {
 
     /**
      * 事实素材（<b>说什么</b>：年限、技能、项目）。与风格是两件事 ——
-     * 它天然是简历腔，直接当人设喂模型，产出必是「本人具备 X 年经验」这类一眼假的句子。
+     * 它天然是简历腔，直接当人设喂模型，产出会是「本人具备 X 年经验」这类与真人表达不符的句子。
      */
     public String aiIntroduce() {
         String v = aiConfig().getIntroduce();

@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>这个数字直接决定配额刹车什么时候踩下去，而它现在只靠一行约定：
  * <b>只读 {@code daily_counter.delivered}</b>。约定没有编译器保护，所以用测试钉住。
  * 最容易发生的回退是「顺手把投递表也数进来」——那样一个 SKIPPED 或一次演练
- * 都会吃掉一次真实配额，而界面上看不出任何异常。
+ * 都会消耗一次真实配额，而界面上看不出任何异常。
  *
  * <p>用真实 SQLite 而不是打桩：待验的是那条 SQL 的语义（平台隔离、按天、ON CONFLICT 累加），
  * 桩只会把断言变成「我自己塞进去的值又读回来了」。{@code sqlite-jdbc} 本就是正式依赖，

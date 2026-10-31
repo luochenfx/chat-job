@@ -102,7 +102,7 @@ class ReplyRuleEngineTest {
                 .decide("简历可以发一份吗", false, false, false);
 
         assertThat(decision.action()).isEqualTo(ReplyRuleEngine.Action.SEND_RESUME);
-        // 动作变了但文案不能丢：按钮灰掉（平台要求双方回复后可用）时还得靠它兜底
+        // 动作变了但文案不能丢：按钮灰掉（平台要求双方回复后可用）时还得靠它作为备用
         assertThat(decision.replyText()).isEqualTo("好的，我整理一份发您");
         assertThat(decision.reason()).contains("发简历");
     }

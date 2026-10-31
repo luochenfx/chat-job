@@ -110,7 +110,7 @@ public class SystemController {
         out.put("browserReady", browserReady(key));
         out.put("running", runServices.of(key).isRunning());
         // 两个数字口径不同，一个都不能省（ADR-0004）：deliveredToday 只数主动投递，
-        // resumeOnRequestToday 只数值守里应对方索要发出的简历。合并会让被动应答吃掉主动配额
+        // resumeOnRequestToday 只数值守里应对方索要发出的简历。合并会让被动应答消耗主动投递配额
         out.put("deliveredToday", runStore.deliveredToday(key));
         out.put("evaluatedToday", runStore.evaluatedToday(key));
         out.put("resumeOnRequestToday", replyStore.resumeOnRequestToday(key));
@@ -267,7 +267,7 @@ public class SystemController {
         out.put("enabled", enabled(cfg));
         out.put("run", runCard(platform));
         // 两个数字口径不同，一个都不能省（ADR-0004）：delivered 只数主动投递，
-        // resumeOnRequest 只数值守里应对方索要发出的简历。合并会让被动应答吃掉主动配额
+        // resumeOnRequest 只数值守里应对方索要发出的简历。合并会让被动应答消耗主动投递配额
         out.put("delivered", runStore.deliveredToday(platform));
         out.put("quota", cfg.getDailyDeliveryQuota());
         out.put("evaluated", runStore.evaluatedToday(platform));

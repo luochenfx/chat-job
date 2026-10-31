@@ -21,7 +21,7 @@ import java.util.Locale;
  * 所以这里显式做一次解析：配置优先，其次按 chrome → msedge 探测，最后才落到内置 Chromium。
  *
  * <p>为什么不用内置 Chromium 当默认：它是一个全新的浏览器，没有用户日常积累的登录态，
- * 而本项目的登录态复用是本机真浏览器 profile 的核心价值。内置 Chromium 只作为兜底，
+ * 而本项目的登录态复用是本机真浏览器 profile 的核心价值。内置 Chromium 只作为备用方案，
  * 并在状态里标明"需要另行安装"。
  *
  * <p>注意这不是"静默降级"：解析结果会出现在 {@code /api/system/status} 与自检详情里，

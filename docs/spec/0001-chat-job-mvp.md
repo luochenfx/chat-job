@@ -38,7 +38,7 @@
 | C2 | 执行层内嵌在 Spring Boot JVM 内，不起第二个进程 | 单进程同库，省掉跨进程状态同步 |
 | C3 | 浏览器必须是系统真实 Chrome（`channel: "chrome"`、有头、专用 profile 目录） | 降低被识别的概率；不复用日常浏览 profile |
 | C4 | 不使用官方 Playwright driver，改用装配后的 patchright driver | ADR-0001 |
-| C5 | 同一时刻只允许一个 Run 处于 RUNNING | 单 profile 独占，并发没有意义且放大风险 |
+| C5 | 同一时刻只允许一个 Run 处于 RUNNING | 单 profile 独占，并发没有意义且放大风险。**此条为 MVP 单平台时代的全局约束**；多平台后收紧为「每个平台同一时刻一个 RUNNING」，`uk_run_running` 按 `platform` 建唯一索引，见 `spec/0003`、`spec/0004` |
 | C6 | 任何异常一律 fail-closed：停任务，不绕过 | 绕过一次验证码的代价远大于当天少投 30 个岗 |
 | C7 | 所有 Playwright 调用收敛到单一专用线程；监控类调用忙则丢弃、不排队 | Playwright Java 非线程安全，多线程操作同一 context 会随机爆 `Object doesn't exist` 与 `ERR_ABORTED` |
 | C8 | 所有等待必须显式超时，且只等 `DOMCONTENTLOADED` | SPA + WebSocket 长连接下 `NETWORKIDLE` 可能永远不到 |
@@ -92,7 +92,7 @@
 
 ### 3.2 执行层
 
-**driver 装配**（机制已在参考实现中验证，见 `docs/tech/0001-reference-get-jobs.md` §2.1）：
+**driver 装配**（机制已在参考实现 get_jobs 中验证；结论见本节末尾「参考实现依据」）：
 
 - 构建期任务：`npm install patchright-core@1.62.1 --prefix build/patchright-driver`，把 `node_modules/patchright-core` 拷到 `build/patchright-driver/package`，以 `package/cli.js` 存在作为就绪判据。
 - 运行时注入：设置 JVM 系统属性 `playwright.cli.dir=<driverDir>`，环境变量 `PLAYWRIGHT_NODEJS_PATH=<node 绝对路径>`，再 `Playwright.create(new CreateOptions().setEnv(env))`。
@@ -102,7 +102,7 @@
 
 **启动自检**：浏览器起来后打开一个本地自检页，断言 `navigator.webdriver === false` 且运行在 patched driver 上；任一失败即拒绝启动任务。
 
-**浏览器参数**：`channel("chrome")` + `launchPersistentContext`（专用 `browser-data/`）+ `headless(false)` + `slowMo(50)` + `viewportSize(null)` + `chromiumSandbox(true)`，args 为 `--start-maximized`、`--test-type`、`--disable-session-crashed-bubble`、`--hide-crash-restore-bubble`、`--no-first-run`、`--no-default-browser-check`、`--no-proxy-server`、`--proxy-bypass-list=*`、`--disable-blink-features=AutomationControlled`。不设 UA，不加 `--no-sandbox`。
+**浏览器参数**：`channel("chrome")` + `launchPersistentContext`（专用 `browser-data/<platform>/`，多平台后按平台分目录）+ `headless(false)` + `slowMo(50)` + `viewportSize(null)` + `chromiumSandbox(true)`，args 为 `--start-maximized`、`--test-type`、`--disable-session-crashed-bubble`、`--hide-crash-restore-bubble`、`--no-first-run`、`--no-default-browser-check`、`--no-proxy-server`、`--proxy-bypass-list=*`、`--disable-blink-features=AutomationControlled`。不设 UA，不加 `--no-sandbox`。
 
 后四个稳定性参数不是反检测，是防止崩溃恢复弹窗挂死 CDP；同时启动前把 profile 的 `Preferences` 里 `exit_type` 置 `Normal`、`exited_cleanly` 置 `true`。另外两处必须记住：**启动自带的空白页不能复用**（必须新建页并关掉旧页，否则 evaluate/locator 会无限阻塞）；**落点不用首页**（受控标签页下首页 navigate 要 60s），直接进岗位列表页。
 
@@ -117,6 +117,12 @@
 | 可见性探测 | 一律包 5s 超时，不用裸 `isVisible()` |
 | 导航 | 45s 超时 + 重试 1 次 + 先判断「是否已到位」 |
 | 假异常 | `Object doesn't exist` / `Execution context was destroyed` 视为可重试；滚动期累计 > 20 次放弃 |
+
+**参考实现依据（原调研稿结论，已并入本文）**
+
+执行层若干写法沿用参考项目 get_jobs 的已验证结论。driver 在构建期用 npm 把 `patchright-core@1.62.1` 装进 `build/patchright-driver` 并拷成 `package/`，以 `package/cli.js` 存在为就绪；运行时注入 JVM 属性 `playwright.cli.dir` 与环境变量 `PLAYWRIGHT_NODEJS_PATH` 后再 `Playwright.create(setEnv)`，未命中即拒绝启动（fail-closed）。Playwright Java 非线程安全，故全部调用收敛到单线程 executor、嵌套调用就地执行防自锁、监控忙则丢弃本轮；否则会随机报 `Object doesn't exist` 并使导航被 `ERR_ABORTED` 打断。等待须显式超时、只等 `DOMCONTENTLOADED`（SPA 长连接下 `NETWORKIDLE` 可能永不触发）、`isVisible` 一律包 5 秒超时、`navigate` 45 秒重试一次。搜索直接拼 URL，不模拟 UI；第一张卡片默认展开不发详情请求，须先点第二张再点回第一张并挂响应监听。
+
+仍未实测：BOSS 今日沟通次数上限阈值、有间隔时触发安全验证的详情量（仅「无间隔 7 分钟 297 个」一个数据点）、搜索瀑布流真实深度；首次点「立即沟通」是否自动发招呼语已用「先读消息列表」兼容，但读到的历史消息边界待实测确认。
 
 ### 3.3 编排
 
@@ -210,7 +216,7 @@ for 组合 in 队列:
 
 **界面**：配置 → 值守规则，单页三块——敏感词（红调 chips，命中即不回复）、回复规则（关键词 chips + 文案池，其中一条标「本次命中」）、未命中消息（近 7 天，每条带「转为规则」）。草案见 `docs/ui/0001-reply-rules.html`。
 
-**默认种子**：7 条规则 / 13 条文案 / 10 个敏感词，见 `tools/out/V3__seed_reply_rule.sql`（已验证可执行且幂等）。其中「礼貌收尾」默认关闭——和 HR 的客套话容易形成无意义往返。
+**默认种子**：7 条规则 / 13 条文案 / 10 个敏感词，已固化进 `server/src/main/resources/db/migration/V3__seed_reply_rule.sql`（已验证可执行且幂等）。其中「礼貌收尾」默认关闭——和 HR 的客套话容易形成无意义往返。
 
 ### 3.6 配置与控制台
 
@@ -260,7 +266,7 @@ for 组合 in 队列:
 ```
 chat-job/
 ├── CONTEXT.md
-├── docs/{adr,spec,tech,ui}/
+├── docs/{adr,spec,ui}/
 ├── tools/                              # 数据提取等一次性脚本，不进 jar
 │   ├── extract-boss-dict.py
 │   └── out/                            # 生成的种子 SQL 与字典 JSON
@@ -282,6 +288,8 @@ chat-job/
 ├── console/                            # Nuxt 3
 └── start.bat
 ```
+
+> 上图是 MVP 规划期的类名快照。当前不存在的规划名包括 `RunStateMachine`、`CombinationQueue`、`Checkpoint`、`PlaywrightFactory`（实为 `PatchrightDriver`）、`LoginProbe`、`ActiveLevelNormalizer`（实为 `ActiveLevel`）、`ReplyStrategy`（实为 `ReplyRuleEngine`）；`JobController` 现已存在。**类名与代码落点以当前 `server/src/main/java/` 为准。**
 
 ### 4.2 分期
 
@@ -321,7 +329,7 @@ P0 必须在写任何业务代码之前完成。P1–P5 严格串行。
 
 1. 关闭质量开关跑一轮，`daily_counter` 的评估数增长、投递数保持 0。
 2. 开启后跑一轮，控制台可见每张卡片的决策原因（黑名单 / 活跃度 / 重复 / AI 通过或不通过）。
-3. 投递达 30 时 Run 终止态为 `QUOTA_REACHED`，且企业微信收到一条通知。
+3. 投递达 30 时 Run 终止态为 `QUOTA_REACHED`，且企业微信收到一条通知。（**已被 spec 0003 取代**：投递达配额改为进入 `STANDBY`，只中止扫描、值守继续到时段结束；告警仍发。当前 `QUOTA_REACHED` 仅作为演练模式的 `terminal_reason` 字符串保留。）
 4. 手动删除 profile 里的登录态后启动，任务拒绝运行且给出告警，不产生任何投递。
 5. 中途强杀进程后重启，从最后一张卡片续跑，已投递岗位不再出现投递动作。
 6. 硬黑名单关键词「外包」能命中「XX信息技术外包有限公司」并跳过，且不产生 AI 调用。
@@ -330,7 +338,7 @@ P0 必须在写任何业务代码之前完成。P1–P5 严格串行。
 
 ### 5.3 未闭环的事实
 
-完整清单见 `docs/tech/0001-reference-get-jobs.md` §5。当前阻塞项：
+当前阻塞项（原调研稿结论已并入本文 §3.2 与下表）：
 
 | 事实 | 现状 | 处理 |
 |---|---|---|
@@ -338,7 +346,7 @@ P0 必须在写任何业务代码之前完成。P1–P5 严格串行。
 | 默认招呼语是否自动发出 | 取决于平台配置，会变 | 已改为「进会话先读消息列表」的判据，两种行为都安全 |
 | 今日沟通次数上限阈值 | 未知（参考项目 README 提到约 150/天，非代码约束） | 命中即熔断；配额默认 30 可调 |
 | 有间隔时点多少详情会触发风控 | 只有一个无间隔数据点（7 分钟 297 个） | 评估上限 150 需实测校准；每 50 个插入一次长休 |
-| 字典数据（城市 / 行业 / 各类 code） | 已解决：从参考项目 `db/getjobs.db` 提取 579 条，工具 `tools/extract-boss-dict.py`，产物 `tools/out/V2__seed_platform_option.sql`（已校验可执行且幂等） | 无阻塞 |
+| 字典数据（城市 / 行业 / 各类 code） | 已解决：从参考项目 `db/getjobs.db` 提取 579 条，工具 `tools/extract-boss-dict.py`，产物已固化进 `server/src/main/resources/db/migration/V2__seed_platform_option.sql`（已校验可执行且幂等） | 无阻塞 |
 
 ---
 

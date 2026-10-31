@@ -86,7 +86,7 @@ public class SecretCipher {
         return cipherText;
     }
 
-    /** 用于接口回显：永远不把明文送出去，只说明"是否已配置" */
+    /** 用于接口回显：不返回明文，只说明"是否已配置" */
     public boolean isConfigured(String cipherText) {
         return cipherText != null && !cipherText.isBlank();
     }

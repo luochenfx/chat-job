@@ -80,7 +80,7 @@ public class JobController {
             DeliveryEntity latest = latestDelivery(job.getId());
             if (latest != null) {
                 item.put("deliveryStatus", latest.getStatus());
-                // 处置时间：以 finishedAt 为准 —— 它是结果落定的那一刻。两个兜底都要，
+                // 处置时间：以 finishedAt 为准 —— 它是结果落定的那一刻。两个备用取值都要，
                 // 否则列会莫名空着：startDelivery 只写 startedAt（扫到一半崩掉的「投递中」
                 // 就只有它），markManual 只改状态不写时间（部分「需人工」也只有它）。
                 item.put("disposedAt", latest.getFinishedAt() != null

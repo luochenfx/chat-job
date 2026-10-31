@@ -22,7 +22,7 @@ import java.util.Locale;
  * <ul>
  *   <li><b>说什么</b>（{@code ai_config.introduce}）是事实素材，天然简历腔；</li>
  *   <li><b>怎么说</b>（{@code ai_config.ai_reply_style}）才是语气约束 ——
- *       拿 introduce 当人设直接喂模型，产出必是「本人具备 X 年经验」这种一眼假的句子；</li>
+ *       拿 introduce 当人设直接喂模型，产出会是「本人具备 X 年经验」这种与真人表达不符的句子；</li>
  *   <li><b>能不能发</b>（{@link ReplyGuard}）是代码判定。风格是软约束，模型可以不遵守，
  *       所以改了 prompt 不等于收紧了出口。</li>
  * </ul>
@@ -38,7 +38,7 @@ import java.util.Locale;
 public class AiReplier {
 
     /**
-     * 默认表达风格。DB 里存空串时用它兜底，这样用户在控制台清空输入框也不会退化成无约束状态。
+     * 默认表达风格。DB 里存空串时使用这份默认值，这样用户在控制台清空输入框也不会退化成无约束状态。
      *
      * <p>每一条都对应一个真实失败模式：分点小标题像周报、复述对方像机器人、套话像客服、
      * 感叹号堆叠像营销号。最后一条「不超过 60 字」与 {@link ReplyGuard#MAX_CHARS} 对齐 ——

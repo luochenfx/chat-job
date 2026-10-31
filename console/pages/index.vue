@@ -54,7 +54,7 @@
 
         <div class="pstats">
           <!-- 与下一行分开：一个是我们主动外呼，一个是对方先开口后我们才发简历。
-               合成一个数字会让人以为今天被动的那些也吃掉了配额（ADR-0004） -->
+               合成一个数字会让人以为今天被动的那些也消耗了配额（ADR-0004） -->
           <div class="pstat">
             <div class="pstat-label">今日主动投递</div>
             <div class="pstat-value">

@@ -79,7 +79,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
     /**
      * 首屏 {@code positionList} 的原始记录，按岗位编号索引。
      *
-     * <p>只当<b>富化/兜底</b>用（{@code hasAppliedPosition}、以及面板没渲染出来时的字段来源），
+     * <p>只当<b>字段补充/备用来源</b>用（{@code hasAppliedPosition}、以及面板没渲染出来时的字段来源），
      * 不再承担"卡片下标 → 记录"的映射职责：滚动加载出来的卡片不在这个表里。
      */
     private final Map<String, JsonNode> listRecords = new ConcurrentHashMap<>();

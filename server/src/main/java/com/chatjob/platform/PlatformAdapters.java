@@ -61,7 +61,7 @@ public class PlatformAdapters {
      * 取某个平台的适配器。
      *
      * @param platform 平台标识；空值按 {@code chat-job.active-platform} 处理 —— 与
-     *                 {@code BrowserSessions.of(null)} 同一套兜底，避免调用点各自猜出不同结果
+     *                 {@code BrowserSessions.of(null)} 同一套缺省处理，避免各调用点自行推断出不同结果
      * @throws IllegalArgumentException 该平台没有装配适配器。宁可当场报错，也不返回 null 让
      *         调用方在几百行之后炸在 NPE 上（那时已经分不清是哪个平台配错了）
      */
