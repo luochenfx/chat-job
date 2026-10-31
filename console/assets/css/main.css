@@ -326,6 +326,8 @@ button {
   padding: 8px 15px;
   border-radius: var(--radius);
   font-size: 13px;
+  /* 表格里的按钮列宽是按内容估的，一换字号或加一格就会把「编辑」折成两行 */
+  white-space: nowrap;
   transition: background 120ms ease;
 }
 

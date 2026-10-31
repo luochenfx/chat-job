@@ -3,7 +3,9 @@
     <aside class="side">
       <div class="brand">
         <strong>chat-job</strong>
-        <span>{{ label }} 投递自动化 · 本机</span>
+        <!-- 这里列的是「有哪些平台」，不是「当前在看哪个」：全站没有当前平台的概念，
+             各页自己带切换器（位置跟着作用域走） -->
+        <span>{{ subtitle }}</span>
       </div>
       <NuxtLink
         v-for="item in nav"
@@ -25,11 +27,18 @@
 <script setup lang="ts">
 const route = useRoute()
 const { toast } = useToast()
-const { ensure, label } = usePlatform()
+const { ensure, platforms } = usePlatform()
 
-// 平台名来自服务端（装配期配置），失败时 usePlatform 内部退回默认值，不阻塞页面
+// 平台清单来自服务端（实际装配了适配器的那些），失败时保持空串，不阻塞页面
 onMounted(() => {
   ensure().catch(() => {})
+})
+
+const subtitle = computed(() => {
+  const names = platforms.value.map((p) => p.label)
+  if (!names.length) return '投递自动化 · 本机'
+  if (names.length === 1) return `${names[0]} 投递自动化 · 本机`
+  return names.join(' · ')
 })
 
 const nav = [

@@ -196,6 +196,62 @@ API 形状（2c 只改前端，不再动后端）：新建/查当前带可选 `p
 `Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | ? { $_.CommandLine -like '*browser-data\<平台>*' }`，
 清干净残留后立刻恢复（实测 zhaopin 在清理后一次起成功）。所以「一个平台起不来」先查残留进程，再怀疑装配。
 
+**阶段 2c 实施记录（2026-10-31，真实库 + 服务启动 + bsk 页面取证）**
+
+先纠正一处计划与现实的对账：**2c-2 的写路径在 2b 已顺手做完**（`RunController` 按 `{id}` 反查平台、
+`POST /runs` 带 `platform`、probe/open-login 带 `platform`），所以 2c 剩下的实际是
+「2c-3/2c-4 前端 + 一处被漏掉的后端项（通知带平台名）」。
+
+| 项 | 计划 | 实际做法 | 依据 |
+|---|---|---|---|
+| 通知带平台名 | 2c 改标题 | **改 `Notifier` 契约**：加 `platform` 参数（4 参），3 参版本降为 default，节流键改为 `kind|平台` | 原实现按 `kind` 节流：BOSS 熔断后 5 分钟内智联熔断会被合并掉，而那是两条流水线 —— 只加标题前缀会让「合并」这件事更隐蔽。`WecomRobotNotifierTest` 4 例锁住标题与节流键 |
+| `{id}` 停错 | 期望 404 | 实际 400（`Run 不存在: 99999`） | `GlobalExceptionHandler` 把 `IllegalArgumentException` 映射成 400。结论不变：不存在的 id 不会落到缺省平台 |
+| 概览的「多久没动」 | 复用任务页逻辑 | 抽成 `composables/useActivity.ts`（`useTickClock` / `idleText` / `activityView`），两页共用 | 两处各写一遍的话，「暂停该不该做陈旧判定」这类规则改一处就分叉：概览说卡住、任务页说正常 |
+| 概览卡不传陈旧阈值 | — | `activityView(..., { withLabel:false })` 且不传 `staleAfterSeconds`；已结束的 Run 不显示该标签 | `/system/overview` 契约里没有阈值，而卡头已有状态标签。概览只回答「还活着吗」，判「卡死」留在任务页（那里有后端下发的阈值） |
+| 通知测试按钮 | — | 仍走 3 参（无平台），日志为 `[通知未配置] chat-job 通知测试` | 证明 default 方法没有把「无平台」写成空的 `[]` |
+
+前端落地点（files 全部在 `console/`）：
+
+| 文件 | 改动 |
+|---|---|
+| `composables/usePlatform.ts` | 重写：清单来自 `/system/platforms`，选中项 = URL `?platform=` → localStorage → 清单第一个；不再出现「唯一平台」语义 |
+| `components/PlatformSwitch.vue` | 新增分段控件，任务页头 / 配置「平台配置」tab 两处复用 |
+| `pages/index.vue` | 重写为并排平台卡（`auto-fit minmax(380px,1fr)`）：全局条 + 每卡六行固定顺序 + 单操作按钮 |
+| `pages/task.vue` | 页头分段控件、`/runs/current?platform=`、平台变化先清空再请求（含丢弃迟到响应）、停止/暂停按钮带平台名 |
+| `pages/jobs.vue` | 平台筛选（默认「全部平台」）、平台标签跟在岗位名下方、拉黑旁注「两平台共用」 |
+| `pages/config.vue` | tab 标注作用域、平台配置 tab 内切换器、先重置默认再 assign、dirty 拦截（切 tab/切平台都拦）、保存后回读 |
+| `pages/system.vue` | 浏览器与登录态按平台分行（探测/登录/自检都带 platform）、当日计数按平台分组 |
+| `components/UnreadTasks.vue` | 明细加平台列、计数加「按平台明细」 |
+
+验证方式与结果（四方交叉，同一次真实运行）：
+
+- **代码**：全量单测 **259 例通过**（原 255 + `WecomRobotNotifierTest` 4），1 例按注解跳过。
+- **日志**：`[boss] [run 42] 当前 19:19 不在值守时段 09:00–19:00 内，已挂起等待`；
+  文件里 `[boss] [run …]` 与 `[zhaopin] [run …]` 两类前缀并存（26 / 221 条）。
+- **库**：run 42 由控制台的 BOSS 卡启动、由卡上的「取消等待」结束（`NORMAL → CANCELLED`，`started_at` 为空 =
+  从未离开等待态）；智联 run 41 全程未变。`daily_counter` 今日只有 zhaopin 一行（49 次评估），
+  与概览卡「BOSS 0/150、智联 49/150」逐一对上。
+- **页面（bsk，主浏览器观测控制台）**：
+  - 概览：两平台卡并排、不滚动可见；BOSS 卡「等待时段」+「取消等待」，智联卡同时保持「已取消」+「启动」——
+    一张卡的操作没有牵动另一张。
+  - 任务页：切到智联后 run `#41`、组合卡片数 195、日志为 08:24–08:25 的智联内容，值守时段提示变成
+    `09:00–22:00，还能跑约 2 小时 50 分钟`（BOSS 是 `09:00–19:00` 且当时不在时段）——四组数据同时换掉，
+    没有一处残留上一个平台。
+  - 不带 query 直接打开 `/task`，仍停在智联（localStorage）；点分段控件后 URL 变为 `?platform=zhaopin`。
+  - 配置页：改配额 → 出现「有未保存改动」；点另一平台 → 原生确认框文案 `有未保存的平台配置改动，放弃并切换到 BOSS 直聘？`；
+    取消 → 仍停在智联且配额仍是 31；接受 → tab 后缀变「平台配置 · BOSS 直聘」，六组筛选出现；
+    再切回智联 → 六组筛选消失、配额回到 30（草稿未落库）。
+  - 系统页：对「智联招聘」行点探测 → 该行「已登录 / 登录态 cookie 存在」，BOSS 行仍「尚未探测」；
+    对「BOSS 直聘」行点探测 → 该行「浏览器 已启动」，智联行仍「未启动」。
+- **进程**：探测后 `bsk browsers` 多出 `9a198826 自动化浏览器（EXT 0.3.3）`——0.3.3 就是
+  `browser-data/boss` 那一份扩展，说明控制台点的是 BOSS 自己的 profile 而不是共用的一个。
+
+**没覆盖到的三处**（不是通过，是没取证）：
+
+1. 概览的零状态卡（「今天还没有跑过」）：真实库里两个平台今天都跑过，这一分支只能靠代码读；
+2. driver 红灯 vs browserReady 红灯的视觉区分：driver 当前就绪，无法造故障；
+3. 企业微信真实发送：webhook 未配置，只验到日志里的标题拼接与 4 个单测。
+
 ### 阶段 3：收尾
 
 | 项 | 内容 |

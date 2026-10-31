@@ -16,6 +16,7 @@ import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.PlatformAdapters;
+import com.chatjob.platform.PlatformInfo;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.DeliveryEntity;
@@ -288,7 +289,7 @@ public class RunService {
             PatchrightDriver.Status driver = patchright.inspect();
             if (!driver.available()) {
                 finish(run, RunStatus.FAILED, "DRIVER_UNAVAILABLE", driver.message());
-                notifier.notify("run-failed", "任务无法启动：driver 不可用", driver.message());
+                notify(run, "run-failed", "任务无法启动：driver 不可用", driver.message());
                 return;
             }
 
@@ -296,14 +297,14 @@ public class RunService {
             SelfCheck.Result check = selfCheck.run(adapter().platform());
             if (!check.ok()) {
                 finish(run, RunStatus.FAILED, "SELF_CHECK_FAILED", String.join("；", check.failures()));
-                notifier.notify("run-failed", "启动自检未通过", String.join("\n", check.failures()));
+                notify(run, "run-failed", "启动自检未通过", String.join("\n", check.failures()));
                 return;
             }
 
             LoginState login = adapter().probeLogin();
             if (!login.loggedIn()) {
                 finish(run, RunStatus.LOGIN_LOST, "LOGIN_LOST", login.reason());
-                notifier.notify("login-lost", "登录态失效，任务未启动", login.reason());
+                notify(run, "login-lost", "登录态失效，任务未启动", login.reason());
                 return;
             }
 
@@ -356,11 +357,11 @@ public class RunService {
             };
             finish(run, status, e.kind().name(), e.getMessage());
             publish(run, "circuit.opened", Map.of("kind", e.kind().name(), "message", e.getMessage()));
-            notifier.notify("circuit", "任务已熔断：" + e.kind().name(), e.getMessage());
+            notify(run, "circuit", "任务已熔断：" + e.kind().name(), e.getMessage());
         } catch (Exception e) {
             log.error("任务执行失败", e);
             finish(run, RunStatus.FAILED, "EXCEPTION", e.getClass().getSimpleName() + ": " + e.getMessage());
-            notifier.notify("run-failed", "任务异常终止", String.valueOf(e.getMessage()));
+            notify(run, "run-failed", "任务异常终止", String.valueOf(e.getMessage()));
         } finally {
             long costSeconds = (System.currentTimeMillis() - startedAt) / 1000;
             // 挂起等待的 Run 也走这里退出，但它是「还没开始」而不是「已结束」：
@@ -495,7 +496,7 @@ public class RunService {
         data.put("evaluated", evaluated);
         data.put("quota", quota(cfg));
         publish(run, "run.standby", data);
-        notifier.notify("standby", "扫描已结束，值守继续", message);
+        notify(run, "standby", "扫描已结束，值守继续", message);
     }
 
     /**
@@ -530,7 +531,7 @@ public class RunService {
         data.put("at", DutyWindow.format(now));
         data.put("opensInMinutes", window.opensInMinutes(now));
         publish(run, "run.waiting", data);
-        notifier.notify("duty-end", "值守时段已结束，已挂起", message);
+        notify(run, "duty-end", "值守时段已结束，已挂起", message);
     }
 
     /**
@@ -1178,6 +1179,19 @@ public class RunService {
 
     private void publish(RunEntity run, String type, Object data) {
         sse.publish(run.getId(), type, data);
+    }
+
+    /**
+     * 唯一的通知出口，带平台展示名。
+     *
+     * <p>两个平台并行之后，手机上的「任务已熔断」不说是哪个平台等于没说
+     * （spec 0004 阶段 2c 的验收：通知能看出是哪个平台）。平台名取展示名而不是 slug ——
+     * 通知是给人看的，{@code zhaopin} 这个词在手机上没有意义。
+     *
+     * <p>用 {@code run.getPlatform()} 而不是本实例绑定的平台，理由与 {@link #log} 相同。
+     */
+    private void notify(RunEntity run, String kind, String title, String body) {
+        notifier.notify(kind, PlatformInfo.of(run.getPlatform()).label(), title, body);
     }
 
     /** 供控制台手动收工用：清掉内存标志，允许下一个 Run 启动 */

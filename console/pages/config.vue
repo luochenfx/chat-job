@@ -8,7 +8,13 @@
     </div>
 
     <div class="tabs">
-      <button v-for="t in tabs" :key="t.key" class="tab" :class="{ active: tab === t.key }" @click="tab = t.key">
+      <button
+        v-for="t in tabs"
+        :key="t.key"
+        class="tab"
+        :class="{ active: tab === t.key }"
+        @click="switchTab(t.key)"
+      >
         {{ t.label }}
       </button>
     </div>
@@ -291,6 +297,17 @@
 
     <!-- ---------------------------------------------------- 平台配置 -->
     <section v-show="tab === 'platform'">
+      <!--
+        切换器只在这个 tab 内：其余三个 tab 两平台共用，整页切换会造成
+        「切到智联，AI 配置一个字没变」的错觉。控件与它作用的那几张卡同屏。
+      -->
+      <div class="scope-bar">
+        <span class="scope-key">正在配置</span>
+        <PlatformSwitch v-model="platformPick" :platforms="platforms" />
+        <span class="scope-note">下面五张卡只属于这个平台；搜索条件与配额都是每平台一份</span>
+        <span v-if="dirty" class="tag warn">有未保存改动</span>
+      </div>
+
       <div class="card">
         <h2>搜索条件</h2>
         <p class="hint">
@@ -433,8 +450,8 @@
       </div>
 
       <div class="card">
-        <h2>黑名单</h2>
-        <p class="hint">在「岗位」页维护，与这里共用同一份数据</p>
+        <h2>黑名单 · 两平台共用</h2>
+        <p class="hint">在「岗位」页维护，与这里共用同一份数据；黑名单没有平台维度</p>
         <div v-if="!blacklist.length" class="empty">还没有黑名单</div>
         <div v-else class="row wrap" style="gap: 8px">
           <span v-for="b in blacklist" :key="b.id" class="chip" :class="b.kind === 'company' ? '' : 'danger'">
@@ -458,17 +475,40 @@
 const { call } = useApi()
 const { show } = useToast()
 
-const tabs = [
-  { key: 'provider', label: '模型提供商' },
-  { key: 'ai', label: 'AI 配置' },
-  { key: 'platform', label: '平台配置' },
-  { key: 'reply', label: '值守规则' }
-]
+/**
+ * tab 标题带作用域后缀。后缀比任何说明文字都有效：用户在 AI 配置页看不到平台切换器、
+ * 标题又写着「两平台共用」，就不会去找开关。
+ */
+const tabs = computed(() => [
+  { key: 'provider', label: '模型提供商 · 两平台共用' },
+  { key: 'ai', label: 'AI 配置 · 两平台共用' },
+  { key: 'platform', label: `平台配置 · ${platformLabel.value || '…'}` },
+  { key: 'reply', label: '值守规则 · 两平台共用' }
+])
 const tab = ref('provider')
 const saving = ref(false)
 
-// 当前平台由服务端装配期配置决定；配置读写与字典查询都要跟着它走
-const { ensure: ensurePlatform, platform: platformSlug, note: platformNote, supports } = usePlatform()
+// 当前平台由 URL / localStorage / 清单决定；配置读写与字典查询都要跟着它走
+const {
+  platforms,
+  ensure: ensurePlatform,
+  platform: platformSlug,
+  label: platformLabel,
+  labelOf,
+  note: platformNote,
+  supports,
+  select
+} = usePlatform()
+
+/** 分段控件的 v-model：写的时候先过 dirty 拦截，再切换并重新加载该平台的配置 */
+const platformPick = computed({
+  get: () => platformSlug.value,
+  set: (value: string) => {
+    if (!value || value === platformSlug.value) return
+    void switchPlatform(value)
+  }
+})
+
 const hasExtraFilters = computed(() =>
   ['salary', 'experience', 'degree', 'scale', 'industry', 'stage'].some((key) => supports(key))
 )
@@ -539,30 +579,51 @@ const riskyToneHits = computed(() => {
   return RISKY_TONE_TERMS.filter((word) => lines.includes(word))
 })
 
-const platform = reactive<any>({
-  cities: [],
-  keywords: [],
-  jobType: '',
-  salary: [],
-  experience: [],
-  degree: [],
-  scale: [],
-  industry: [],
-  stage: [],
-  activeLevelFloor: '本月',
-  activeLevelOptions: [],
-  waitTimeSeconds: 10,
-  dailyDeliveryQuota: 30,
-  dailyEvalLimit: 150,
-  scrollRoundLimit: 300,
-  combinationTimeLimitSec: 1200,
-  unreadScanLimit: 100,
-  watchIntervalSeconds: 120,
-  repeatChatEnabled: false,
-  repeatChatMessages: [],
-  dutyStartTime: '09:00',
-  dutyEndTime: '22:00'
-})
+/**
+ * 平台配置的默认值：字段全集取 BOSS 那一份。
+ *
+ * <p>切换平台时必须先回到它、再叠加响应 —— 直接 `Object.assign` 的话，切到智联时
+ * `salary` / `experience` / `degree` 等字段在响应里不存在，BOSS 的旧值会留在对象上，
+ * 接着点保存就被写进智联的配置行。那是数据污染，不只是显示问题。
+ */
+function defaultPlatformConfig() {
+  return {
+    cities: [],
+    keywords: [],
+    jobType: '',
+    salary: [],
+    experience: [],
+    degree: [],
+    scale: [],
+    industry: [],
+    stage: [],
+    activeLevelFloor: '本月',
+    activeLevelOptions: [],
+    waitTimeSeconds: 10,
+    dailyDeliveryQuota: 30,
+    dailyEvalLimit: 150,
+    scrollRoundLimit: 300,
+    combinationTimeLimitSec: 1200,
+    unreadScanLimit: 100,
+    watchIntervalSeconds: 120,
+    repeatChatEnabled: false,
+    repeatChatMessages: [],
+    dutyStartTime: '09:00',
+    dutyEndTime: '22:00'
+  }
+}
+
+const platform = reactive<any>(defaultPlatformConfig())
+
+/** 加载完成时的快照：与当前值比较得出 dirty（切 tab / 切平台前据此拦截） */
+const snapshot = ref(JSON.stringify(platform))
+const dirty = computed(() => JSON.stringify(platform) !== snapshot.value)
+
+/** 先回默认再叠加，随后拍快照 —— 之后任何改动都会让 dirty 变 true */
+function applyPlatform(config: any) {
+  Object.assign(platform, defaultPlatformConfig(), config || {})
+  snapshot.value = JSON.stringify(platform)
+}
 
 // 回复超时在 AiReplier 里还要被提供商超时压一道（取较小值）。
 // 只信输入框就会以为「设 120 就是 120」，所以把算完的真实值显示出来
@@ -600,10 +661,9 @@ const dict = reactive<Record<string, string[]>>({
 async function loadAll() {
   try {
     await ensurePlatform()
-    const [p, a, c, b] = await Promise.all([
+    const [p, a, b] = await Promise.all([
       call('/config/providers'),
       call('/config/ai'),
-      call(`/config/platform/${platformSlug.value}`),
       call('/blacklist')
     ])
     providers.value = p || []
@@ -615,12 +675,41 @@ async function loadAll() {
     aiStyleDefault.value = (a?.aiReplyStyleDefault ?? '').trim()
     aiToneTermsDefault.value = (a?.aiReplyToneTermsDefault ?? '').trim()
     aiToneTermsEffectiveCount.value = a?.aiReplyToneTermsEffectiveCount ?? 0
-    Object.assign(platform, c || {})
     blacklist.value = b || []
-    await loadDictionary()
+    await loadPlatform()
   } catch (e: any) {
     show(e.message, true)
   }
+}
+
+/** 只重拉「当前平台」的配置与字典：切平台不需要把提供商与 AI 配置再拉一遍 */
+async function loadPlatform() {
+  const c = await call(`/config/platform/${platformSlug.value}`)
+  applyPlatform(c)
+  await loadDictionary()
+}
+
+/**
+ * 切平台：先拦未保存的草稿，再切（写 URL 与 localStorage），然后重拉。
+ *
+ * <p>不拦的话草稿会被静默覆盖 —— 人改了一半、切过去看一眼别的平台、再切回来，
+ * 改动已经没了，而且没有任何痕迹说明它是什么时候没的。
+ */
+async function switchPlatform(slug: string) {
+  if (dirty.value && !confirm(`有未保存的平台配置改动，放弃并切换到 ${labelOf(slug)}？`)) return
+  try {
+    await select(slug)
+    await loadPlatform()
+  } catch (e: any) {
+    show(e.message, true)
+  }
+}
+
+/** 切 tab 同样要拦：离开「平台配置」时草稿会被下一次加载覆盖 */
+function switchTab(key: string) {
+  if (key === tab.value) return
+  if (tab.value === 'platform' && dirty.value && !confirm('有未保存的平台配置改动，放弃并切换？')) return
+  tab.value = key
 }
 
 async function loadDictionary() {
@@ -791,6 +880,9 @@ async function savePlatform() {
   try {
     await call(`/config/platform/${platformSlug.value}`, { method: 'PUT', body: platform })
     show('平台配置已保存')
+    // 回读一次：后端对 watchIntervalSeconds 等字段有钳制，不回读的话界面显示的是用户填的、
+    // 库里存的是钳制后的 —— 两个数字不一致，而且人会按界面上那个数去推算行为
+    await loadPlatform()
   } catch (e: any) {
     show(e.message, true)
   } finally {
@@ -810,3 +902,28 @@ async function removeBlacklist(item: any) {
 
 onMounted(loadAll)
 </script>
+
+<style scoped>
+/* 平台作用域条：紧贴「平台配置」tab 的内容顶部，让「这几张卡只属于这个平台」可见 */
+.scope-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: var(--gap);
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.scope-key {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.scope-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+</style>

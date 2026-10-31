@@ -7,7 +7,9 @@
         <!-- 时段只决定「什么时候开始跑」，不再是启动门禁：窗口内说到点时刻，等待态说还要等多久 -->
         <p v-if="dutyLine" class="hint" style="margin-bottom: 0">{{ dutyLine }}</p>
       </div>
-      <div class="row">
+      <div class="row wrap" style="justify-content: flex-end">
+        <!-- 控件与它作用的对象同屏：整页内容都是这个平台的，所以切换器放在页头 -->
+        <PlatformSwitch v-model="platformPick" :platforms="platforms" />
         <select v-model="mode" style="width: 170px" :disabled="active">
           <option value="NORMAL">正常投递</option>
           <option value="DRY_RUN">演练模式（不发消息）</option>
@@ -20,8 +22,9 @@
             取消等待
           </button>
           <template v-else>
-            <button class="btn" :disabled="busy" @click="pause">暂停</button>
-            <button class="btn danger" :disabled="busy" @click="cancel">停止</button>
+            <!-- 两个平台可能同时在跑，裸的「停止」会被点错平台，文案一律带上平台名 -->
+            <button class="btn" :disabled="busy" @click="pause">暂停 {{ platformLabel }}</button>
+            <button class="btn danger" :disabled="busy" @click="cancel">停止 {{ platformLabel }}</button>
           </template>
         </template>
       </div>
@@ -77,9 +80,9 @@
             <template v-if="run">
               #{{ run.id }} ·
               <span class="tag" :class="run.mode === 'DRY_RUN' ? 'warn' : ''">{{ modeText(run.mode) }}</span>
-              · {{ run.startedAt || '未开始' }}
+              · {{ (run.startedAt || '未开始').replace('T', ' ') }}
             </template>
-            <template v-else>还没有任务</template>
+            <template v-else>{{ platformLabel }} 还没有任务记录</template>
           </p>
         </div>
         <div class="row" style="gap: 26px">
@@ -105,10 +108,10 @@
 
       <!-- 「现在在干什么」+「上次动是什么时候」：等待期间日志是静默的，
            没有这一行，界面无法区分「在等」和「卡死」 -->
-      <div v-if="run && activityLine" class="row wrap" style="margin-top: 14px; gap: 10px; align-items: baseline">
+      <div v-if="run && activity.text" class="row wrap" style="margin-top: 14px; gap: 10px; align-items: baseline">
         <span class="hint-inline">当前动作</span>
         <span>{{ run.currentAction || '—' }}</span>
-        <span class="tag" :class="stale ? 'danger' : (runView.judgedIdle ? 'ok' : '')">{{ activityLine }}</span>
+        <span class="tag" :class="activity.tone">{{ activity.text }}</span>
       </div>
     </div>
 
@@ -174,7 +177,18 @@
 <script setup lang="ts">
 const { call } = useApi()
 const { show } = useToast()
-const { events, connected, open, clear } = useRunStream()
+const { events, connected, open, clear, close } = useRunStream()
+const { platforms, ensure, platform: platformSlug, label: platformLabel, select } = usePlatform()
+// 秒级时钟抽在 composable 里，概览卡与这里共用同一句「多久没动了」
+const nowMs = useTickClock()
+
+/** 分段控件的 v-model：读的是选中的平台，写的时候走 select（记忆到 URL 与 localStorage） */
+const platformPick = computed({
+  get: () => platformSlug.value,
+  set: (value: string) => {
+    select(value)
+  }
+})
 
 const run = ref<any>(null)
 const combinations = ref<any[]>([])
@@ -185,11 +199,8 @@ const busy = ref(false)
 const duty = ref<any>(null)
 /** 无响应阈值，后端算好下发；前端只做比较 */
 const staleAfter = ref(90)
-/** 1 秒一跳，只为让「12 秒前有动作」这个数字在两次轮询之间也能走 */
-const nowMs = ref(Date.now())
 let lastLogId = 0
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let tickTimer: ReturnType<typeof setInterval> | null = null
 let currentRunId: number | null = null
 
 // 状态 → 标签/色调/能不能暂停，一处定义（原来三处各写一遍，加状态必漏）
@@ -234,40 +245,10 @@ const dutyLine = computed(() => {
 })
 const reversed = computed(() => [...events.value].reverse().slice(0, 60))
 
-// 「上次动是什么时候」：后端只给时间戳，人话与陈旧判定在这里做（阈值本身来自后端）
-const idleSeconds = computed(() => {
-  const raw = run.value?.lastActivityAt
-  if (!raw) return null
-  const at = new Date(raw).getTime()
-  if (Number.isNaN(at)) return null
-  return Math.max(0, Math.round((nowMs.value - at) / 1000))
-})
-const stale = computed(() =>
-  runView.value.judgedIdle && idleSeconds.value != null && idleSeconds.value > staleAfter.value)
-const activityLine = computed(() => {
-  const s = run.value?.status
-  if (!s) return ''
-  // 暂停与挂起本来就该安静，做陈旧判定只会误报
-  if (s === 'PAUSED') return '已暂停：扫描与值守都停'
-  if (s === 'WAITING_DUTY') return '已挂起：值守期没有结束，窗口打开会自动继续'
-  if (!runView.value.active) return `已结束：${runView.value.label}`
-  if (idleSeconds.value == null) return '刚启动，还没有动作'
-  if (stale.value) {
-    const minutes = Math.max(1, Math.floor(idleSeconds.value / 60))
-    return `⚠️ 无响应 ${minutes} 分钟（阈值 ${staleAfter.value} 秒）`
-  }
-  return `${runView.value.label} · ${idleText(idleSeconds.value)}前有动作`
-})
-
-// 秒级数字对人没意义：12 秒 / 3 分钟 / 1 小时 5 分钟
-function idleText(seconds: number) {
-  if (seconds < 60) return `${seconds} 秒`
-  const total = Math.floor(seconds / 60)
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  if (!h) return `${m} 分钟`
-  return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`
-}
+// 「上次动是什么时候」：判断规则在 useActivity 里，这里只把阈值传进去
+const activity = computed(() =>
+  activityView(run.value, { nowMs: nowMs.value, staleAfterSeconds: staleAfter.value })
+)
 
 function comboClass(s: string) {
   return s === 'DONE' ? 'ok' : s === 'RUNNING' ? 'warn' : s === 'FAILED' ? 'danger' : ''
@@ -334,8 +315,12 @@ function describe(e: { type: string; data: any }) {
 }
 
 async function refresh() {
+  const want = platformSlug.value
   try {
-    const cur = await call('/runs/current')
+    const cur = await call('/runs/current', { query: { platform: want } })
+    // 切平台时 query 已变、请求还没回：这一帧描述的是上一个平台，丢掉。
+    // 不丢的话，切到智联的瞬间会先看到 BOSS 的日志，然后日志"消失"变空
+    if (platformSlug.value !== want) return
     run.value = cur.run
     duty.value = cur.duty || null
     staleAfter.value = cur.staleAfterSeconds ?? 90
@@ -347,10 +332,32 @@ async function refresh() {
       logs.value = []
       lastLogId = 0
     }
+    // 没有 Run 时也要断开：否则切到「今天还没跑过」的平台，SSE 还连着上一平台那条
+    if (!cur.run && connected.value) {
+      close()
+      currentRunId = null
+    }
     if (cur.run) await pullLogs(cur.run.id)
   } catch (e: any) {
     show(e.message, true)
   }
+}
+
+/**
+ * 换平台：先把上一平台的东西全清掉，再发请求。
+ *
+ * <p>顺序不能反。等响应回来才清的话，界面会有一段时间挂着另一个平台的日志、组合队列与
+ * 「实时连接：已连接」——那比看到空白更让人困惑：人以为切过去了，实际看的是别人。
+ */
+function resetForPlatformChange() {
+  close()
+  clear()
+  run.value = null
+  duty.value = null
+  combinations.value = []
+  logs.value = []
+  lastLogId = 0
+  currentRunId = null
 }
 
 async function pullLogs(runId: number) {
@@ -364,7 +371,11 @@ async function pullLogs(runId: number) {
 async function start() {
   busy.value = true
   try {
-    await call('/runs', { method: 'POST', body: { mode: mode.value } })
+    await call('/runs', {
+      method: 'POST',
+      query: { platform: platformSlug.value },
+      body: { mode: mode.value }
+    })
     // 窗口外启动不再报错，而是挂起：toast 必须说「排到几点」，否则人会以为任务已经跑起来了
     if (duty.value && !duty.value.open && mode.value === 'NORMAL') {
       show(`已挂起，${duty.value.hint}`)
@@ -423,15 +434,21 @@ function clearLogs() {
   lastLogId = 0
 }
 
-onMounted(() => {
-  refresh()
+onMounted(async () => {
+  // 先拿到清单：没有清单就不知道该问哪个平台的 Run（缺省平台是后端配置，不是这里该猜的）
+  await ensure().catch(() => {})
+  await refresh()
   pollTimer = setInterval(refresh, 3000)
-  // 单独一跳：轮询是 3 秒一次，但「12 秒前有动作」这个数字要每秒都在走
-  tickTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+})
+
+// 换平台 = 换一条流水线：上一平台的日志、事件、组合队列一律不留
+watch(platformSlug, (next, prev) => {
+  if (!prev || !next || next === prev) return
+  resetForPlatformChange()
+  refresh()
 })
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
-  if (tickTimer) clearInterval(tickTimer)
 })
 </script>

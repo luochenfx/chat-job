@@ -6,6 +6,12 @@
         <p>扫到的岗位与每次主动投递尝试。失败不自动无限重试：同一岗位连发三次可能导致封号</p>
       </div>
       <div class="row">
+        <!-- 默认「全部平台」而不是当前平台：这页是审阅用途，用户想看的是「两平台一共扫到什么」。
+             默认单一平台会让人以为只有这些岗位 -->
+        <select v-model="platformFilter" style="width: 150px" @change="refresh">
+          <option value="">全部平台</option>
+          <option v-for="p in platforms" :key="p.platform" :value="p.platform">{{ p.label }}</option>
+        </select>
         <select v-model="filter" style="width: 140px">
           <option value="">全部状态</option>
           <option value="DELIVERED">已投递</option>
@@ -34,7 +40,11 @@
           <tr v-for="job in filtered" :key="job.id">
             <td>
               <div style="font-weight: 500">{{ job.jobName || '（无岗位名）' }}</div>
-              <div class="hint-inline">{{ job.companyName || '—' }}<span v-if="job.area"> · {{ job.area }}</span></div>
+              <!-- 平台列跟着岗位走，不单独占一列：选「全部平台」时没有它分不清哪条是哪个平台的 -->
+              <div class="hint-inline">
+                <span class="tag plat">{{ job.platformLabel || job.platform || '—' }}</span>
+                {{ job.companyName || '—' }}<span v-if="job.area"> · {{ job.area }}</span>
+              </div>
             </td>
             <td class="num">{{ job.salary || '—' }}</td>
             <td>
@@ -56,7 +66,13 @@
                 >
                   重投
                 </button>
-                <button class="btn sm" @click="blacklistCompany(job)">拉黑</button>
+                <button
+                  class="btn sm"
+                  title="黑名单两平台共用：拉黑后哪个平台都不再投递"
+                  @click="blacklistCompany(job)"
+                >
+                  拉黑
+                </button>
               </div>
             </td>
           </tr>
@@ -65,8 +81,11 @@
     </div>
 
     <div class="card">
-      <h2>黑名单</h2>
-      <p class="hint">命中即丢弃：不调 AI、不落投递记录。关键词至少 2 个字符，子串匹配，忽略全角与大小写</p>
+      <h2>黑名单 · 两平台共用</h2>
+      <p class="hint">
+        命中即丢弃：不调 AI、不落投递记录。黑名单没有平台维度 —— 拉黑一家公司，两个平台都不再投它。
+        关键词至少 2 个字符，子串匹配，忽略全角与大小写
+      </p>
       <div class="row" style="margin-bottom: 14px">
         <select v-model="newKind" style="width: 110px">
           <option value="company">公司名</option>
@@ -90,10 +109,13 @@
 <script setup lang="ts">
 const { call } = useApi()
 const { show } = useToast()
+const { platforms, ensure } = usePlatform()
 
 const jobs = ref<any[]>([])
 const blacklist = ref<any[]>([])
 const filter = ref('')
+// 空串 = 全部平台。与后端 /jobs 的缺省一致（不传就是全部）
+const platformFilter = ref('')
 const busy = ref(false)
 const newKind = ref('company')
 const newKeyword = ref('')
@@ -129,7 +151,11 @@ function activeClass(level?: string) {
 async function refresh() {
   busy.value = true
   try {
-    const [j, b] = await Promise.all([call('/jobs', { query: { limit: 200 } }), call('/blacklist')])
+    await ensure().catch(() => {})
+    const [j, b] = await Promise.all([
+      call('/jobs', { query: { limit: 200, platform: platformFilter.value || undefined } }),
+      call('/blacklist')
+    ])
     jobs.value = j || []
     blacklist.value = b || []
   } catch (e: any) {
@@ -181,3 +207,14 @@ async function removeBlacklist(item: any) {
 
 onMounted(refresh)
 </script>
+
+<style scoped>
+/* 平台标签比正文小一号、且不抢公司名：它的作用是「归属」而不是「内容」 */
+.plat {
+  margin-right: 6px;
+  font-size: 10.5px;
+  padding: 0 5px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+}
+</style>

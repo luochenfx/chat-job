@@ -44,26 +44,46 @@ public class WecomRobotNotifier implements Notifier {
     }
 
     @Override
-    public void notify(String kind, String title, String body) {
+    public void notify(String kind, String platform, String title, String body) {
+        String head = headOf(platform, title);
         String webhook = props.notifyConfig() == null ? null : props.notifyConfig().wecomWebhook();
         if (webhook == null || webhook.isBlank()) {
-            log.info("[通知未配置] {} — {}", title, body);
+            log.info("[通知未配置] {} — {}", head, body);
             return;
         }
+        String throttleKey = throttleKeyOf(kind, platform);
         long now = System.currentTimeMillis();
         int windowMs = (props.notifyConfig().throttleWindowSeconds() == 0
                 ? 300 : props.notifyConfig().throttleWindowSeconds()) * 1000;
-        Long last = lastSentAt.get(kind);
+        Long last = lastSentAt.get(throttleKey);
         if (last != null && now - last < windowMs) {
-            suppressed.merge(kind, 1, Integer::sum);
-            log.debug("通知节流命中，已合并: kind={}", kind);
+            suppressed.merge(throttleKey, 1, Integer::sum);
+            log.debug("通知节流命中，已合并: key={}", throttleKey);
             return;
         }
-        lastSentAt.put(kind, now);
-        int merged = suppressed.getOrDefault(kind, 0);
-        suppressed.remove(kind);
+        lastSentAt.put(throttleKey, now);
+        int merged = suppressed.getOrDefault(throttleKey, 0);
+        suppressed.remove(throttleKey);
         String suffix = merged > 0 ? "\n\n> 此外还有 " + merged + " 次同类事件被合并" : "";
-        send(title, body + suffix);
+        send(head, body + suffix);
+    }
+
+    /**
+     * 标题带平台名：两个平台并行之后，手机上的「任务已熔断」不说是哪个平台等于没说
+     * （spec 0004 阶段 2c 的验收：通知能看出是哪个平台）。
+     *
+     * <p>抽成静态方法纯粹为了可断言 —— 真正发 HTTP 的那一段在单测里没法验证。
+     */
+    static String headOf(String platform, String title) {
+        return platform == null || platform.isBlank() ? title : "[" + platform + "] " + title;
+    }
+
+    /**
+     * 节流键带平台：否则 BOSS 熔断之后 5 分钟内智联熔断会被合并掉，
+     * 而两条告警说的是两条流水线，合并等于隐瞒了一条。
+     */
+    static String throttleKeyOf(String kind, String platform) {
+        return platform == null || platform.isBlank() ? kind : kind + "|" + platform;
     }
 
     private void send(String title, String body) {

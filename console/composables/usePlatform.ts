@@ -1,24 +1,41 @@
 /**
- * 当前启用的平台。
+ * 平台清单与「当前看哪个平台」。
  *
- * 平台是**装配期**决定的（后端 chat-job.active-platform，改完要重启），前端不做任何猜测：
- * 一律从 `/api/system/platform` 取。之前这些地方写死了 `boss`，接第二个平台时会出现
- * 「界面在配智联、实际读写的是 BOSS 的配置」——那种错很难从界面上看出来，
- * 所以宁可每次多一次请求。
+ * <p>2c 之前这里问的是「唯一平台是谁」，回答只有一个。多平台并行之后语义变成两件事：
+ * <b>有哪些平台</b>（清单，来自 `/api/system/platforms`）与 <b>这一页在看哪个</b>（选择，
+ * 由 URL query 与 localStorage 决定）。前端仍然不猜平台：清单里没有的 slug 一律不认。
+ *
+ * <p>选中项写进 `?platform=`，并记忆到 localStorage：刷新、后退、分享链接都停在同一平台。
+ * 首次进入取 localStorage，没有则取清单第一个 —— <b>不用</b>「当前有活跃 Run 的平台」
+ * 当默认，那个值会随运行状态变化，页面内容会自己跳。
  */
+
+export interface PlatformDesc {
+  platform: string
+  label: string
+  filters?: string[]
+  note?: string
+  enabled?: boolean
+}
+
+const STORAGE_KEY = 'chat-job.platform'
+
 export function usePlatform() {
   const { call } = useApi()
+  const route = useRoute()
+  const router = useRouter()
 
-  const info = useState<any>('platform-info', () => null)
-  let inflight: Promise<any> | null = null
+  // 清单全局一份：五个页面与侧边栏共用，不必各拉一次
+  const platforms = useState<PlatformDesc[]>('platform-list', () => [])
+  let inflight: Promise<PlatformDesc[]> | null = null
 
-  async function ensure() {
-    if (info.value) return info.value
+  async function ensure(): Promise<PlatformDesc[]> {
+    if (platforms.value.length) return platforms.value
     if (!inflight) {
-      inflight = call('/system/platform')
-        .then((data) => {
-          info.value = data
-          return data
+      inflight = call<PlatformDesc[]>('/system/platforms')
+        .then((list) => {
+          platforms.value = list || []
+          return platforms.value
         })
         .finally(() => {
           inflight = null
@@ -27,17 +44,67 @@ export function usePlatform() {
     return inflight
   }
 
-  // 兜底用 boss：与后端 @DefaultValue("boss") 一致。取不到时宁可退回默认平台，
-  // 也不要让界面卡在空白——那会让人以为服务没起来
-  const platform = computed<string>(() => info.value?.platform || 'boss')
-  const label = computed<string>(() => info.value?.label || 'BOSS 直聘')
-  const note = computed<string>(() => info.value?.note || '')
+  function stored(): string {
+    // 构建期（nuxt generate 预渲染外壳）没有 window，读不到就当没有记忆
+    if (typeof window === 'undefined') return ''
+    try {
+      return window.localStorage.getItem(STORAGE_KEY) || ''
+    } catch {
+      return ''
+    }
+  }
+
+  function known(slug?: string | null): boolean {
+    return !!slug && platforms.value.some((p) => p.platform === slug)
+  }
+
+  /**
+   * 当前平台：URL → localStorage → 清单第一个。
+   *
+   * <p>URL 优先是为了「分享链接 / 后退」能落在同一平台；清单为空时返回空串，
+   * 页面据此显示空态而不是先按某个平台发请求再改口。
+   */
+  const platform = computed<string>(() => {
+    const fromQuery = typeof route.query.platform === 'string' ? route.query.platform : ''
+    if (known(fromQuery)) return fromQuery
+    const fromStore = stored()
+    if (known(fromStore)) return fromStore
+    return platforms.value[0]?.platform || ''
+  })
+
+  const current = computed<PlatformDesc | null>(
+    () => platforms.value.find((p) => p.platform === platform.value) || null
+  )
+  const label = computed<string>(() => current.value?.label || '')
+  const note = computed<string>(() => current.value?.note || '')
+
+  /** 某平台 slug 的展示名。查不到就回 slug —— 宁可露出内部标识，也不要显示空白 */
+  function labelOf(slug?: string): string {
+    if (!slug) return ''
+    return platforms.value.find((p) => p.platform === slug)?.label || slug
+  }
 
   /** 该平台是否支持某个搜索条件（city / keyword / salary / experience / industry …） */
-  function supports(key: string) {
-    const list: string[] = info.value?.filters || ['city', 'keyword']
+  function supports(key: string): boolean {
+    const list = current.value?.filters || ['city', 'keyword']
     return list.includes(key)
   }
 
-  return { ensure, platform, label, note, supports }
+  /**
+   * 切到某个平台：写 localStorage 与 URL query，不碰任何业务数据 ——
+   * 各页面自己决定「换了平台要清掉什么」（任务页的日志与 SSE 必须清，岗位页不必）。
+   */
+  async function select(slug: string) {
+    if (!known(slug) || slug === platform.value) return
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, slug)
+      } catch {
+        /* 隐私模式下写不进去：URL 仍然是准的，不阻断切换 */
+      }
+    }
+    await router.replace({ query: { ...route.query, platform: slug } })
+  }
+
+  return { platforms, ensure, platform, current, label, note, labelOf, supports, select, known }
 }
