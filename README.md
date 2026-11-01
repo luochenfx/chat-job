@@ -12,6 +12,7 @@
 [![Downloads](https://img.shields.io/github/downloads/luochenfx/chat-job/total?style=flat-square&label=downloads&color=2f81f7&labelColor=1f2328)](https://github.com/luochenfx/chat-job/releases)
 [![Last commit](https://img.shields.io/github/last-commit/luochenfx/chat-job?style=flat-square&label=last%20commit&color=2f81f7&labelColor=1f2328)](https://github.com/luochenfx/chat-job/commits/main)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](#使用边界与风险)
+[![License](https://img.shields.io/badge/license-Apache--2.0-34D058?style=flat-square&logo=apache&logoColor=white)](LICENSE)
 
 [![JDK](https://img.shields.io/badge/JDK-21-FF8C00?style=flat-square&logo=openjdk&logoColor=white)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F?style=flat-square&logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
@@ -202,6 +203,12 @@ start.bat
 
 - 这是**自用单机工具**，账号风险由使用者自行承担。
 - 它会在第三方平台上执行**真实操作**。请用小号操作、保留默认配额与随机间隔。
+
+---
+
+## 许可证
+
+以 [Apache License 2.0](LICENSE) 发布
 
 ---
 
