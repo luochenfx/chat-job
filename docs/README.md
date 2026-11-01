@@ -301,11 +301,14 @@ cd console && npm run build
 | [`spec/0003-run-standby.md`](spec/0003-run-standby.md) | 值守期：扫描收工后值守继续 + 可见的运行态 |
 | [`spec/0004-zhaopin-parallel.md`](spec/0004-zhaopin-parallel.md) | 智联接入与多平台并行：阶段划分、实施记录与最终审查 |
 | [`spec/0005-scan-watch-switches.md`](spec/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0–P3 已实现：数据与读写、关闭扫描、关闭值守、控制台；P4 回归未做） |
+| [`spec/0006-humanized-interaction.md`](spec/0006-humanized-interaction.md) | 人类化交互层：点击/输入/滚动/导航收敛到单一入口（分四期；阶段 1 骨架已实现且未接线） |
 | [`adr/0001-patchright-as-playwright-driver.md`](adr/0001-patchright-as-playwright-driver.md) | 为什么用 patchright 当 playwright 的 driver |
 | [`adr/0002-standby-instead-of-finish.md`](adr/0002-standby-instead-of-finish.md) | 配额用完不结束，改为值守待命 |
 | [`adr/0003-parallel-platforms.md`](adr/0003-parallel-platforms.md) | 每个平台一条独立流水线，并行运行 |
 | [`adr/0004-delivery-vs-resume-on-request.md`](adr/0004-delivery-vs-resume-on-request.md) | 投递只算主动投递，应对方要求发的简历不进投递表 |
 | [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0–P3 已实现，P4 未做） |
+| [`adr/0006-alert-config-in-db.md`](adr/0006-alert-config-in-db.md) | 告警配置存进数据库，并从控制台配置（已实现） |
+| [`adr/0007-humanized-interaction-layer.md`](adr/0007-humanized-interaction-layer.md) | 交互收敛到单层；导航来源比鼠标轨迹更重要（阶段 1 骨架已实现，适配器未接线） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

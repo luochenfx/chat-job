@@ -38,7 +38,8 @@ class PlatformAdaptersTest {
                 new AppProperties.Browser("browser-data", 0, 30000, "auto", ""),
                 new AppProperties.SelfCheckProps(false),
                 new AppProperties.NotifyProps("", 300),
-                activePlatform);
+                activePlatform,
+                null);
     }
 
     @Test

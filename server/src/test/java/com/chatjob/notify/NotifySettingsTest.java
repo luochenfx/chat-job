@@ -87,7 +87,7 @@ class NotifySettingsTest {
         assertThat(new NotifySettings(configStore(), cipher(null), props("", 600))
                 .throttleWindowSeconds()).isEqualTo(600);
 
-        AppProperties noNotify = new AppProperties(null, null, null, null, "boss");
+        AppProperties noNotify = new AppProperties(null, null, null, null, "boss", null);
         assertThat(new NotifySettings(configStore(), cipher(null), noNotify)
                 .throttleWindowSeconds()).isEqualTo(NotifySettings.DEFAULT_THROTTLE_WINDOW_SECONDS);
     }

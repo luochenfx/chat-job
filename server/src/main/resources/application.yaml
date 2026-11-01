@@ -70,6 +70,9 @@ chat-job:
     # 登录态也是各平台各自扫各自的码，不该混在一个 profile 里。
     # 阶段 2a 之前这里就是 boss 的 profile，browser-data/boss 是它的原样搬迁。
     user-data-dir: ${chat-job.home}/browser-data
+    # 每个动作固定加 50ms 的均匀延迟。阶段 2 接人类化交互层时归零（ADR-0007 第 5 条）：
+    # 均匀延迟本身可统计，且会与本层的随机间隔叠加成两种节奏。阶段 1 不动它——
+    # 那一阶段不接线，归零就是纯粹的行为变更。
     slow-mo-ms: 50
     default-timeout-ms: 30000
     # auto = 按 chrome → msedge 探测本机已装的那个；也可写死 chrome / msedge。
@@ -80,6 +83,47 @@ chat-job:
   self-check:
     # 启动自检页：用 data URL 断言 navigator.webdriver 等指纹
     enabled: true
+  # 人类化交互层（spec 0006 / ADR-0007）。这里列出的值就是当前生效值；
+  # 代码里另有一套等价默认值（HumanizeConfig），yaml 整段缺失时用那套。
+  # 单位写在字段名里，不靠注释约定。
+  humanize:
+    # 阶段 1 只建骨架、不接线：没有任何适配器调用这一层，所以这个开关此刻不影响运行期行为。
+    # 阶段 2 接 Boss 的点击/输入/滚动时改成 true；关掉时必须与改造前逐字一致。
+    enabled: false
+    # 0 = 真随机；非 0 可复现同一条轨迹（把 run_log 里的种子填回来即可重放）
+    seed: 0
+    mouse:
+      steps: {min: 18, max: 34}
+      # 落点的相对位置：center=0.5 表示元素中线，超出 max-deviation 的样本丢弃重采。
+      # 只有落点用高斯，所以不写 kind —— 写了也不会被读，属于死配置。
+      jitter: {center: 0.5, sigma: 0.15, max-deviation: 0.4}
+      # 纵向漂移阈值取 max(drift-px, 元素高 × drift-ratio)；超过就作废重算，
+      # 重算 realign-rounds 次仍漂移则降级为原生点击
+      drift-px: 8
+      drift-ratio: 0.25
+      realign-rounds: 2
+      hold-ms: {min: 40, max: 120}
+    keyboard:
+      char-delay-ms: {min: 55, max: 165}
+      # 每 8–15 个字之后额外加一次长停顿（窗口长度每次重抽，避免整除关系）
+      thinking-pause-ms: {min: 250, max: 900}
+      # 打错一个字符再删掉重输的概率。只对 ASCII 字母与数字生效，中文不走这条路
+      mistype-chance: 0.02
+      # 输入完成后静置多久再读回文本、比对 DOM 结构
+      verify-settle-ms: 300
+    scroll:
+      # 单步位移占视口高的比例。一次"滚动计划"（累计达到目标）算一轮，
+      # ScrollParams.roundLimit 的口径不变
+      step-ratio: {min: 0.35, max: 0.85}
+      step-interval-ms: {min: 90, max: 260}
+    warm-up:
+      enabled: true
+      max-duration-ms: 3000
+      scroll-steps: {min: 2, max: 4}
+      dwell-ms: {min: 600, max: 1500}
+    pacing:
+      # 两次交互之间的间隔。适配器里原来的 pause(min, max) 由它接管，区间数值原样保留
+      between-actions-ms: {min: 400, max: 900}
   notify-config:
     wecom-webhook: ""
     throttle-window-seconds: 300

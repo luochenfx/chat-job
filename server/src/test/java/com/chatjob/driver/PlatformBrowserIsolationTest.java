@@ -68,7 +68,8 @@ class PlatformBrowserIsolationTest {
                 new AppProperties.Browser(profileRoot.toString(), 0, 30000, "auto", ""),
                 new AppProperties.SelfCheckProps(false),
                 new AppProperties.NotifyProps("", 300),
-                "boss");
+                "boss",
+                null);
 
         // 开关恒开：这一组测的是「两个平台各自隔离」，不涉及停用语义
         BrowserSessions sessions = new BrowserSessions(props, new PatchrightDriver(props),

@@ -26,7 +26,7 @@ final class NotifyTestDoubles {
 
     static AppProperties props(String yamlWebhook, int throttleSeconds) {
         return new AppProperties(null, null, null,
-                new AppProperties.NotifyProps(yamlWebhook, throttleSeconds), "boss");
+                new AppProperties.NotifyProps(yamlWebhook, throttleSeconds), "boss", null);
     }
 
     /** 解密结果可控：{@code plain} 为 null 表示「解不开」 */

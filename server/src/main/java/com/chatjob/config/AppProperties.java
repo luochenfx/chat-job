@@ -1,5 +1,6 @@
 package com.chatjob.config;
 
+import com.chatjob.driver.human.HumanizeConfig;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -12,7 +13,15 @@ import java.nio.file.Paths;
 @ConfigurationProperties(prefix = "chat-job")
 public record AppProperties(Driver driver, Browser browser, SelfCheckProps selfCheck,
                             NotifyProps notifyConfig,
-                            @DefaultValue("boss") String activePlatform) {
+                            @DefaultValue("boss") String activePlatform,
+                            @DefaultValue HumanizeConfig humanize) {
+
+    public AppProperties {
+        // 人类化交互的参数整段缺失时必须给一份"停用 + 默认值"，而不是 null：
+        // 它的读取点分散在 driver 与 platform 两层，让每个读取点各判一次空，
+        // 漏判一处的表现是"跑到某个动作才 NPE"。
+        humanize = humanize != null ? humanize : HumanizeConfig.defaults();
+    }
 
     /**
      * 缺省平台标识（{@code boss} / {@code zhaopin}）。
