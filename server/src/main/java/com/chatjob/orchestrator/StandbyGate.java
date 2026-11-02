@@ -31,6 +31,14 @@ public final class StandbyGate {
         EVAL_LIMIT,
         /** 组合队列已扫完 */
         COMBOS_EXHAUSTED,
+        /**
+         * 单个组合跑到时间上限（{@code combination_time_limit_sec}）。
+         *
+         * <p>不并入 {@link #COMBOS_EXHAUSTED}：那个说「都跑完了」，这一个说「还没跑完就停下了」，
+         * 而且断点停在原地，下次回扫从这张卡继续。混用会让界面上的「岗位 0」与「已投递 12」
+         * 互相矛盾——归零之后没人看得出扫到了哪。
+         */
+        COMBINATION_TIMEOUT,
         /** 该平台未启用扫描：本次运行从头到尾不扫 */
         SCAN_DISABLED
     }

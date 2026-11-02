@@ -9,6 +9,7 @@ import java.time.LocalTime;
 import static com.chatjob.orchestrator.StandbyGate.Action.PARK;
 import static com.chatjob.orchestrator.StandbyGate.Action.SCAN;
 import static com.chatjob.orchestrator.StandbyGate.Action.WATCH;
+import static com.chatjob.orchestrator.StandbyGate.StopReason.COMBINATION_TIMEOUT;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.COMBOS_EXHAUSTED;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.EVAL_LIMIT;
 import static com.chatjob.orchestrator.StandbyGate.StopReason.QUOTA;
@@ -59,6 +60,25 @@ class StandbyGateTest {
     @Test
     void 跨自然日_无论如何回扫() {
         assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBOS_EXHAUSTED, YESTERDAY, TODAY, 30, 30, 150, 150, true))
+                .isEqualTo(SCAN);
+    }
+
+    /**
+     * 组合时间上限到了，当天不回扫：断点停在原地，立刻重扫只会再撞一次上限，
+     * 白白多花一轮的时间。配额或评估上限被调高时也一样 —— 超时不是配额问题。
+     */
+    @Test
+    void 组合超时_当天不回扫() {
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBINATION_TIMEOUT, TODAY, TODAY, 3, 30, 18, 150, true))
+                .isEqualTo(WATCH);
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBINATION_TIMEOUT, TODAY, TODAY, 3, 35, 18, 200, true))
+                .isEqualTo(WATCH);
+    }
+
+    /** 超时保留断点，跨日要回扫才能接着看剩下的卡（这是它与 COMBOS_EXHAUSTED 同形的一面） */
+    @Test
+    void 组合超时_跨自然日回扫() {
+        assertThat(StandbyGate.decide(IN_WINDOW, WINDOW, COMBINATION_TIMEOUT, YESTERDAY, TODAY, 3, 30, 18, 150, true))
                 .isEqualTo(SCAN);
     }
 

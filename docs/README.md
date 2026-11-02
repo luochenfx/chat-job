@@ -35,7 +35,7 @@
 | 硬规则过滤 | 硬黑名单（公司/岗位名）→ HR 活跃度档位 → 已投递跳过，命中即不调用 AI | `evaluate/BlacklistMatcher.java`、`evaluate/ActiveLevel.java` |
 | AI 投递判定 | 单次调用产出「投不投 + 理由 + 招呼语」；关闭质量开关时用模板招呼语直接投 | `evaluate/AiJudge.java`、`evaluate/ChatClient.java` |
 | 投递与确认 | 进会话先读消息再决定是否发，用「立即沟通 → 继续沟通」按钮文案复核送达；投递记录可查、可重置。智联是点「立即投递」由平台发出简历与固定话术，没有自定义话术 | `platform/boss/BossChatNavigator.java`、`orchestrator/JobStore.java` |
-| 配额与运行态 | 日投递配额、日评估上限、组合时间/轮数上限；配额/上限/组合耗尽只中止扫描 → `STANDBY`（值守待命），未启用扫描的平台启动即 `STANDBY`，未启用值守的平台扫完即 `COMPLETED / SCAN_DONE`；时段结束 → `WAITING_DUTY` 挂起（值守期不结束）；`CIRCUIT_OPEN` / `LOGIN_LOST` / `CANCELLED` / `FAILED` 等终止态。定时唤醒与重启收尾统一由 `RunServices` 遍历已装配平台执行 | `orchestrator/RunService.java`、`orchestrator/RunStatus.java`、`orchestrator/StandbyGate.java`、`orchestrator/RunServices.java` |
+| 配额与运行态 | 日投递配额、日评估上限、组合时间/轮数上限；配额/上限/组合耗尽/组合超时只中止扫描 → `STANDBY`（值守待命），未启用扫描的平台启动即 `STANDBY`，未启用值守的平台扫完即 `COMPLETED / SCAN_DONE`；时段结束 → `WAITING_DUTY` 挂起（值守期不结束）；`CIRCUIT_OPEN` / `LOGIN_LOST` / `CANCELLED` / `FAILED` 等终止态。定时唤醒与重启收尾统一由 `RunServices` 遍历已装配平台执行 | `orchestrator/RunService.java`、`orchestrator/RunStatus.java`、`orchestrator/StandbyGate.java`、`orchestrator/RunServices.java` |
 | 值守时段 | 默认 09:00–22:00；窗口外点启动会落一条 `WAITING_DUTY` 挂起，调度每 30 秒轮询唤醒（跨重启可续，跨自然日复位组合队列），演练模式不受限制 | `orchestrator/DutyWindow.java`、`orchestrator/RunService.java` |
 | 值守回复 | 关键词规则 + 文案池、敏感词优先拦截；可选「AI 回复」开关（默认关）；出站四重校验；未读任务落库 → 退避重试 3 次 → `GAVE_UP`，控制台可手动重试 | `watcher/`（`UnreadWatcher`、`ReplyRuleEngine`、`AiReplier`、`ReplyGuard`、`UnreadTaskStore`） |
 | 自动发简历 | 仅当规则动作显式设为 `SEND_RESUME` 时点一次「发简历」，发完不补话；不交给 AI 决定。确认气泡是可选步骤（对方已索要过简历时不弹），成败一律看「简历卡片 +1（20 秒内）」 | `watcher/UnreadWatcher.java`、`BossAdapter.sendResume`、`web/ReplyRuleController.java` |
@@ -58,6 +58,7 @@
 - 智联这一期的筛选参数**只有城市 + 关键词**。页面上还有薪资、经验、学历等条件，但适配器不把它们拼进列表地址（`platform_config` 里留着这些字段不影响 Boss）。
 - **未启用值守的 Run 中止组合时，日志里那句「剩余卡片留待回扫时继续」不成立**：这一轮会以 `COMPLETED / SCAN_DONE` 结束，不会再回扫（`RunService.executeCombinations` 的中止文案是扫描侧通用措辞，未按值守开关分支）。
 - **概览与任务页的「组合」可能显示成 `2 / 1`**：`combination_index` 存的是当前组合 seq（0 基），`combinationTotal` 是该 Run 的组合行数，最后一轮时 `index` 会等于 `total`。这是既有口径，读的时候按「第 index+1 个」理解即可。
+- **组合超时不是「组合跑完」**：`combination_time_limit_sec`（默认 1200 秒）到点时，`combination_run.status` 记 `TIMEOUT`、断点停在当前卡、Run 进 `STANDBY`（reason `COMBINATION_TIMEOUT`，横幅是「搜索暂停（…）」而不是「搜索已结束」）。同日不会自动回扫；跨日 `ensureScanDay` 会复位组合队列从头重扫；配额或评估上限被调高触发的同日回扫则从断点继续。日志与界面都带「已处理 N/M 张卡」——按人类化交互的节奏一张卡约 60 秒（详情 + AI + 投递），300 张的列表在 1200 秒里只走得到前二十张，所以默认上限与真实耗时是不匹配的：这不是故障，要么调大上限，要么把关键词/城市拆细。
 
 ## 人类化交互层（实现口径）
 

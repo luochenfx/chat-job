@@ -473,6 +473,12 @@
           <div class="field">
             <label>每组条件最长跑多久（秒）</label>
             <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" :disabled="scanOff" />
+            <!-- 这里必须给出「大约能看完多少个」：上限是按秒配的，而人真正关心的是岗位数，
+                 不换算的话，1200 秒看起来很久，实际只够看完二十来个 -->
+            <div class="desc">
+              到时间就停下，没看完的岗位以后再看。按现在的操作节奏，看一个岗位约 1 分钟，
+              1200 秒大约只能看完 20 个
+            </div>
           </div>
           <div class="field">
             <label>每次最多看多少条未读消息</label>

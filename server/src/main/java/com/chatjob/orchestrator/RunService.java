@@ -399,8 +399,11 @@ public class RunService {
                     // 读当下的配置而不是启动那一刻的值：扫描中途被关掉的值守，要在走到这里时
                     // 直接收尾，而不是先进待命发一条「值守继续」的横幅与企业微信通知、再立刻结束。
                     if (!configStore.platformWatchEnabled(run.getPlatform())) {
+                        // 超时是「停下」不是「结束」：这一轮确实收尾了，但组合还剩卡没看完，
+                        // 写成「已结束」会让人以为 300 张都过了一遍
+                        String stopWord = reason == StandbyGate.StopReason.COMBINATION_TIMEOUT ? "扫描暂停" : "扫描已结束";
                         finish(run, RunStatus.COMPLETED, "SCAN_DONE",
-                                "扫描已结束（" + whyOf(reason, run.getPlatform())
+                                stopWord + "（" + whyOf(reason, run.getPlatform())
                                         + "），该平台未启用值守，任务结束");
                         return;
                     }
@@ -588,10 +591,16 @@ public class RunService {
                 ? "自动回复时段设为全天，中途不会停下"
                 : "到 " + DutyWindow.format(window.end()) + " 会停止操作并进入等待";
         boolean neverScanned = why0 == StandbyGate.StopReason.SCAN_DISABLED;
+        // 超时不是「扫描结束」：还剩卡没看，断点也停在原地。沿用「已结束」会让人以为这一轮
+        // 把 300 张都过了一遍，而界面上「岗位 N」又恰好能证明没走完，两句话互相矛盾。
+        boolean timedOut = why0 == StandbyGate.StopReason.COMBINATION_TIMEOUT;
         String message = neverScanned
                 ? "这个平台没有开启「搜索岗位」，本轮只处理消息：每 " + interval + "检查一次未读消息，" + tail
-                : "搜索已结束（" + whyOf(why0, cfg, delivered, evaluated) + "），继续处理消息：每 "
-                + interval + "检查一次未读消息，" + tail;
+                : (timedOut ? "搜索暂停（" : "搜索已结束（") + whyOf(why0, cfg, delivered, evaluated)
+                + "），继续处理消息：每 " + interval + "检查一次未读消息，" + tail
+                // 超时保留断点，所以「怎么接着扫」必须写出来：不写的话，唯一的动作暗示是
+                // 「调高名额」，而真实需求可能只是等明天
+                + (timedOut ? "；想过零点或把名额调高后继续搜索，不需要重新启动" : "");
 
         runStore.markStandby(run, message);
         act(run, neverScanned ? "正在盯着消息：没有开启「搜索岗位」，只检查消息" : "正在盯着消息：等下一次检查");
@@ -602,7 +611,9 @@ public class RunService {
         data.put("evaluated", evaluated);
         data.put("quota", quota(cfg));
         publish(run, "run.standby", data);
-        notify(run, "standby", neverScanned ? "没有开启搜索，正在处理消息" : "搜索已结束，继续处理消息", message);
+        notify(run, "standby",
+                neverScanned ? "没有开启搜索，正在处理消息" : timedOut ? "搜索超时，继续处理消息" : "搜索已结束，继续处理消息",
+                message);
     }
 
     /**
@@ -616,6 +627,10 @@ public class RunService {
             case QUOTA -> "今天主动联系的名额已经用完（" + delivered + "/" + quota(cfg) + "）";
             case EVAL_LIMIT -> "今天查看岗位的数量已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
             case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了";
+            // 带上具体上限值与剩余量：只说「超时」，读的人分不清是配置上限到了还是页面卡死了
+            case COMBINATION_TIMEOUT -> "单个搜索组合跑到了时间上限 "
+                    + (cfg.getCombinationTimeLimitSec() == null ? 1200 : cfg.getCombinationTimeLimitSec())
+                    + "s，这个组合还有岗位没有看完";
             // 只值守的 Run 是从这里进待命的，横幅另写了文案；保留这一支是为了让 switch 覆盖全枚举
             case SCAN_DISABLED -> "没有开启「搜索岗位」";
         };
@@ -734,6 +749,7 @@ public class RunService {
             case QUOTA -> "每天主动联系的名额";
             case EVAL_LIMIT -> "每天查看岗位的上限";
             case COMBOS_EXHAUSTED -> "搜索组合已跑完";
+            case COMBINATION_TIMEOUT -> "组合时间上限";
             // 单独文案在 executeCombinations 里：那里「留待回扫时继续」这半句不成立，不能复用整句
             case SCAN_DISABLED -> "没有开启「搜索岗位」";
         };
@@ -758,6 +774,8 @@ public class RunService {
             case SCAN_DISABLED -> finish(run, RunStatus.COMPLETED, "SCAN_DISABLED",
                     "演练模式：扫描已在运行中被关闭，演练结束（不进入待命）");
             case COMBOS_EXHAUSTED -> finish(run, RunStatus.COMPLETED, "COMPLETED", "组合队列已跑完");
+            case COMBINATION_TIMEOUT -> finish(run, RunStatus.COMPLETED, "COMBINATION_TIMEOUT",
+                    "演练模式：组合时间上限已到，演练结束（不进入待命）");
         }
     }
 
@@ -815,13 +833,25 @@ public class RunService {
                 StandbyGate.StopReason stop = processCards(run, cfg, combo, scroll.cards(), resumeCard,
                         comboStartedAt, query);
                 if (stop != null) {
-                    // 配额 / 评估到顶：这个组合没跑完，既不能记 DONE，也不能推进断点 ——
+                    // 配额 / 评估到顶 / 时间上限：这个组合没跑完，既不能记 DONE，也不能推进断点 ——
                     // 待命期配额被调高后要回到这张卡继续，而不是从下一个组合重来
-                    combo.setStatus("SKIPPED");
+                    if (stop == StandbyGate.StopReason.COMBINATION_TIMEOUT) {
+                        // 单独一个状态：DONE 会被读成「扫完了」，SKIPPED 会与「人工跳过」混在一起。
+                        // 断点停在当前卡（processCards 每张卡都会写一次），同日回扫接着扫。
+                        combo.setStatus("TIMEOUT");
+                        // 断点语义分两种：同日回扫（配额被调高）从这张卡继续；跨日会复位组合队列
+                        // （ensureScanDay），从头重扫。两句都写出来，否则「保留断点」会被当成
+                        // 「明天从第 19 张开始」，而实际上明天是第 1 张。
+                        log(run, "INFO", "组合 #" + combo.getSeq() + " 未跑完：已处理到第 "
+                                + count(run.getLastCardIndex()) + "/" + count(combo.getCardsSeen())
+                                + " 张；同日回扫从这里继续，跨日会从第 1 张重扫");
+                    } else {
+                        combo.setStatus("SKIPPED");
+                    }
                     if (stop == StandbyGate.StopReason.SCAN_DISABLED) {
                         // 「留待回扫时继续」在这里不成立：关掉扫描的 Run 不会被 StandbyGate 送回扫描
                         log(run, "INFO", "组合 #" + combo.getSeq() + " 中止：该平台已关闭扫描，剩余卡片不再处理");
-                    } else {
+                    } else if (stop != StandbyGate.StopReason.COMBINATION_TIMEOUT) {
                         log(run, "INFO", "组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
                                 + "」处中止，剩余卡片留待回扫时继续");
                     }
@@ -897,9 +927,16 @@ public class RunService {
                 log(run, "INFO", "今日评估已达上限 " + evalLimit(cfg) + "（" + evaluated + "），中止扫描；值守继续");
                 return StandbyGate.StopReason.EVAL_LIMIT;
             }
-            if ((System.currentTimeMillis() - comboStartedAt) / 1000 > limitSeconds) {
-                log(run, "WARN", "组合 #" + combo.getSeq() + " 超时（" + limitSeconds + "s），进入下一个");
-                return null;
+            long usedSeconds = (System.currentTimeMillis() - comboStartedAt) / 1000;
+            if (usedSeconds > limitSeconds) {
+                // 超时点在卡片边界：上一张卡的动作已经做完，这里停下不会留下半条招呼语。
+                // 文案必须带进度：只说「超时（1200s）」时，界面上唯一的痕迹是一句 WARN，
+                // 而进度行已经被断点归零，看不出是扫到一半停的还是根本没扫。
+                log(run, "WARN", "组合 #" + combo.getSeq() + " 到达时间上限（" + limitSeconds + "s，实际 "
+                        + usedSeconds + "s）：已处理 " + card + "/" + cardCount + " 张卡，评估 "
+                        + count(combo.getEvaluated()) + "、投递 " + count(combo.getDelivered())
+                        + "；剩余 " + (cardCount - card) + " 张留待下次扫描继续");
+                return StandbyGate.StopReason.COMBINATION_TIMEOUT;
             }
 
             act(run, "查看第 " + (card + 1) + " 个岗位的详情");

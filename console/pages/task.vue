@@ -43,7 +43,7 @@
          未启用扫描的平台从来没有扫过，标题与页脚都不能沿用「扫描已结束」那套说法。 -->
     <div v-if="run?.status === 'STANDBY'" class="notice">
       <div class="notice-title">
-        {{ scanOn ? '正在盯着消息：搜索已结束，未读消息照常回复' : '正在盯着消息：这个平台没有开启「搜索岗位」，只处理未读消息' }}
+        {{ scanOn ? '正在盯着消息：搜索已停，未读消息照常回复' : '正在盯着消息：这个平台没有开启「搜索岗位」，只处理未读消息' }}
       </div>
       <p class="notice-body">{{ run.message }}</p>
       <p class="notice-foot">
@@ -113,7 +113,7 @@
           </div>
           <div>
             <div class="hint-inline">进度</div>
-            <div class="num">搜索组合 {{ (run?.combinationIndex ?? 0) + 1 }} / 岗位 {{ run?.lastCardIndex ?? 0 }}</div>
+            <div class="num">搜索组合 {{ (run?.combinationIndex ?? 0) + 1 }} / 岗位 {{ run?.lastCardIndex ?? 0 }}<template v-if="comboCardTotal"> / {{ comboCardTotal }}</template></div>
           </div>
           <div>
             <div class="hint-inline">主动联系 / 已查看</div>
@@ -280,6 +280,13 @@ const dryRunVisible = computed(() => (
 ) === 'DRY_RUN')
 // 计数格跟随「这一轮 Run 的模式」：跑完之后 active 变 false，但那一轮确实一条没投，仍要显示 —
 const runIsDryRun = computed(() => run.value?.mode === 'DRY_RUN')
+// 当前组合一共加载了多少张卡。进度格只有分子时，「岗位 18」分不清是「18/18 扫完了」
+// 还是「18/300 才扫了个开头」—— 组合超时正好停在这两种读法的分歧上。
+const comboCardTotal = computed(() => {
+  const seq = run.value?.combinationIndex ?? 0
+  const current = combinations.value.find((c: any) => c.seq === seq)
+  return current?.cardsSeen ?? 0
+})
 
 // 头部那一行：等待态说「还要等多久」，窗口内说「还能跑多久」，其余不占地方。
 // 判定放这里而不是模板里，是因为它要同时看 run 状态、模式与时段三处。
@@ -317,6 +324,8 @@ const COMBO_LABEL: Record<string, string> = {
   RUNNING: '进行中',
   DONE: '已完成',
   SKIPPED: '已跳过',
+  // 与 DONE 分开：超时的组合只剩一部分卡没看，下次扫描接着扫，不是「跳过」
+  TIMEOUT: '超时未跑完',
   FAILED: '失败',
   INTERRUPTED: '已中断'
 }
@@ -342,6 +351,8 @@ function stopReasonText(reason: string) {
     QUOTA: '今天主动联系的名额已经用完',
     EVAL_LIMIT: '今天查看岗位的数量已达上限',
     COMBOS_EXHAUSTED: '所有搜索组合都跑完了',
+    // 和「跑完了」必须分开：超时是没看完就停下，断点留在原地
+    COMBINATION_TIMEOUT: '组合时间上限到了，还有岗位没看完',
     // 未启用扫描的平台一启动就是待命，这个原因下「扫描结束」不成立（spec 0005）
     SCAN_DISABLED: '这个平台没有开启「搜索岗位」'
   } as any)[reason] || reason
@@ -371,7 +382,9 @@ function describe(e: { type: string; data: any }) {
       // 中止时才成立（spec 0005 §3.5 的文案要求）
       return d.reason === 'SCAN_DISABLED'
         ? `没有开启「搜索岗位」，直接开始处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
-        : `搜索结束（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
+        : d.reason === 'COMBINATION_TIMEOUT'
+          ? `搜索暂停（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
+          : `搜索结束（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
     case 'run.rescan':
       return `继续搜索：${rescanReasonText(d.reason)}`
     case 'run.awakened':
