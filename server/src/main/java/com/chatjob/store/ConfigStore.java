@@ -48,6 +48,21 @@ public class ConfigStore {
     public static final int DEFAULT_WATCH_INTERVAL_SECONDS = 120;
 
     /**
+     * 单个搜索组合的时间上限默认值，与 V17 迁移写入已有行的值保持一致。
+     *
+     * <p>按实测节奏算出来的：人类化交互下一张卡要走「滚动 → 进详情 → AI 判定 → 投递或跳过」，
+     * 约 40–60 秒；同一搜索组合最多能加载到 300 张，全部看完要 3–5 小时。
+     * 原来的 1200 秒（20 分钟）只够看二十来个，等于每个组合每天都被判成超时。
+     */
+    public static final int DEFAULT_COMBINATION_TIME_LIMIT_SEC = 21600;
+
+    /** 时间上限的合法下限。再小就只够看一两张卡，等于「每个组合都跑不完」 */
+    public static final int MIN_COMBINATION_TIME_LIMIT_SEC = 60;
+
+    /** 时间上限的合法上限（24 小时）。跨日会复位组合队列，再大没有意义 */
+    public static final int MAX_COMBINATION_TIME_LIMIT_SEC = 86400;
+
+    /**
      * 巡检间隔的合理区间。
      *
      * <p>下限 30 秒：消息页没有推流，每轮都要整页重载一次列表，压到几十秒就是
@@ -251,7 +266,7 @@ public class ConfigStore {
         created.setDailyDeliveryQuota(30);
         created.setDailyEvalLimit(150);
         created.setScrollRoundLimit(300);
-        created.setCombinationTimeLimitSec(1200);
+        created.setCombinationTimeLimitSec(DEFAULT_COMBINATION_TIME_LIMIT_SEC);
         created.setUnreadScanLimit(DEFAULT_UNREAD_SCAN_LIMIT);
         created.setWatchIntervalSeconds(DEFAULT_WATCH_INTERVAL_SECONDS);
         created.setRepeatChatEnabled(0);
@@ -314,6 +329,27 @@ public class ConfigStore {
             return DEFAULT_WATCH_INTERVAL_SECONDS;
         }
         return Math.max(MIN_WATCH_INTERVAL_SECONDS, Math.min(configured, MAX_WATCH_INTERVAL_SECONDS));
+    }
+
+    /**
+     * 单组合时间上限归一：{@code null} 按默认值，{@code <= 0} 表示<b>不限时间</b>并原样保留，
+     * 正数收敛到 [{@value #MIN_COMBINATION_TIME_LIMIT_SEC}, {@value #MAX_COMBINATION_TIME_LIMIT_SEC}]。
+     *
+     * <p>为什么「不限」要原样保留而不是归一成某个固定值：0 和 -1 是同一件事的两种写法，
+     * 都出现在文档和界面上，改写成另一个数字会让回读的值和用户填的不一致。判据只有一处，
+     * 用 {@code > 0} 判断「是否真的设了上限」，所以存 0 还是 -1 都不影响行为。
+     *
+     * <p>为什么不把 {@code <= 0} 当成「没配过，回落默认」：那会让「我不想限时」这个明确意图
+     * 被静默改成 6 小时，与本项目其它配置项「填了就按填的办」的口径不一致。
+     */
+    public static int normalizeCombinationTimeLimit(Integer configured) {
+        if (configured == null) {
+            return DEFAULT_COMBINATION_TIME_LIMIT_SEC;
+        }
+        if (configured <= 0) {
+            return configured;
+        }
+        return Math.max(MIN_COMBINATION_TIME_LIMIT_SEC, Math.min(configured, MAX_COMBINATION_TIME_LIMIT_SEC));
     }
 
     // ------------------------------------------------------------ AI 配置

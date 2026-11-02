@@ -61,4 +61,48 @@ class ConfigStoreTest {
         assertThat(ConfigStore.clampWatchInterval(300)).isEqualTo(300);
         assertThat(ConfigStore.clampWatchInterval(600)).isEqualTo(600);
     }
+
+    @Test
+    void 单组合时间上限没配过按新默认() {
+        // 默认值必须大于「300 张 × 60 秒 = 18000 秒」，否则一个组合永远跑不完；
+        // 与 V17 迁移里写进已有行的值也必须是同一个数，否则新建平台和升级上来的平台行为不同
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(null))
+                .isEqualTo(ConfigStore.DEFAULT_COMBINATION_TIME_LIMIT_SEC)
+                .isGreaterThan(18000);
+    }
+
+    @Test
+    void 时间上限填零或负数表示不限() {
+        // 两种写法都表示「不限时间」，原样保留而不是改写成另一个数：
+        // 回读要和用户填的一致，判据统一用「> 0 才算设了上限」
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(0)).isZero();
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(-1)).isEqualTo(-1);
+    }
+
+    @Test
+    void 时间上限低于下限收敛到一分钟() {
+        // 正数才收敛；1 秒这种填法等于「每个组合看一张卡就走」，收敛到 60 秒
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(1))
+                .isEqualTo(ConfigStore.MIN_COMBINATION_TIME_LIMIT_SEC);
+    }
+
+    @Test
+    void 时间上限高于上限收敛到一天() {
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(999999))
+                .isEqualTo(ConfigStore.MAX_COMBINATION_TIME_LIMIT_SEC);
+    }
+
+    @Test
+    void 时间上限区间内原样返回() {
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(1200)).isEqualTo(1200);
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(21600)).isEqualTo(21600);
+        assertThat(ConfigStore.normalizeCombinationTimeLimit(86400)).isEqualTo(86400);
+    }
+
+    @Test
+    void 新建平台写的是新默认值() {
+        PlatformConfigEntity cfg = store().defaults("boss");
+        assertThat(cfg.getCombinationTimeLimitSec())
+                .isEqualTo(ConfigStore.DEFAULT_COMBINATION_TIME_LIMIT_SEC);
+    }
 }

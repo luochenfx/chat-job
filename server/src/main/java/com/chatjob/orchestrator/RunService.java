@@ -629,7 +629,7 @@ public class RunService {
             case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了";
             // 带上具体上限值与剩余量：只说「超时」，读的人分不清是配置上限到了还是页面卡死了
             case COMBINATION_TIMEOUT -> "单个搜索组合跑到了时间上限 "
-                    + (cfg.getCombinationTimeLimitSec() == null ? 1200 : cfg.getCombinationTimeLimitSec())
+                    + ConfigStore.normalizeCombinationTimeLimit(cfg.getCombinationTimeLimitSec())
                     + "s，这个组合还有岗位没有看完";
             // 只值守的 Run 是从这里进待命的，横幅另写了文案；保留这一支是为了让 switch 覆盖全枚举
             case SCAN_DISABLED -> "没有开启「搜索岗位」";
@@ -891,7 +891,9 @@ public class RunService {
                                                 SearchQuery query) {
         int cardsSinceWatch = 0;
         long lastWatchAt = System.currentTimeMillis();
-        int limitSeconds = cfg.getCombinationTimeLimitSec() == null ? 1200 : cfg.getCombinationTimeLimitSec();
+        // <=0 表示不限时间（配置页可填 0 或 -1）：此时只有配额、评估上限、
+        // 值守时段结束、人工停止这几个出口能中止组合，超时判据整段跳过
+        int limitSeconds = ConfigStore.normalizeCombinationTimeLimit(cfg.getCombinationTimeLimitSec());
         boolean collectMetrics = configStore.aiConfig().getCollectEffectMetrics() != null
                 && configStore.aiConfig().getCollectEffectMetrics() == 1;
         // 演练态从这里显式流下去。sweep 的签名要求它，而不是让 UnreadWatcher 自己去猜 ——
@@ -928,9 +930,9 @@ public class RunService {
                 return StandbyGate.StopReason.EVAL_LIMIT;
             }
             long usedSeconds = (System.currentTimeMillis() - comboStartedAt) / 1000;
-            if (usedSeconds > limitSeconds) {
+            if (limitSeconds > 0 && usedSeconds > limitSeconds) {
                 // 超时点在卡片边界：上一张卡的动作已经做完，这里停下不会留下半条招呼语。
-                // 文案必须带进度：只说「超时（1200s）」时，界面上唯一的痕迹是一句 WARN，
+                // 文案必须带进度：只说「超时（Ns）」时，界面上唯一的痕迹是一句 WARN，
                 // 而进度行已经被断点归零，看不出是扫到一半停的还是根本没扫。
                 log(run, "WARN", "组合 #" + combo.getSeq() + " 到达时间上限（" + limitSeconds + "s，实际 "
                         + usedSeconds + "s）：已处理 " + card + "/" + cardCount + " 张卡，评估 "

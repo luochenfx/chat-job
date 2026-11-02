@@ -359,7 +359,10 @@ public class ConfigController {
         out.put("dailyDeliveryQuota", entity.getDailyDeliveryQuota());
         out.put("dailyEvalLimit", entity.getDailyEvalLimit());
         out.put("scrollRoundLimit", entity.getScrollRoundLimit());
-        out.put("combinationTimeLimitSec", entity.getCombinationTimeLimitSec());
+        // 回发归一值：<=0 原样（表示不限时间），正数收敛到合法区间。
+        // 库里若被手工改成一个离谱的数，界面显示的就是实际生效的那个数
+        out.put("combinationTimeLimitSec",
+                ConfigStore.normalizeCombinationTimeLimit(entity.getCombinationTimeLimitSec()));
         // 回发归一后的值：库里若被手工改脏，界面显示的就是实际生效的那个数
         out.put("unreadScanLimit", ConfigStore.clampUnreadScanLimit(entity.getUnreadScanLimit()));
         out.put("watchIntervalSeconds", ConfigStore.clampWatchInterval(entity.getWatchIntervalSeconds()));
@@ -407,8 +410,9 @@ public class ConfigController {
         entity.setDailyDeliveryQuota(body.dailyDeliveryQuota() == null ? 30 : body.dailyDeliveryQuota());
         entity.setDailyEvalLimit(body.dailyEvalLimit() == null ? 150 : body.dailyEvalLimit());
         entity.setScrollRoundLimit(body.scrollRoundLimit() == null ? 300 : body.scrollRoundLimit());
-        entity.setCombinationTimeLimitSec(body.combinationTimeLimitSec() == null
-                ? 1200 : body.combinationTimeLimitSec());
+        // 未传按默认值（与其他配额同一口径），<=0 表示不限时间并原样保存
+        entity.setCombinationTimeLimitSec(
+                ConfigStore.normalizeCombinationTimeLimit(body.combinationTimeLimitSec()));
         // 未传则保持原值（与 aiReplyEnabled 同一口径）：旧版控制台会把整个 platform 对象 PUT 回来，
         // 按「null 当默认值」处理的话，保存任何一个无关配置都会把扫描上限重置掉。
         if (body.unreadScanLimit() != null) {

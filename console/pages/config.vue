@@ -472,12 +472,13 @@
           </div>
           <div class="field">
             <label>每组条件最长跑多久（秒）</label>
-            <input v-model.number="platform.combinationTimeLimitSec" type="number" min="120" max="7200" :disabled="scanOff" />
-            <!-- 这里必须给出「大约能看完多少个」：上限是按秒配的，而人真正关心的是岗位数，
-                 不换算的话，1200 秒看起来很久，实际只够看完二十来个 -->
+            <input v-model.number="platform.combinationTimeLimitSec" type="number" min="-1" max="86400" :disabled="scanOff" />
+            <!-- 这里必须给出「大约能看完多少个」：上限是按秒配的，而人真正关心的是岗位数。
+                 只写秒数的话，21600 只是个大数，看不出够不够看完一组搜索结果 -->
             <div class="desc">
               到时间就停下，没看完的岗位以后再看。按现在的操作节奏，看一个岗位约 1 分钟，
-              1200 秒大约只能看完 20 个
+              一组搜索结果最多 300 个岗位，21600 秒（6 小时）够看完最慢的一档。
+              填 <b>0</b> 或 <b>-1</b> 表示不限时间，只在配额、评估上限、值守时段结束时才停。
             </div>
           </div>
           <div class="field">
@@ -692,7 +693,7 @@ function defaultPlatformConfig() {
     dailyDeliveryQuota: 30,
     dailyEvalLimit: 150,
     scrollRoundLimit: 300,
-    combinationTimeLimitSec: 1200,
+    combinationTimeLimitSec: 21600,
     unreadScanLimit: 100,
     watchIntervalSeconds: 120,
     repeatChatEnabled: false,
