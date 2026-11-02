@@ -5,6 +5,7 @@ import com.chatjob.driver.BrowserSession;
 import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
+import com.chatjob.driver.human.Humanize;
 import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
@@ -34,7 +35,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -56,6 +56,11 @@ import java.util.function.BooleanSupplier;
  *   <li><b>值守在另一个子域</b>：{@code i.zhaopin.com/im}，所以探测登录态直接看是否被踢到
  *       passport，比读 cookie 名可靠（智联的登录 cookie 名不稳定）。</li>
  * </ol>
+ *
+ * <p><b>页面交互一律经 {@link Humanize}</b>（spec 0006 阶段 4 的交互部分，提前随阶段 2 接线）：
+ * 点击、输入、滚动三条路径都走 {@code human}，本类里不再出现 {@code Locator.click} /
+ * {@code fill} / {@code window.scrollTo} 这类裸调用。滚动仍是"一轮滚到文档底部"，
+ * 判据一行未改。
  */
 @Slf4j
 @Component
@@ -72,6 +77,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
     private final ConfigStore configStore;
     private final ZhaopinUrlBuilder urlBuilder;
     private final ObjectMapper json;
+
+    /**
+     * 页面交互的唯一入口。字段名固定为 {@code human}：源码守卫按这个名字区分
+     * "经本层的调用"与"裸的 Playwright 调用"（见 {@link Humanize} 的字段命名约定）。
+     */
+    private final Humanize human;
 
     private Page listPage;
     private Page threadPage;
@@ -94,6 +105,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
         PlatformBrowser browser = sessions.of(PLATFORM);
         this.session = browser.session();
         this.executor = browser.executor();
+        this.human = browser.humanize();
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -163,7 +175,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 if (!ZhaopinSelectors.LOGIN_ENTRY_TEXT.equals(trimmed)) {
                     continue;
                 }
-                item.click(new Locator.ClickOptions().setTimeout(8_000));
+                human.click(item, new Locator.ClickOptions().setTimeout(8_000));
                 pause(1_200, 2_000);
                 return true;
             }
@@ -230,6 +242,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
      *
      * <p>不再监听 {@code /c/i/search/positions} 的响应：编号改从面板取之后，翻页数据
      * 对扫描毫无用处（实测那条监听一条响应都没抓到，而卡片照样长到 196 张）。
+     *
+     * <p><b>一轮的位移仍然是"滚到文档底部"</b>：改造前是
+     * {@code window.scrollTo(0, document.body.scrollHeight)}，现在改成"先读出还差多少像素，
+     * 再用滚轮滚完这一段"。终点一样、判据一样，区别只在于派发的是真实 {@code wheel} 事件。
+     * 不能随手改成"一轮滚 N 屏"——那样第一轮根本到不了底，卡片数不增会被 {@code stable}
+     * 判成"已加载完"，直接把后面的岗位丢掉。
      */
     @Override
     public ScrollOutcome scrollUntilEnd(ScrollParams params, BooleanSupplier stop) {
@@ -247,7 +265,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                     break;
                 }
                 try {
-                    page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)");
+                    human.scrollPageToBottom(page, null);
                     pause(800, 1_300);
                     int current = page.locator(ZhaopinSelectors.CARD).count();
                     if (current == lastCount) {
@@ -268,7 +286,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                     pause(800, 1_200);
                 }
             }
-            page.evaluate("() => window.scrollTo(0, 0)");
+            human.scrollPageToTop(page, null);
             int cards = page.locator(ZhaopinSelectors.CARD).count();
             if (!loadedAll) {
                 log.warn("滚动到 {} 轮上限仍未确认加载完毕，按当前已加载的 {} 个岗位继续", limit, cards);
@@ -337,8 +355,9 @@ public class ZhaopinAdapter implements PlatformAdapter {
             }
             String before = currentDetailNumber(page);
             Locator card = cards.nth(cardIndex);
-            card.scrollIntoViewIfNeeded();
-            card.click(new Locator.ClickOptions().setTimeout(10_000));
+            // 原来这里先 scrollIntoViewIfNeeded 再 click。human.click 内部第一步就是
+            // scrollIntoViewIfNeeded，重复调一次只是多一次 CDP 往返
+            human.click(card, new Locator.ClickOptions().setTimeout(10_000));
             for (int i = 0; i < 8; i++) {
                 pause(300, 500);
                 ZhaopinRecord.PanelView view = readPanel(page);
@@ -496,7 +515,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 if (button.count() == 0) {
                     return DeliveryResult.skipped("按钮容器里没有「立即投递」");
                 }
-                button.click(new Locator.ClickOptions().setTimeout(10_000));
+                human.click(button, new Locator.ClickOptions().setTimeout(10_000));
                 if (waitForDeliverModal(page, stop)) {
                     log.info("投递成功（判据: 弹窗「{}」）| {} @ {}",
                             ZhaopinSelectors.DELIVER_MODAL_OK_TEXT, job.jobName(), job.companyName());
@@ -736,7 +755,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 log.warn("找不到发送按钮");
                 return false;
             }
-            send.click(new Locator.ClickOptions().setTimeout(8_000));
+            human.click(send, new Locator.ClickOptions().setTimeout(8_000));
             return waitForMoreSelfMessages(page, before, 30_000);
         });
     }
@@ -770,16 +789,26 @@ public class ZhaopinAdapter implements PlatformAdapter {
         return false;
     }
 
+    /**
+     * 把回复写进消息输入框。
+     *
+     * <p>原来是 {@code input.click()} 加 {@code input.fill(message)}：{@code fill} 直接赋予终态，
+     * 只有一次 {@code input} 事件，没有逐字的 {@code keydown}。现在交给
+     * {@link Humanize#type}：它用真实点击建立焦点、逐字输入、校验终态；
+     * 校验不过才退回 {@code fill} 并记一条 WARN（spec 0006 §3.4）。
+     *
+     * <p>智联的输入框是 {@code textarea.im-sender__input}，属于原生框，
+     * 所以走的是「Ctrl+A / Backspace 清空 + 逐字输入」那条路，不是富文本那条。
+     */
     private boolean fillInput(Page page, String message) {
         try {
             Locator input = page.locator(ZhaopinSelectors.IM_INPUT).first();
             if (!input.isVisible(new Locator.IsVisibleOptions().setTimeout(5_000))) {
                 return false;
             }
-            input.click(new Locator.ClickOptions().setTimeout(5_000));
-            input.fill(message);
+            boolean written = human.type(input, message);
             pause(300, 600);
-            return true;
+            return written;
         } catch (Exception e) {
             log.warn("填入消息失败: {}", e.getMessage());
             return false;
@@ -811,7 +840,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
             int before = countResumeTips(page);
             try {
-                button.click(new Locator.ClickOptions().setTimeout(8_000));
+                human.click(button, new Locator.ClickOptions().setTimeout(8_000));
             } catch (Exception e) {
                 return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
             }
@@ -840,7 +869,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                         .filter(new Locator.FilterOptions().setHasText("确定"))
                         .first();
                 if (confirm.count() > 0 && confirm.isVisible(new Locator.IsVisibleOptions().setTimeout(300))) {
-                    confirm.click(new Locator.ClickOptions().setTimeout(5_000));
+                    human.click(confirm, new Locator.ClickOptions().setTimeout(5_000));
                     log.info("「发简历」弹出了二次确认，已点「确定」");
                     pause(600, 1_000);
                     return;
@@ -913,7 +942,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 return false;
             }
             verifyDigest(matched, thread);
-            matched.click(new Locator.ClickOptions().setTimeout(8_000));
+            human.click(matched, new Locator.ClickOptions().setTimeout(8_000));
             pause(1_200, 2_000);
             return page.locator(ZhaopinSelectors.IM_CHAT_PANEL).count() > 0;
         } catch (ThreadTargetUnsafeException e) {
@@ -1083,12 +1112,15 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 || message.contains("Cannot find context");
     }
 
-    private static void pause(int minMs, int maxMs) {
-        try {
-            Thread.sleep(ThreadLocalRandom.current().nextInt(minMs, Math.max(minMs + 1, maxMs)));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+    /**
+     * 等一会儿。区间语义与改造前的 {@code pause(min, max)} 一致，<b>数值一个都没改</b>。
+     *
+     * <p>这份实现原来与 {@code BossAdapter} 里那份逐字相同。现在两边都只剩这一个转发，
+     * 随机源统一在 {@code Humanize.pacing()}：与本平台的鼠标轨迹、滚动间隔共用一条序列，
+     * 种子非 0 时整轮可复现（spec 0006 Q13）。
+     */
+    private void pause(int minMs, int maxMs) {
+        human.pacing().sleep(minMs, maxMs);
     }
 
     /** 仅供诊断：首屏数据里已知的岗位编号 */

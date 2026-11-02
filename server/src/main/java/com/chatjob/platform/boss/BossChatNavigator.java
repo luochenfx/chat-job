@@ -1,5 +1,6 @@
 package com.chatjob.platform.boss;
 
+import com.chatjob.driver.human.Humanize;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.PlaywrightException;
@@ -32,11 +33,18 @@ public class BossChatNavigator implements AutoCloseable {
     }
 
     private final Page origin;
+    private final Humanize human;
     private final List<Page> popups = new ArrayList<>();
     private final Consumer<Page> popupListener = popups::add;
 
-    public BossChatNavigator(Page origin) {
+    /**
+     * @param origin 岗位详情页
+     * @param human  页面交互入口。两处点击（岗位按钮、确认框「继续沟通」）都经它走，
+     *               与适配器共用同一个实例，这样计数与降级记录不会出现"哪一次算谁的"的模糊地带
+     */
+    public BossChatNavigator(Page origin, Humanize human) {
         this.origin = origin;
+        this.human = human;
         origin.onPopup(popupListener);
     }
 
@@ -50,7 +58,7 @@ public class BossChatNavigator implements AutoCloseable {
         long deadline = System.nanoTime() + timeoutMs * 1_000_000L;
         String entryUrl = origin.url();
         try {
-            button.click(new Locator.ClickOptions().setTimeout(Math.min(timeoutMs, 5_000)));
+            human.click(button, new Locator.ClickOptions().setTimeout(Math.min(timeoutMs, 5_000)));
         } catch (PlaywrightException navigationError) {
             log.debug("点击岗位按钮时发生页面切换，继续检查聊天入口: {}", navigationError.getMessage());
         }
@@ -84,7 +92,7 @@ public class BossChatNavigator implements AutoCloseable {
                                 continue;
                             }
                             try {
-                                confirmation.click(new Locator.ClickOptions().setTimeout(remainingMs));
+                                human.click(confirmation, new Locator.ClickOptions().setTimeout(remainingMs));
                             } catch (PlaywrightException clickError) {
                                 log.warn("弹框确认未在 1 秒检测窗口内完成，跳过当前岗位");
                                 return null;

@@ -440,3 +440,75 @@ Boss 处于风控期，因此用智联做主验证。服务用 `java -jar` 从�
 4. 把 `boss` 加进 `HumanizeSourceGuardTest.CONVERTED`，同时删掉"阶段一没有任何适配器依赖本层"那条断言。
 5. 适配器实现 `Humanizer.FallbackListener`，把每次降级写进 `run_log`。
 
+
+## 8. 实施记录：阶段 2（2026-11-01）
+
+Boss 处于风控期，跑不出页面级证据。为了让"滚轮真的有 `wheel`、输入真的有 `keydown`"能被实测，
+**智联的交互接线随本阶段一起做**（原计划在阶段 4），导航两跳仍留在阶段 3。
+`HumanizeSourceGuardTest.CONVERTED` 因此是 `{boss, zhaopin}`。
+
+### 8.1 交付物
+
+| 类型 | 内容 |
+|---|---|
+| 本层 | `Humanize` 增加 `pacing()`、`onFallback(FallbackListener)`、`scrollPageByScreens`、`scrollPageToBottom`、`scrollPageToTop`；`FallbackListener` 由 `Humanizer` 的内部类型提为顶层接口 |
+| 装配 | `PlatformBrowser` 增加 `humanize` 分量；`BrowserSessions.of()` 按平台建 `Humanizer`（每个平台一份计数，否则降级率是两个平台混在一起的平均数） |
+| Boss | `BossAdapter` 8 处点击、2 处输入、3 处滚动全部改走本层；`BossChatNavigator` 2 处点击 |
+| 智联 | `ZhaopinAdapter` 8 处点击、1 处输入、2 处滚动全部改走本层 |
+| 节奏 | `BossAdapter`/`ZhaopinAdapter` 里两份逐字相同的 `pause(int,int)` 实现删除，改为转发 `human.pacing().sleep(min, max)`，**26 个调用点的区间数值一个都没改** |
+| 观测 | `RunService` 在 Run 首尾各取一次计数快照，差值写一行 INFO；降级回调在 Run 开始时注册、结束时撤销，逐次写 WARN |
+| 配置 | `application.yaml`：`slow-mo-ms: 50 → 0`，`humanize.enabled: false → true` |
+| 守卫 | `CONVERTED = {boss, zhaopin}`；删掉"阶段一没有任何适配器依赖本层"，新增"已改造平台确实经本层"（只断言"没有裸调用"挡不住把整段交互删掉） |
+| 测试 | 新增 `HumanizeBrowserProbeTest`（默认跳过，`-Dchat-job.humanize.probe=true` 手动触发），用本地 `data:` 页量 wheel、keydown、条件 c |
+
+### 8.2 与设计的偏差
+
+| # | 设计原文 | 实现 | 理由 |
+|---|---|---|---|
+| 1 | 阶段 2 只改 Boss，智联一行不动 | 智联同时接线 | Boss 风控期间，只有智联能跑出页面证据；不接线的话，新的点击/输入/滚动路径在运行期一次都不会执行，验证只能停在"服务能起、开关能绑" |
+| 2 | `Humanize` 7 个方法 | 11 个 | 多出来的 5 个都是"把适配器里会各写一份的换算收进本层"：视口高换算（`scrollPageByScreens`）、到底/到顶的位移计算（`scrollPageToBottom/Top`）、节奏出口（`pacing`）、降级回调注册（`onFallback`） |
+| 3 | `FallbackListener` 在 `Humanizer` 内部 | 提为顶层接口 | `Humanize` 接口要引用它，而接口引用自己的实现类是反向依赖 |
+| 4 | `warmUp` 由调用方显式调 | `click` 与 `scrollPage` 在首次使用某页时自动调一次 | 阶段 2 没有接 `navigate`，显式入口没人调，预热就是一条死配置。放在"页面要被操作"的那一刻也符合 Q12 的"按 Page 惰性触发"——`newPage()` 之后页面还是空的 |
+| 5 | 预热的滚动步数不参与位移计算 | 首次滚动的实际位移会比目标多 2–4 小步（实测 +148…+203px） | 预热自己会滚 2–4 次、每次 40–110px。这是 §1.4 定义的预热行为，不额外补偿；影响只在该页第一次滚动 |
+| 6 | 3.3 把"一轮"定义为 1–1.5 屏 | Boss 按 1.5 屏；**智联仍按"滚到文档底部"** | 智联每轮的判据是"卡片数是否增加"，它原本就是"跳到底再看"。若改成 1.5 屏，第一轮根本到不了底，卡片数不增会被 `stable` 判成"已加载完"，直接丢掉后面的岗位 |
+| 7 | — | `hoverOnScrollArea` 把落点夹进视口 | 列表容器通常比视口高，外框会上下溢出，落点算出来可能是负数；滚轮命中的是"该坐标下的元素"，坐标在视口外等于没停在任何容器上 |
+| 8 | 条件 c 容差在阶段 2 标定 | 仍是 2 | 智联的输入框是 `textarea`（`childElementCount` 恒为 0，条件 c 恒成立），真 Boss `contenteditable` 无法验证，见 8.3 |
+| 9 | `enabled=false` 时退化为"原生写法" | 停用路径里补了一次 `click(5s)` 才写值 | 两家适配器原来的写法都是「click 建立焦点 → `fill` / 赋 `innerText`」，而 `fill` 只调 DOM 的 `focus()`、不发鼠标事件。少这一次点击，页面侧会少一对 `mousedown`/`mouseup`，"关掉即回到改造前"就不成立。Run 66 是在这行补上之前跑的：它没有触发输入路径，结论不受影响 |
+
+### 8.3 取证结果（`HumanizeBrowserProbeTest`，本地 `data:` 页）
+
+| 问题 | 实测 | 结论 |
+|---|---|---|
+| 滚轮是否真的派发 `wheel` | 600px 的滚动计划 → **4 次** `wheel` 事件 | 改造前 `window.scrollBy` 是 0 次。§2.1 第 5 条达成 |
+| ASCII 输入是否有逐字 `keydown` | `["Control","A","Backspace","h","e","l","l","o","2","0","2","6"]` | 每个字符一次 `keydown` |
+| 中文是否只有 `input` 没有 `keydown` | 纯中文 14 字：`keydown` 只有 `["Control","A","Backspace"]`（清空用），`input` 15 次 | **§5.3 第 2 条结案**：中文确实不产生字符级 `keydown`，§3.4 的已知限制成立，注释无需修改 |
+| 条件 c 的实际增量 | 单段中文写入 `contenteditable`：`childElementCount` 0 → 0 | 容差 2 对"单段文字"有富余；带换行的文本仍未知 |
+| 起止语 | 两次三条件校验全部通过，降级 0 次 | — |
+
+以下三条仍未闭环：① Boss 的真实页面（风控）；② 真 `contenteditable` 上的条件 c 与 `Ctrl+A` 作用域；
+③ 智联的真实输入路径（见 8.4 最后一行）。
+
+### 8.4 运行时验证（2026-11-01，智联）
+
+服务用 `java -jar server/target/chat-job.jar` 从仓库根启动。Boss 未启动浏览器（懒加载），
+`bsk browsers` 只看到智联那一个实例。
+
+| 检查项 | 结果 |
+|---|---|
+| 启动（`enabled=true`） | `已装配平台: [boss, zhaopin]`；两个平台的会话声明都打印 `人类化交互: 启用`；无新增 WARN |
+| 滚动判据未被打坏 | Run 64/65 均为 `组合 #0 加载 193 张卡片（6 轮，确认到底）`，与阶段 1 记录（Run 63）的 **193 张** 一致 |
+| 点击路径 | Run 65 依次读开 7 张卡片的面板（含 5 次新评估、2 次 24 小时内已判定跳过），全部走本层点击 |
+| 降级率 | Run 65：`人类化交互 19 次 / 降级 0 次（输入 0、点击 0、滚动 0）/ 漂移作废 0 次 / 输入字符 0 / 降级率 0.0%`，低于 5% 的验收线 |
+| 页面 | `bsk tab list` 读到 `https://www.zhaopin.com/jobs/?jl=681&kw=java`，标题「福州热门职位招聘」，与配置（福州 / java）和日志一致 |
+| 数据库 | `flyway_schema_history` 仍 V16，表仍是 20 张（无迁移、无新表）；`combination_run.cards_seen = 193`，与日志里的 193 一致；汇总行确实落进 `run_log` |
+| `enabled=false` 复跑（Run 66） | 193 张卡片、**10 轮**，与阶段 1 记录的 10 轮逐字一致；`run_log` 共 7 行，**没有**"人类化交互 …"汇总行 —— 关掉之后日志与改造前逐行相同 |
+| 滚动耗时 | 同一组合的滚动阶段：启用 42 秒（6 轮）、停用 26 秒（10 轮），单组合约 **+16 秒**。轮数反而更少，因为滚轮期间懒加载有更多时间追加，`stable` 更少被误置 |
+| 输入路径 | **本次未触发**。智联的投递不发招呼语（平台自己发），`type` 只在值守回复时发生；为避免向真实 HR 发消息，验证只跑到 `DRY_RUN` |
+| DOM 级页面证据 | 未取到：`bsk cooperate sync` 报 `Could not establish connection`（该页在会话建立前就已加载），按"失败一次即停手"的规则没有重试。页面证据停在 URL/标题层面，卡片数由日志与数据库两侧互证 |
+
+### 8.5 已知代价与后续
+
+- 单组合滚动阶段约 +16 秒（+60%）。按 30 个岗位、若干组合估算，单次扫描增加分钟级，值守时段内可接受。
+- `slow-mo-ms` 已归零。要复现改造前的节奏，用 `--chat-job.humanize.enabled=false --chat-job.browser.slow-mo-ms=50` 启动（Run 66 就是这样跑的）。
+- 阶段 3 接手时：`deliver` 改两跳 + `DeliveryOptions` 带搜索条件；`fetchDetail` 每 5–8 张插一次停顿。
+  届时 `human.navigate` 才会第一次被调用。

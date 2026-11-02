@@ -5,6 +5,7 @@ import com.chatjob.driver.BrowserSession;
 import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
+import com.chatjob.driver.human.Humanize;
 import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
@@ -49,6 +50,12 @@ import java.util.regex.Pattern;
  * 其中一个平台的，另一个适配器就会在别人的 profile 上操作页面：症状是随机
  * {@code Object doesn't exist}，且只在两平台同时跑时出现。所以取 session 与 executor
  * 必须成对、按平台，见 {@link PlatformBrowser} 的注释。
+ *
+ * <p><b>页面交互一律经 {@link Humanize}</b>（阶段 2，spec 0006）。点击、输入、滚动三条路径
+ * 都走 {@code human}，本类里不再出现 {@code Locator.click} / {@code fill} /
+ * {@code window.scrollBy} 这类裸调用，由 {@code HumanizeSourceGuardTest} 守着。
+ * <b>点击、输入、滚动之外的语义一行都没变</b>：卡片怎么数、详情怎么判、送达怎么复核，
+ * 全部原样。
  */
 @Slf4j
 @Component
@@ -68,6 +75,13 @@ public class BossAdapter implements PlatformAdapter {
     private final BossUrlBuilder urlBuilder;
     private final ObjectMapper json;
 
+    /**
+     * 页面交互的唯一入口。字段名固定为 {@code human}：源码守卫
+     * （{@code HumanizeSourceGuardTest}）按这个名字区分"经本层的调用"与"裸的 Playwright 调用"，
+     * 改名会让守卫把每一次合法调用都报成违规。
+     */
+    private final Humanize human;
+
     private Page listPage;
     private Page threadPage;
 
@@ -80,6 +94,7 @@ public class BossAdapter implements PlatformAdapter {
         PlatformBrowser browser = sessions.of(PLATFORM);
         this.session = browser.session();
         this.executor = browser.executor();
+        this.human = browser.humanize();
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -189,7 +204,10 @@ public class BossAdapter implements PlatformAdapter {
                         break;
                     }
 
-                    page.evaluate("() => window.scrollBy(0, Math.floor(window.innerHeight * 1.5))");
+                    // 一轮 = 一次完整的滚动计划，累计位移 1.5 屏。与改造前的
+                    // `window.scrollBy(0, innerHeight * 1.5)` 位移相同，区别只在于
+                    // 现在派发的是真实滚轮事件（spec 0006 §3.3：ScrollParams.roundLimit 的口径不变）
+                    human.scrollPageByScreens(page, page.locator(BossSelectors.LIST_CONTAINER), 1.5);
                     int current = page.locator(BossSelectors.CARD).count();
                     if (current == lastCount) {
                         stable++;
@@ -199,8 +217,9 @@ public class BossAdapter implements PlatformAdapter {
                     lastCount = current;
 
                     if (stable >= 3) {
-                        // 连续无新增时强制触底一次，再继续判
-                        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)");
+                        // 连续无新增时强制触底一次，再继续判。改造前是 window.scrollTo(0, scrollHeight)，
+                        // 现在换成"滚到文档底部"，终点一样但走滚轮
+                        human.scrollPageToBottom(page, page.locator(BossSelectors.LIST_CONTAINER));
                     }
                     if (stable >= 8) {
                         log.info("连续 {} 轮没有新增岗位，判定已加载完毕（第 {} 轮）", stable, round);
@@ -227,9 +246,9 @@ public class BossAdapter implements PlatformAdapter {
             }
             // 回到顶部，从头开始逐张处理
             try {
-                page.evaluate("() => window.scrollTo(0, 0)");
+                human.scrollPageToTop(page, page.locator(BossSelectors.LIST_CONTAINER));
             } catch (Exception ignore) {
-                // 滚动失败不影响后续
+                // 滚动失败不影响后续：后续每张卡片点击前都会 scrollIntoViewIfNeeded
             }
             return new ScrollOutcome(loadedAll, round, cards);
         });
@@ -256,15 +275,15 @@ public class BossAdapter implements PlatformAdapter {
                 if (cardIndex == 0 && count > 1) {
                     // 第一张卡片默认展开，点它不会触发详情请求。
                     // 必须先点第二张，再点回第一张，并在"点回"时挂监听。
-                    cards.nth(1).click(new Locator.ClickOptions().setTimeout(10_000));
+                    human.click(cards.nth(1), new Locator.ClickOptions().setTimeout(10_000));
                     pause(800, 1_200);
                     response = page.waitForResponse(BossAdapter::isDetailResponse,
-                            () -> page.locator(BossSelectors.CARD).nth(0)
-                                    .click(new Locator.ClickOptions().setTimeout(10_000)));
+                            () -> human.click(page.locator(BossSelectors.CARD).nth(0),
+                                    new Locator.ClickOptions().setTimeout(10_000)));
                 } else {
                     response = page.waitForResponse(BossAdapter::isDetailResponse,
-                            () -> page.locator(BossSelectors.CARD).nth(cardIndex)
-                                    .click(new Locator.ClickOptions().setTimeout(10_000)));
+                            () -> human.click(page.locator(BossSelectors.CARD).nth(cardIndex),
+                                    new Locator.ClickOptions().setTimeout(10_000)));
                 }
             } catch (Exception e) {
                 log.warn("抓取第 {} 张卡片详情失败: {}", cardIndex, e.getMessage());
@@ -398,7 +417,7 @@ public class BossAdapter implements PlatformAdapter {
                 boolean repeatByButton = buttonText.contains("继续沟通");
                 boolean firstContact = !repeatByButton;
 
-                try (BossChatNavigator navigator = new BossChatNavigator(detailPage)) {
+                try (BossChatNavigator navigator = new BossChatNavigator(detailPage, human)) {
                     BossChatNavigator.Chat chat = navigator.open(
                             detailPage.locator(BossSelectors.CHAT_BUTTON).first(),
                             repeatByButton,
@@ -617,22 +636,28 @@ public class BossAdapter implements PlatformAdapter {
         }
     }
 
+    /**
+     * 把招呼语写进聊天输入框。
+     *
+     * <p>这里原来按标签分两条路：{@code textarea} 用 {@code fill}，Boss 的
+     * {@code div[contenteditable]} 因为 {@code fill} 填不进去改用 JS 赋 {@code innerText}。
+     * 后者只有一次 {@code input} 事件、没有 {@code keydown}，是页面上最容易识别的信号之一
+     * （spec 0006 §1.2）。现在两条路都交给 {@link Humanize#type}：它自己判断元素种类、
+     * 逐字输入、校验终态，失败时才退回原来那两种写法并记一条 WARN。
+     *
+     * @return 终态是否与目标文本一致。<b>降级之后也读一次</b>，所以 {@code false} 表示
+     *         "两种写法都没写对"，调用方应直接判失败
+     */
     private boolean fillInput(Page page, String message) {
         try {
             Locator input = page.locator(BossSelectors.CHAT_INPUT).first();
             if (!input.isVisible(new Locator.IsVisibleOptions().setTimeout(5_000))) {
                 return false;
             }
-            input.click(new Locator.ClickOptions().setTimeout(5_000));
-            Object tag = input.evaluate("el => el.tagName.toLowerCase()");
-            if ("textarea".equals(tag)) {
-                input.fill(message);
-            } else {
-                // contenteditable 必须派发 input 事件，否则前端状态不更新、发送按钮仍不可点
-                input.evaluate("(el, msg) => { el.innerText = msg; el.dispatchEvent(new Event('input')); }", message);
-            }
+            // 焦点由 human.type 内部用真实点击建立：某些编辑器在 focus() 与真实点击下行为不同
+            boolean written = human.type(input, message);
             pause(400, 800);
-            return true;
+            return written;
         } catch (Exception e) {
             log.warn("填入招呼语失败: {}", e.getMessage());
             return false;
@@ -645,7 +670,7 @@ public class BossAdapter implements PlatformAdapter {
             if (send.count() == 0) {
                 return false;
             }
-            send.first().click(new Locator.ClickOptions().setTimeout(8_000));
+            human.click(send.first(), new Locator.ClickOptions().setTimeout(8_000));
             return true;
         } catch (Exception e) {
             log.warn("点击发送失败: {}", e.getMessage());
@@ -855,7 +880,7 @@ public class BossAdapter implements PlatformAdapter {
 
             int cardsBefore = countResumeCards(page);
             try {
-                button.click(new Locator.ClickOptions().setTimeout(8_000));
+                human.click(button, new Locator.ClickOptions().setTimeout(8_000));
             } catch (Exception e) {
                 return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
             }
@@ -874,7 +899,7 @@ public class BossAdapter implements PlatformAdapter {
                     return ResumeResult.failed("确认气泡里找不到「确定」按钮");
                 }
                 try {
-                    confirm.click(new Locator.ClickOptions().setTimeout(8_000));
+                    human.click(confirm, new Locator.ClickOptions().setTimeout(8_000));
                 } catch (Exception e) {
                     return ResumeResult.failed("点击「确定」失败: " + e.getMessage());
                 }
@@ -988,7 +1013,7 @@ public class BossAdapter implements PlatformAdapter {
                 return false;
             }
             verifyDigest(matched, thread);
-            matched.click(new Locator.ClickOptions().setTimeout(8_000));
+            human.click(matched, new Locator.ClickOptions().setTimeout(8_000));
             pause(1_200, 2_000);
             return true;
         } catch (ThreadTargetUnsafeException e) {
@@ -1138,11 +1163,15 @@ public class BossAdapter implements PlatformAdapter {
                 || message.contains("Cannot find context");
     }
 
-    private static void pause(int minMs, int maxMs) {
-        try {
-            Thread.sleep(ThreadLocalRandom.current().nextInt(minMs, Math.max(minMs + 1, maxMs)));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+    /**
+     * 等一会儿。区间语义与改造前的 {@code pause(min, max)} 一致，<b>数值一个都没改</b>。
+     *
+     * <p>原来这里有一份 {@code ThreadLocalRandom.nextInt} 的实现，与 {@code ZhaopinAdapter}
+     * 里那份逐字相同（两份副本，26 个调用点）。现在只剩这一个转发：真正的随机源在
+     * {@code Humanize.pacing()} 里，与鼠标、滚动共用一条序列，种子非 0 时整轮可复现。
+     * 保留这个同名私有方法只是让 26 个调用点不必逐条改字，它已经不再自己产生随机数。
+     */
+    private void pause(int minMs, int maxMs) {
+        human.pacing().sleep(minMs, maxMs);
     }
 }

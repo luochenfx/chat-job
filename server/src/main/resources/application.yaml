@@ -70,10 +70,10 @@ chat-job:
     # 登录态也是各平台各自扫各自的码，不该混在一个 profile 里。
     # 阶段 2a 之前这里就是 boss 的 profile，browser-data/boss 是它的原样搬迁。
     user-data-dir: ${chat-job.home}/browser-data
-    # 每个动作固定加 50ms 的均匀延迟。阶段 2 接人类化交互层时归零（ADR-0007 第 5 条）：
-    # 均匀延迟本身可统计，且会与本层的随机间隔叠加成两种节奏。阶段 1 不动它——
-    # 那一阶段不接线，归零就是纯粹的行为变更。
-    slow-mo-ms: 50
+    # 每个动作固定加的均匀延迟。阶段 2 归零（ADR-0007 第 5 条）：
+    # 均匀延迟本身可统计，且会与本层的随机间隔叠加成两种节奏。
+    # 保留这个字段而不是删掉，是为了关掉 humanize 时还能一键回到改造前的固定节奏做对比。
+    slow-mo-ms: 0
     default-timeout-ms: 30000
     # auto = 按 chrome → msedge 探测本机已装的那个；也可写死 chrome / msedge。
     # 解析结果会显示在控制台"系统"页，不做静默降级。
@@ -87,9 +87,10 @@ chat-job:
   # 代码里另有一套等价默认值（HumanizeConfig），yaml 整段缺失时用那套。
   # 单位写在字段名里，不靠注释约定。
   humanize:
-    # 阶段 1 只建骨架、不接线：没有任何适配器调用这一层，所以这个开关此刻不影响运行期行为。
-    # 阶段 2 接 Boss 的点击/输入/滚动时改成 true；关掉时必须与改造前逐字一致。
-    enabled: false
+    # 总开关。true 时所有点击、输入、滚动都经本层；false 时每个方法
+    # 等价于改造前的原生写法（locator.click / fill / window.scrollBy），且不产生任何计数——
+    # 于是 run_log 里也不会出现「人类化交互 …」汇总行，可与改造前逐行比对。
+    enabled: true
     # 0 = 真随机；非 0 可复现同一条轨迹（把 run_log 里的种子填回来即可重放）
     seed: 0
     mouse:

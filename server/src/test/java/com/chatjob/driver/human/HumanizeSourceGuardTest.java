@@ -26,20 +26,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>防的是什么：不是今天这批调用点（它们会被改完），而是三个月后新加的那一处
  * {@code item.click()}——它不会报错、测试不会失败，只是绕过了这一层。
  *
- * <p><b>阶段状态（spec 0006 §4.2）</b>：阶段 1 只建骨架、不接线，所以 {@link #CONVERTED} 为空，
- * 真正的扫描此时是空循环。为了让这个测试在阶段 1 也有实际内容，它同时验证两件事：
- * 检测器本身认得出裸调用（{@link #检测器能认出裸调用()}），以及<b>没有任何适配器依赖本层</b>
- * （{@link #阶段一没有任何适配器依赖本层()}）——后者是"不接线"这条验收的唯一机器证据。
+ * <p><b>阶段状态（spec 0006 §4.2）</b>：阶段 1 只建骨架、不接线，{@link #CONVERTED} 为空；
+ * 阶段 2 起 {@code boss} 与 {@code zhaopin} 都已接线，下面两个测试都会真的扫到文件。
+ * 阶段 1 那条「没有任何适配器依赖本层」的断言已删除——它的前提（不接线）已经不成立。
  */
 class HumanizeSourceGuardTest {
 
     /**
-     * 已改造的平台标识。**阶段 2 加入 {@code boss}，阶段 4 加入 {@code zhaopin}。**
+     * 已改造的平台标识。**阶段 2 加入 {@code boss}；{@code zhaopin} 随同一阶段接线
+     * （spec 0006 阶段 4 的交互部分提前做），阶段 3 只补导航。**
      *
      * <p>加进来的前提是那个平台的交互已经全部走 {@link Humanize}；加太早会让守卫在
      * 改造未完成时就变红，而"先加进白名单再改"就等于把守卫关掉了。
      */
-    private static final Set<String> CONVERTED = Set.of();
+    private static final Set<String> CONVERTED = Set.of("boss", "zhaopin");
 
     /**
      * 禁用的调用。只针对写入类调用：读 DOM 的 {@code evaluate}、{@code count()}、
@@ -144,21 +144,45 @@ class HumanizeSourceGuardTest {
         }
     }
 
+    /**
+     * 已改造的适配器必须真的走本层。
+     *
+     * <p>只断言"没有裸调用"是不够的：把整段交互代码删掉同样没有裸调用。所以再断言
+     * 每个已改造平台的适配器源码里确实出现了 {@code com.chatjob.driver.human} 的引用，
+     * 以及 `human.` 形式的调用。
+     */
     @Test
-    void 阶段一没有任何适配器依赖本层() {
-        // "不接线"的可验证形式：platform 包里搜不到对本层的引用。
-        // 阶段 2 开始接线时删掉这条断言，并把 boss 加进 CONVERTED。
-        List<String> offenders = new ArrayList<>();
-        for (Path file : javaFiles(javaSourceRoot().resolve("com/chatjob/platform"))) {
-            if (read(file).contains("com.chatjob.driver.human")) {
-                offenders.add(file.getFileName().toString());
-            }
-        }
+    void 已改造平台确实经本层() {
+        assertThat(CONVERTED).as("阶段 2 起至少有两个平台已改造").isNotEmpty();
+        for (String platform : CONVERTED) {
+            Path dir = javaSourceRoot().resolve("com/chatjob/platform").resolve(platform);
+            List<Path> files = javaFiles(dir);
+            assertThat(files).as("平台 %s 的源码目录必须存在且含 java 文件：%s", platform, dir).isNotEmpty();
 
-        assertThat(offenders).as("阶段 1 不应有适配器引用 com.chatjob.driver.human").isEmpty();
+            boolean importsLayer = false;
+            int layerCalls = 0;
+            for (Path file : files) {
+                String source = read(file);
+                if (source.contains("com.chatjob.driver.human")) {
+                    importsLayer = true;
+                }
+                layerCalls += countLayerCalls(stripComments(source));
+            }
+            assertThat(importsLayer).as("%s 的适配器应引用 com.chatjob.driver.human", platform).isTrue();
+            assertThat(layerCalls).as("%s 的适配器应有经 human.* 的交互调用", platform).isPositive();
+        }
     }
 
     // ---------------------------------------------------------------- 实现
+
+    private static int countLayerCalls(String source) {
+        Matcher matcher = THROUGH_LAYER.matcher(source);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
 
     /** 命中禁列表的片段，用于断言与报错信息。 */
     static List<String> violations(String source) {

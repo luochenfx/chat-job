@@ -1,8 +1,11 @@
 package com.chatjob.orchestrator;
 
 import com.chatjob.driver.BlockedException;
+import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PatchrightDriver;
 import com.chatjob.driver.SelfCheck;
+import com.chatjob.driver.human.HumanCounters;
+import com.chatjob.driver.human.Humanize;
 import com.chatjob.evaluate.ActiveLevel;
 import com.chatjob.evaluate.AiJudge;
 import com.chatjob.evaluate.BlacklistMatcher;
@@ -85,6 +88,11 @@ public class RunService {
     private final com.chatjob.web.SseHub sse;
     /** 平台开关：停用的平台不启动任务（spec 0004 阶段 3） */
     private final PlatformSwitches switches;
+    /**
+     * 按平台取人类化交互实例。它是<b>平台级</b>对象（与浏览器会话同寿），比一次 Run 活得久，
+     * 所以这里只用它取计数快照与注册降级回调，不持有它。
+     */
+    private final BrowserSessions sessions;
 
     /**
      * 本实例服务的平台适配器。由 {@link #bind(String)} 在创建后一次性赋值。
@@ -126,7 +134,8 @@ public class RunService {
                       SelfCheck selfCheck,
                       PatchrightDriver patchright,
                       com.chatjob.web.SseHub sse,
-                      PlatformSwitches switches) {
+                      PlatformSwitches switches,
+                      BrowserSessions sessions) {
         this.runStore = runStore;
         this.jobStore = jobStore;
         this.configStore = configStore;
@@ -138,6 +147,7 @@ public class RunService {
         this.patchright = patchright;
         this.sse = sse;
         this.switches = switches;
+        this.sessions = sessions;
     }
 
     /**
@@ -294,6 +304,9 @@ public class RunService {
     private void runLoop(RunEntity run) {
         String platform = run.getPlatform();
         long startedAt = System.currentTimeMillis();
+        // 交互计数的起点。为 null 表示这条 Run 还没走到"真的开始干活"（时段外挂起、
+        // driver 不可用、自检失败、登录态失效都会在此之前返回），那种情况下不该写汇总行
+        HumanCounters.Snapshot interactionsAtStart = null;
         try {
             // 时段守卫放在最前面，连 driver 自检都不做：窗口外的 Run 只该挂起等待，
             // 不该在等待期间自检、开浏览器，也不该用「driver 不可用」这类次要原因盖掉真正的原因。
@@ -330,6 +343,7 @@ public class RunService {
                     "mode", run.getMode()));
             log(run, "INFO", "任务启动，模式 " + modeLabel(run.getMode()));
             logDutyDeadline(run);
+            interactionsAtStart = beginInteractionTracking(run, platform);
 
             // 本次运行要不要扫描，只在启动这一刻读一次。运行中把它关掉由两个卡片/组合边界生效；
             // 关掉后重新打开要等下次启动 —— 这个值在整轮里不再变，是为了让「循环要不要扫」
@@ -426,6 +440,7 @@ public class RunService {
             notify(run, "run-failed", "任务异常终止", String.valueOf(e.getMessage()));
         } finally {
             long costSeconds = (System.currentTimeMillis() - startedAt) / 1000;
+            finishInteractionTracking(run, interactionsAtStart);
             // 挂起等待的 Run 也走这里退出，但它是「还没开始」而不是「已结束」：
             // 无条件推 run.finished 会让界面闪一条「任务结束：WAITING_DUTY」，把等待读成收工。
             if (run.getStatus() != null && RunStatus.valueOf(run.getStatus()).isTerminal()) {
@@ -1350,6 +1365,54 @@ public class RunService {
     private void log(RunEntity run, String level, String message) {
         runStore.log(run.getId(), level, message);
         log.info("[{}] [run {}] {}", run.getPlatform(), run.getId(), message);
+    }
+
+    // ---------------------------------------------------------------- 人类化交互的观测
+
+    /**
+     * 开始记录本条 Run 的交互计数与降级明细，返回起始快照。
+     *
+     * <p>为什么用采样差而不是"开始时清零"：这个实例是<b>平台级</b>的，比 Run 活得久
+     * （spec 0006 §3.7）。清零会让交叠的两条 Run 互相清掉对方的数；而且清零这个动作
+     * 本身要写进别人的状态里，多一条隐式依赖。
+     *
+     * <p>降级回调在 Run 开始时注册、结束时撤销：它要写 {@code run_log}，而 {@code run_log}
+     * 需要 {@code runId}——本层拿不到，只有编排层知道。
+     */
+    private HumanCounters.Snapshot beginInteractionTracking(RunEntity run, String platform) {
+        Humanize human = sessions.of(platform).humanize();
+        human.onFallback((kind, reason) -> log(run, "WARN", "交互降级[" + kindLabel(kind) + "] " + reason));
+        return human.counters().snapshot();
+    }
+
+    /**
+     * 撤销降级回调并写一行计数汇总。
+     *
+     * <p><b>一次交互都没有时不写这一行。</b>这既是"没有内容就不占日志"，
+     * 也是 {@code humanize.enabled=false} 的验收前提：关掉之后本层不做任何计数，
+     * 于是这行永远不出现，{@code run_log} 与改造前逐行相同（spec 0006 §2.1 第 12 条）。
+     */
+    private void finishInteractionTracking(RunEntity run, HumanCounters.Snapshot start) {
+        if (start == null) {
+            return;
+        }
+        Humanize human = sessions.of(run.getPlatform()).humanize();
+        human.onFallback(null);
+        HumanCounters.Snapshot delta = human.counters().snapshot().minus(start);
+        if (delta.interactions() == 0 && delta.fallbacks() == 0) {
+            return;
+        }
+        log(run, "INFO", HumanCounters.format(delta)
+                + " / 降级率 " + (Math.round(delta.fallbackRate() * 1000) / 10.0) + "%");
+    }
+
+    /** 动作类型的中文名。只用于日志，所以放在这里而不是 {@code HumanCounters}。 */
+    private static String kindLabel(HumanCounters.Kind kind) {
+        return switch (kind) {
+            case CLICK -> "点击";
+            case TYPE -> "输入";
+            case SCROLL -> "滚动";
+        };
     }
 
     private void publish(RunEntity run, String type, Object data) {

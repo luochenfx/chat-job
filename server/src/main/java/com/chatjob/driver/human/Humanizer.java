@@ -21,8 +21,9 @@ import java.util.WeakHashMap;
  * （spec 0006 Q9），所以本类不做单测，正确性靠真实页面验证。
  *
  * <p><b>降级记录的落点</b>：每一次降级先写应用日志（WARN，含动作类型与失败条件），
- * 再通过 {@link FallbackListener} 交给调用方。{@code run_log} 由适配器在阶段 2 接线时转写
- * ——本类拿不到 {@code runId}，在这里塞一个 {@code RunStore} 会让它反过来依赖编排层。
+ * 再通过 {@link FallbackListener} 交给调用方。{@code run_log} 由编排层（{@code RunService}）
+ * 注册的监听者转写——本类拿不到 {@code runId}，在这里塞一个 {@code RunStore}
+ * 会让它反过来依赖编排层。
  *
  * <p><b>指针位置要自己记。</b>Playwright 不暴露当前鼠标坐标。每次都从 {@code (0,0)} 出发，
  * 轨迹的起点本身就是特征；本类记着上一次的落点，页面切换时清空（新页面里上一页的坐标没有意义）。
@@ -84,7 +85,14 @@ public class Humanizer implements Humanize {
     private final Rng rng;
     private final Pacing pacing;
     private final HumanCounters counters = new HumanCounters();
-    private final FallbackListener fallbackListener;
+
+    /**
+     * 当前注册的降级回调。不是 {@code final}：它由编排层在每次 Run 开始时替换
+     * （{@link #onFallback(FallbackListener)}），而本实例比 Run 活得久。
+     *
+     * <p>{@code volatile} 是因为注册发生在编排线程、读取发生在 Playwright 线程。
+     */
+    private volatile FallbackListener fallbackListener;
 
     /**
      * 已预热的页面。用 {@link WeakHashMap} 按页面身份计，页面被关闭后条目自动消失，
@@ -102,43 +110,37 @@ public class Humanizer implements Humanize {
     private boolean pressed;
 
     /**
-     * 一次交互降级时的回调。
-     *
-     * <p>存在的理由：降级必须能被查（spec 0006 §2.1 第 8 条：每次降级写一条 {@code run_log}），
-     * 而 {@code run_log} 需要 {@code runId}，本层没有也不该有。调用方在阶段 2 用适配器手里的
-     * {@code RunStore} 实现这个接口即可，不必为它改本层的任何方法签名。
-     */
-    @FunctionalInterface
-    public interface FallbackListener {
-
-        /**
-         * @param kind   动作类型
-         * @param reason 失败条件，直接进日志，所以必须是"哪一条没过"而不是"出错了"
-         */
-        void onFallback(HumanCounters.Kind kind, String reason);
-    }
-
-    /**
      * 生产用构造：随机源、节奏、计数都按配置自建。
+     *
+     * <p>降级回调此时是一个空实现，由编排层在 Run 开始时用
+     * {@link #onFallback(FallbackListener)} 替换。
      *
      * @param config 参数；{@code enabled=false} 时本实例退化为原生写法
      */
     public static Humanizer create(HumanizeConfig config) {
         Rng rng = Rng.of(config.seed());
-        return new Humanizer(config, rng, Pacing.system(rng), (kind, reason) -> {
-        });
+        return new Humanizer(config, rng, Pacing.system(rng));
     }
 
     public Humanizer(HumanizeConfig config, Rng rng, Pacing pacing) {
-        this(config, rng, pacing, (kind, reason) -> {
-        });
+        this(config, rng, pacing, FallbackListener.NONE);
     }
 
     public Humanizer(HumanizeConfig config, Rng rng, Pacing pacing, FallbackListener fallbackListener) {
         this.config = config != null ? config : HumanizeConfig.defaults();
         this.rng = rng;
         this.pacing = pacing;
-        this.fallbackListener = fallbackListener;
+        this.fallbackListener = fallbackListener != null ? fallbackListener : FallbackListener.NONE;
+    }
+
+    @Override
+    public void onFallback(FallbackListener listener) {
+        this.fallbackListener = listener != null ? listener : FallbackListener.NONE;
+    }
+
+    @Override
+    public Pacing pacing() {
+        return pacing;
     }
 
     // ---------------------------------------------------------------- 预热
@@ -192,6 +194,9 @@ public class Humanizer implements Humanize {
             return;
         }
         Page page = target.page();
+        // 预热按页面惰性触发：这里是"这个标签页真的要被操作了"的第一个时机。
+        // 不能放在 newPage() 之后——那时页面还是空的，没有内容可看（Q12）。
+        warmUp(page);
         try {
             // 不在视口内就先滚进来。这是 Playwright 自己的判断，比用坐标猜可靠
             target.scrollIntoViewIfNeeded();
@@ -305,6 +310,8 @@ public class Humanizer implements Humanize {
         }
         try {
             int height = viewportHeight(page);
+            // 与 click 同一条惰性预热规则：滚动通常是页面上第一个发生的交互
+            warmUp(page);
             hoverOnScrollArea(page, hotArea, height);
             int[] plan = HumanScrollPlan.steps(dy, height, config.scroll().stepRatio(), rng);
             for (int step : plan) {
@@ -322,13 +329,70 @@ public class Humanizer implements Humanize {
         }
     }
 
+    @Override
+    public void scrollPageByScreens(Page page, Locator hotArea, double screens) {
+        if (screens == 0) {
+            return;
+        }
+        double pixels = screens * viewportHeight(page);
+        // 正数向下取 floor、负数向上取 ceil：两个方向都是"不要多滚"。
+        // 正数用 floor 是为了与改造前 Boss 的 `Math.floor(innerHeight * 1.5)` 得到同一个整数。
+        int dy = (int) (screens > 0 ? Math.floor(pixels) : Math.ceil(pixels));
+        scrollPage(page, hotArea, dy);
+    }
+
+    @Override
+    public void scrollPageToBottom(Page page, Locator hotArea) {
+        scrollPage(page, hotArea, remainingToBottom(page));
+    }
+
+    @Override
+    public void scrollPageToTop(Page page, Locator hotArea) {
+        scrollPage(page, hotArea, -scrollOffset(page));
+    }
+
+    /**
+     * 距文档底部还有多少像素，单位为 0 表示已在底部或读不到。
+     *
+     * <p>取两个 {@code scrollHeight} 的较大者：哪个元素承载滚动条取决于页面 CSS，
+     * 两个平台都不保证，只取其中一个会在某次改版后静默变成"滚不动"。
+     */
+    private int remainingToBottom(Page page) {
+        Object value = safeEvaluate(page, """
+                () => {
+                  const doc = document.documentElement;
+                  const height = Math.max(document.body ? document.body.scrollHeight : 0,
+                                          doc ? doc.scrollHeight : 0);
+                  return Math.max(0, Math.round(height - window.scrollY));
+                }
+                """);
+        return value instanceof Number number ? Math.max(0, number.intValue()) : 0;
+    }
+
+    /** 已从顶部滚过多少像素。 */
+    private int scrollOffset(Page page) {
+        Object value = safeEvaluate(page, "() => Math.round(window.scrollY)");
+        return value instanceof Number number ? Math.max(0, number.intValue()) : 0;
+    }
+
     /** 把指针放进列表容器（没有容器就用视口中线）。指针不在容器上时滚轮滚的是整页。 */
     private void hoverOnScrollArea(Page page, Locator hotArea, int viewportHeight) {
         HumanAim.Box area = hotArea == null ? null : box(hotArea);
+        int width = viewportWidth(page);
         HumanAim hover = area == null || area.degenerate()
-                ? new HumanAim(viewportWidth(page) / 2.0, viewportHeight / 2.0)
+                ? new HumanAim(width / 2.0, viewportHeight / 2.0)
                 : HumanAim.gauss(area, config.mouse().jitter(), rng);
-        movePointer(page, hover, rng.uniformInt(config.mouse().steps()));
+        // 容器比视口高时（长列表很常见），外框会向上/向下溢出视口，落点算出来可能是负数或
+        // 超出视口。滚轮事件命中的是"该坐标下的元素"，坐标在视口外就等于没停在任何东西上。
+        // 所以夹一次：宁可偏离中心，也要保证指针确实落在页面内。
+        movePointer(page, clampToViewport(hover, width, viewportHeight),
+                rng.uniformInt(config.mouse().steps()));
+    }
+
+    private static HumanAim clampToViewport(HumanAim point, int width, int height) {
+        return new HumanAim(
+                Math.min(Math.max(point.x(), 1), Math.max(1, width - 2)),
+                Math.min(Math.max(point.y(), 1), Math.max(1, height - 2)));
     }
 
     // ---------------------------------------------------------------- 输入
@@ -337,8 +401,12 @@ public class Humanizer implements Humanize {
     public boolean type(Locator input, String text) {
         String target = text != null ? text : "";
         if (!config.active()) {
+            // 关掉开关时要与改造前逐字一致，包括这一次点击：两家适配器原来的写法都是
+            // 「click 建立焦点 → fill / 赋 innerText」，而 fill 只调 DOM 的 focus()，
+            // 不发鼠标事件。少这一次点击，页面侧会少一对 mousedown/mouseup。
+            input.click(new Locator.ClickOptions().setTimeout(5_000));
             writeNative(input, target);
-            // 关掉开关时不额外读回：旧路径没有这次往返，多一次 CDP 调用就是行为差异
+            // 不读回：旧路径没有这次往返，多一次 CDP 调用就是行为差异
             return true;
         }
         String failure;

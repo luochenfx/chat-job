@@ -1,6 +1,8 @@
 package com.chatjob.driver;
 
 import com.chatjob.config.AppProperties;
+import com.chatjob.driver.human.Humanize;
+import com.chatjob.driver.human.Humanizer;
 import com.chatjob.platform.PlatformSwitches;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -62,9 +64,13 @@ public class BrowserSessions {
         return byPlatform.computeIfAbsent(key, p -> {
             PlaywrightExecutor executor = new PlaywrightExecutor(p);
             BrowserSession session = new BrowserSession(p, props, executor, patchright, browserChannel, switches);
-            log.debug("[{}] 已建立独立浏览器上下文声明（profile: {}，线程: {}）",
-                    p, session.userDataDir(), executor.threadName());
-            return new PlatformBrowser(p, executor, session);
+            // 人类化交互实例与平台一起建、跟着平台走：它的鼠标坐标、随机序列、计数都是
+            // 该平台页面上的状态，跨平台共享既不安全也没有意义（PlatformBrowser 的注释里有理由）
+            Humanize humanize = Humanizer.create(props.humanize());
+            log.debug("[{}] 已建立独立浏览器上下文声明（profile: {}，线程: {}，人类化交互: {}）",
+                    p, session.userDataDir(), executor.threadName(),
+                    props.humanize().active() ? "启用" : "停用");
+            return new PlatformBrowser(p, executor, session, humanize);
         });
     }
 
