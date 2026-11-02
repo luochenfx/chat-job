@@ -689,7 +689,7 @@ Boss 的增量比智联大：40 轮里每轮都是一次完整的滚轮计划（
 | # | 计划 | 实际 | 影响 |
 |---|---|---|---|
 | 1 | 投 1–2 条后停 | Boss 投了 3 条 | 第 3 条在取消指令到达前已经发出。副作用是给 3 位真实 HR 发了招呼语；正面作用是多一条投递样本 |
-| 2 | 用 DOM 取证（`wheel`、`keydown`） | Boss 侧取不到：`browser-data/boss` 里的 bsk 扩展是 **0.3.3**，`cooperate` 在该扩展里没有实现（`daemon does not recognise this RPC method`）；`snapshot` 借入后只读回空树，截图是空白 | 页面证据停在 TITLE/URL 一层。该结论与阶段 2 §8.4、阶段 3 §9.4 相同，**不是**本阶段新出现的问题。异常事件的取证仍以 `HumanizeBrowserProbeTest` 为准 |
+| 2 | 用 DOM 取证（`wheel`、`keydown`） | Boss 侧取不到：`browser-data/boss` 里的 bsk 扩展当时是 **0.3.3**，`cooperate` 在该扩展里没有实现（`daemon does not recognise this RPC method`）；`snapshot` 借入后只读回空树，截图是空白。**该 profile 已于当日升到 0.4.1，复验结果见 §10.9：截图可用、文本级仍需借入** | 页面证据停在 TITLE/URL 一层。该结论与阶段 2 §8.4、阶段 3 §9.4 相同，**不是**本阶段新出现的问题。异常事件的取证仍以 `HumanizeBrowserProbeTest` 为准 |
 | 3 | 「真实投递上的实时请求头」仍列为未补 | 未补：本轮有真实投递，但没有同时挂网络观测 | `Referer` / `Sec-Fetch-Site` 的结论仍来自 `ListFirstEntryProbeTest`（本地站点、四种进入方式）。要补就是"一次带观测的真实投递" |
 
 ### 10.8 交接：仍未闭环的部分
@@ -700,4 +700,46 @@ Boss 的增量比智联大：40 轮里每轮都是一次完整的滚轮计划（
 | 2 | 预热是否真的改变平台判定 | 无法直接观测。本轮只能说"没有新增限流/安全验证告警" |
 | 3 | `ScrollParams.waitTimeSeconds` 是死配置 | 依旧没人读。另开需求 |
 | 4 | 真 `contenteditable` 上的条件 c 容差与 `Ctrl+A` 作用域 | **本轮已用真实页面验证通过**：Boss 三次招呼语与一次值守回复全部一次写入成功，降级 0 次，读回文本与目标逐字一致。容差 2 无需调整 |
-| 5 | Boss 侧 DOM 级页面证据 | 受 `browser-data/boss` 的扩展版本限制（0.3.3）。要取需要把该 profile 的扩展升到 0.4.x |
+| 5 | Boss 侧 DOM 级页面证据 | 升级前受扩展版本限制（0.3.3）。**已升到 0.4.1 复验（§10.9）**：截图从空白变成真实画面，但 `observe`/`snapshot` 仍需 `tab borrow`，而借入要人在浏览器窗口里点确认，本轮未完成。文本级证据仍缺 |
+
+### 10.9 扩展升到 0.4.1 后的页面证据复验（2026-11-02 12:48–13:22）
+
+`browser-data/boss` 的 bsk 扩展从 0.3.3 升到 **0.4.1** 后重跑了一遍观测，目的只有一个：确认"页面证据停在
+TITLE/URL"是否只是扩展版本造成。结论是**只解决了一半**。
+
+| 观测动作 | 结果 |
+|---|---|
+| `bsk browsers` | 实例 `9f6c67c2`（LABEL「自动化浏览器」）报 `EXT 0.4.1`；智联 `f1c52653` 仍是 `0.4.0` |
+| `bsk tab list` | 两平台都读到真实标题与 URL（与 §10.3 一致），说明"知道页面上是哪个站"这一层从未受限 |
+| `bsk screenshot --tab-id <用户标签>` | **可用**。Boss 302KB、智联 201KB，画面是真实页面。同一 profile 在 0.3.3 时期截出来是 7KB 空白，可直接作版本对照 |
+| `bsk cooperate sync` | 仍失败，但错误换了：0.3.3 是 `daemon does not recognise this RPC method`（方法没实现），0.4.1 是 `Could not establish connection. Receiving end does not exist.`（有方法、找不到页面侧的接收端） |
+| `bsk observe` / `bsk snapshot --tab-id` | 被沙箱拒绝：`observe can only act on tabs inside the Agent Window … borrow it first`。语义观测必须以"标签被借入 Agent Window"为前提 |
+| `bsk tab borrow` | 两次超时（60s、120s）：`timed out waiting for human confirmation`。确认框要人在浏览器窗口里点，本次会话无人应答。bsk 明确提示不要重复请求，遂停手 |
+| `bsk get-html --tab-id` | 返回 `<html><head></head><body></body></html>`：取到的是 Agent Window 的空文档，不是目标标签 |
+| `bsk doctor` | `browser protocol compatible` 报警：`ext 1.8 vs daemon 1.7`（CLI 与 daemon 仍是 0.4.0） |
+
+**截图内容（可作页面侧证据）**：
+
+- Boss：搜索框 `java`，筛选项「福州」+「10-20K」，左侧卡片如「java程序员 8-12K·13薪 @唐龙电商」、
+  「Java-统本-智能客服-ai经验-双休 10-11K @版石软件(上海)」，右侧已展开详情面板（岗位职责 / 任职要求）。
+- 智联：搜索 `java`，筛选「福州」，左侧卡片如「Java实习生（26/27届）80-100元/天 @福建福大北斗通信科技有限公司」、
+  「Java开发工程师 6000-8000元 @福清市融图贸易有限公司」，右侧详情面板。
+
+两边的画面都与配置里的搜索条件一致，也证明了「点开卡片 → 右侧详情面板」这一步在真实页面上成立。
+
+**复验期间的运行**（都是演练模式，未向任何人发送消息）：
+
+| Run | 平台 | 结果 |
+|---|---|---|
+| 77 | Boss | `组合 #0 加载 300 张卡片（39 轮，确认到底）`；交互 43 次、降级 0 |
+| 78 | 智联 | `组合 #0 加载 194 张卡片（6 轮，确认到底）`；交互 11 次、降级 0 |
+| 79 | Boss | `组合 #0 加载 240 张卡片（31 轮，撞到轮数上限）`——实际是我在滚动途中先暂停再取消，见下面那条日志口径问题 |
+
+**结论**：升级后拿到的是**像素级**页面证据（此前是空白），**文本级**（aria 树、`get-html` 的 DOM）仍取不到。
+瓶颈不是扩展版本，而是 `tab borrow` 的人工确认——这个浏览器由服务用 Playwright `launchPersistentContext`
+拉起，确认 UI 需要人在那个窗口上点一次，无值守的会话里无法完成。
+
+**顺带发现的一处日志口径问题（与本层无关，未改）**：`scrollUntilEnd` 的 `stop` 判据在轮首 `break` 之后
+`loadedAll` 保持 `false`，调用方于是把这次中断打印成「撞到轮数上限」，再补一条
+`滚动到 300 轮上限仍未确认加载完毕` 的 WARN。Run 79 的轮数是 31，离 300 很远，读日志的人会误判成
+"扫满了上限"。两个适配器同形。要修就得让 `ScrollOutcome` 多带一个"被人工停止"的标记，属于另一处改动。

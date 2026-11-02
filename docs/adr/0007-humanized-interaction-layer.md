@@ -89,7 +89,14 @@ accepted（2026-11-01，spec 0006）。本文只记录三条容易被后人"顺�
 | 4 | 不变：按岗位在列表里定位卡片仍不具备 |
 | 5 | 不变：预热的效果仍无法直接观测，只能说"没有新增限流告警" |
 
-一条新的限制：`browser-data/boss` 里的 bsk 扩展是 0.3.3，`cooperate` 在该版本里没有实现，
+一条新的限制：`browser-data/boss` 里的 bsk 扩展当时是 0.3.3，`cooperate` 在该版本里没有实现，
 所以 Boss 侧的 DOM 级观测（`snapshot` / `screenshot`）取不到内容。这不是本层的问题，但它意味着
 "页面侧确实产生了 `wheel` / `keydown`"这类证据在 Boss 上只能由 `HumanizeBrowserProbeTest`（本地
 `data:` 页）与智联的真实页面承担。要补，得把该 profile 的扩展升到 0.4.x。
+
+**该限制在升级到 0.4.1 后的复验结果（2026-11-02 13:00，详见 spec 0006 §10.9）**：截图这一半解决了——
+`screenshot --tab-id` 能取到真实画面（0.3.3 时期是 7KB 空白，现在 302KB 真实列表页），`tab list` 的标题与
+URL 也一直可用。文本这一半没解决：`observe` / `snapshot` 被沙箱要求先把标签 `tab borrow` 进 Agent Window，
+而借入需要人在那个由 Playwright 拉起的浏览器窗口里点一次确认，无值守会话里两次都超时。`cooperate sync`
+的错误也从"方法未实现"变成 `Receiving end does not exist`。所以"`wheel` / `keydown` 真的派发过"这一步
+仍然只有 `HumanizeBrowserProbeTest` 与智联的历史结论支撑，Boss 侧要到 DOM 文本级取证，**前提是有人在场点确认**。
