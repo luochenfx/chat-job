@@ -24,6 +24,15 @@ public interface Pacing {
     /** 固定等待，用于"按下到抬起"这类必须精确的短间隔。 */
     void sleepMs(int ms);
 
+    /**
+     * 在 {@code [min, max]} 内取一个随机整数，两端都含。
+     *
+     * <p>存在的理由：有些节奏不是一个时长，而是<b>一个次数阈值</b>——"每处理 N 个条目停一次"里的
+     * N 本身也要随机，否则停顿的周期会固定下来。让调用方自己抽随机数，就要把随机源暴露给适配器，
+     * 而适配器不该持有随机源（它只该说"该停了"）。
+     */
+    int uniformInt(int min, int max);
+
     /** 真的睡。{@code rng} 与其它随机量共用一条序列，种子非 0 时整体可复现。 */
     static Pacing system(Rng rng) {
         return new SystemPacing(rng);
@@ -41,6 +50,11 @@ public interface Pacing {
         @Override
         public void sleep(int minMs, int maxMs) {
             sleepMs(rng.uniformInt(HumanizeConfig.Range.of(minMs, maxMs)));
+        }
+
+        @Override
+        public int uniformInt(int min, int max) {
+            return rng.uniformInt(HumanizeConfig.Range.of(min, max));
         }
 
         /**

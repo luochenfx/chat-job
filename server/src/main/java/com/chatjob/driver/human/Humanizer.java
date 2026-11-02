@@ -5,6 +5,7 @@ import com.microsoft.playwright.Page;
 import com.microsoft.playwright.PlaywrightException;
 import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.options.ViewportSize;
+import com.microsoft.playwright.options.WaitUntilState;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
@@ -77,6 +78,13 @@ public class Humanizer implements Humanize {
     private static final String JS_INNER_HEIGHT = "() => window.innerHeight";
 
     private static final String JS_INNER_WIDTH = "() => window.innerWidth";
+
+    /**
+     * 由当前文档发起跳转。{@code location.href} 与页面里点一个同站链接在请求头上等价
+     * （{@code Referer} + {@code Sec-Fetch-Site: same-origin}），而 {@code page.navigate}
+     * 在协议层是浏览器发起的导航，永远不带来源（实测见 {@code ListFirstEntryProbeTest}）。
+     */
+    private static final String JS_NAVIGATE = "url => { location.href = url; }";
 
     /** 视口读不到时的备用尺寸，与 {@code HumanScrollPlan} 用的是同一个取值。 */
     private static final int FALLBACK_VIEWPORT = 800;
@@ -573,8 +581,13 @@ public class Humanizer implements Humanize {
 
     @Override
     public void navigate(Page page, String url, int timeoutMs) {
+        // 两家适配器的导航一律以「DOM 可用」为到达时刻，不用默认的 LOAD：
+        // 列表页与详情页都挂着长连接与广告位，LOAD 可能要等到超时才返回，
+        // 而后续判据（卡片数、按钮文案）本来就是自己等 DOM。关掉开关时也保留这一点，
+        // 否则"关掉即回到改造前"就不成立（改造前用的就是 DOMCONTENTLOADED）。
+        Page.NavigateOptions options = navOptions(timeoutMs);
         if (!config.active()) {
-            page.navigate(url, new Page.NavigateOptions().setTimeout(timeoutMs));
+            page.navigate(url, options);
             return;
         }
         warmUp(page);
@@ -583,8 +596,53 @@ public class Humanizer implements Humanize {
         pacing.sleep(config.pacing().betweenActionsMs().minInt(),
                 config.pacing().betweenActionsMs().maxInt());
         // 导航失败不降级、不忽略：没有"原生的导航"可以退回，调用方必须自己决定是否继续
-        page.navigate(url, new Page.NavigateOptions().setTimeout(timeoutMs));
+        page.navigate(url, options);
         counters.interaction();
+    }
+
+    @Override
+    public void navigateInPage(Page page, String url, int timeoutMs) {
+        if (!config.active()) {
+            // 停用路径就是改造前的写法：一次普通的顶层导航（也因此不带来源）
+            page.navigate(url, navOptions(timeoutMs));
+            return;
+        }
+        warmUp(page);
+        pointer = null;
+        pacing.sleep(config.pacing().betweenActionsMs().minInt(),
+                config.pacing().betweenActionsMs().maxInt());
+        try {
+            // waitForNavigation 包住 evaluate：先建立等待、再发起跳转，避免"跳转已经提交、
+            // 再去等加载状态"那个竞态（那时旧文档已加载完，等待会立刻返回，读页面读到一半）
+            page.waitForNavigation(new Page.WaitForNavigationOptions()
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+                    .setTimeout(timeoutMs), () -> {
+                try {
+                    page.evaluate(JS_NAVIGATE, url);
+                } catch (PlaywrightException e) {
+                    // 跳转一提交，执行上下文就被销毁，evaluate 常以异常结束。这不是失败：
+                    // 这次导航有没有发生由外面的 waitForNavigation 判定
+                    log.trace("跳转已发起，evaluate 以异常结束: {}", e.getMessage());
+                }
+            });
+        } catch (PlaywrightException e) {
+            // waitForNavigation 只等"有导航提交"，不等目标地址：超时意味着跳转根本没发生，
+            // 与 page.navigate 失败同级，交给调用方决定（投递路径会把它记成一次失败）
+            log.warn("页面内跳转失败: {} → {}", url, e.getMessage());
+            throw e;
+        }
+        counters.interaction();
+    }
+
+    @Override
+    public boolean active() {
+        return config.active();
+    }
+
+    private static Page.NavigateOptions navOptions(int timeoutMs) {
+        return new Page.NavigateOptions()
+                .setTimeout(timeoutMs)
+                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED);
     }
 
     // ---------------------------------------------------------------- 计数

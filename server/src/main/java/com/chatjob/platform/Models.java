@@ -130,7 +130,14 @@ public final class Models {
     public record ChatMessage(String id, String text, boolean fromSelf, boolean image) {
     }
 
-    /** 平台无关的投递选项 */
-    public record DeliveryOptions(boolean allowRepeatChat, List<String> repeatMessages) {
+    /**
+     * 平台无关的投递选项。
+     *
+     * @param search 本次投递所属的搜索组合。投递时要用它先把详情页的<b>来源</b>变成站内
+     *               （先进列表页、再进详情页，见 spec 0006 §3.5）；为 {@code null} 时
+     *               只能从空白页直接打开详情页，那一跳的请求来源不是站内。
+     *               不是"投递条件"——筛选条件在平台配置里，这里只用来拼列表页 URL。
+     */
+    public record DeliveryOptions(boolean allowRepeatChat, List<String> repeatMessages, SearchQuery search) {
     }
 }

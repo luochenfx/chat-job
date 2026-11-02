@@ -55,6 +55,10 @@ public interface PlatformAdapter {
     /**
      * 投递：打开详情页 → 进会话 → 判断是否重复沟通 → 发招呼语 → 等送达。
      * 返回 SKIPPED 表示"平台侧已是旧会话且不允许重复沟通"，这不是失败。
+     *
+     * <p>打开详情页必须<b>先从列表页进</b>（{@code ListFirstEntry}）：详情页请求的
+     * {@code Referer} 与 {@code Sec-Fetch-Site} 由上一个文档决定，从空白页直接打开就是
+     * "外部直达"。列表页地址由 {@link Models.DeliveryOptions#search()} 里的搜索组合拼出来。
      */
     DeliveryResult deliver(JobDetail job, String greeting, DeliveryOptions options, BooleanSupplier stop);
 

@@ -5,8 +5,10 @@ import com.chatjob.driver.BrowserSession;
 import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
+import com.chatjob.driver.human.HumanBatchPacer;
 import com.chatjob.driver.human.Humanize;
 import com.chatjob.platform.Digest;
+import com.chatjob.platform.ListFirstEntry;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
 import com.chatjob.platform.Models.DeliveryResult;
@@ -69,6 +71,15 @@ public class BossAdapter implements PlatformAdapter {
     private static final Pattern ENCRYPT_ID = Pattern.compile("/job_detail/([^./?]+)\\.html");
     private static final int DELIVER_CONFIRM_TIMEOUT_MS = 45_000;
 
+    /**
+     * 投递第 1 跳（搜索列表页）最多等这么久出现卡片。等不到就直接进详情页，
+     * 只记 WARN —— 投递成功率优先于来源一致性（spec 0006 §3.5）。
+     */
+    private static final int LIST_CARD_WAIT_MS = 8_000;
+
+    /** 投递两跳各自的导航超时，与改造前直接打开详情页时用的值一致。 */
+    private static final int DETAIL_NAV_TIMEOUT_MS = 45_000;
+
     private final BrowserSession session;
     private final PlaywrightExecutor executor;
     private final ConfigStore configStore;
@@ -81,6 +92,14 @@ public class BossAdapter implements PlatformAdapter {
      * 改名会让守卫把每一次合法调用都报成违规。
      */
     private final Humanize human;
+
+    /**
+     * 详情页连读的批次停顿（spec 0006 §3.5：每 5–8 张插一次 800–2000ms）。
+     *
+     * <p>与卡片之间原有的 {@code pause(400,700)} 是两件事：那是"读完一张之后歇一下"，
+     * 这个是"连续读了半分钟之后歇久一点"。两者叠加，所以单张卡的处理节奏没有变。
+     */
+    private final HumanBatchPacer detailPacer;
 
     private Page listPage;
     private Page threadPage;
@@ -95,6 +114,7 @@ public class BossAdapter implements PlatformAdapter {
         this.session = browser.session();
         this.executor = browser.executor();
         this.human = browser.humanize();
+        this.detailPacer = new HumanBatchPacer(human.pacing());
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -270,6 +290,12 @@ public class BossAdapter implements PlatformAdapter {
             if (cardIndex >= count) {
                 return null;
             }
+            // 批次边界落在两张卡之间：此刻上一张已经读完、下一张还没点，
+            // 停顿不会插在某个动作的中间（HumanBatchPacer 的注释）。
+            // 开关关掉时整段跳过：这是本期新增的节奏，留着会让"关掉即回到改造前"不成立
+            if (human.active()) {
+                detailPacer.beforeNext();
+            }
             Response response = null;
             try {
                 if (cardIndex == 0 && count > 1) {
@@ -405,9 +431,7 @@ public class BossAdapter implements PlatformAdapter {
             Page detailPage = session.newPage();
             Page chatPage = detailPage;
             try {
-                detailPage.navigate(detailUrl, new Page.NavigateOptions()
-                        .setTimeout(45_000)
-                        .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
+                openDetailPage(detailPage, detailUrl, options);
                 pause(1_000, 1_600);
 
                 String buttonText = waitForChatButton(detailPage, stop);
@@ -500,6 +524,32 @@ public class BossAdapter implements PlatformAdapter {
                 closeQuietly(detailPage); // navigator 已关掉的会跳过
             }
         });
+    }
+
+    /**
+     * 打开岗位详情页：先到搜索列表页，再进详情页（spec 0006 §3.5）。
+     *
+     * <p>与 {@link #openSearch} 的区别是目的：那边是为了拿列表数据，这边只是为了让详情页的
+     * 请求带上站内来源（{@code Referer} + {@code Sec-Fetch-Site: same-origin}）。
+     * 两者的 URL 拼法相同，所以筛选条件照样由 {@link BossUrlBuilder} 从平台配置里取。
+     *
+     * <p>列表页地址拼不出来（配置缺城市码之类）时退化为直接打开详情页，只记 WARN：
+     * 投递本身不能因为"来源修正"做不成而失败。
+     */
+    private ListFirstEntry.Outcome openDetailPage(Page page, String detailUrl, DeliveryOptions options) {
+        SearchQuery query = options != null ? options.search() : null;
+        String listUrl = null;
+        if (query == null) {
+            log.warn("投递时没有带搜索条件，详情页只能从空白页直接打开（来源不是站内）");
+        } else {
+            try {
+                listUrl = urlBuilder.build(configStore.platformConfig(PLATFORM), query.city(), query.keyword());
+            } catch (Exception e) {
+                log.warn("拼列表页地址失败，详情页改从空白页直接打开: {}", e.getMessage());
+            }
+        }
+        return ListFirstEntry.open(human, page, listUrl, BossSelectors.CARD, detailUrl,
+                LIST_CARD_WAIT_MS, DETAIL_NAV_TIMEOUT_MS);
     }
 
     private String waitForChatButton(Page page, BooleanSupplier stop) {

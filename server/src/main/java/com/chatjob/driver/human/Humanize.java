@@ -95,8 +95,46 @@ public interface Humanize {
     /** 滚回文档顶部。 */
     void scrollPageToTop(Page page, Locator hotArea);
 
-    /** 导航。带节奏：先预热，再按节奏等一小段，然后才发请求。 */
+    /**
+     * 导航。带节奏：先预热，再按节奏等一小段，然后才发请求。
+     *
+     * <p><b>导航失败会抛出</b>（与 Playwright 的 {@code page.navigate} 一致）：没有"原生的导航"
+     * 可以退回，是否继续由调用方决定。
+     *
+     * <p><b>这条路不带来源</b>：{@code page.navigate} 在协议层是"浏览器发起的导航"，没有发起方文档，
+     * 所以请求里 {@code Referer} 为空、{@code Sec-Fetch-Site: none}——<b>与上一个页面是不是同站无关</b>
+     * （实测见 {@code ListFirstEntryProbeTest}）。要让请求带上站内来源，用
+     * {@link #navigateInPage}。
+     */
     void navigate(Page page, String url, int timeoutMs);
+
+    /**
+     * 让<b>当前文档</b>跳转到 {@code url}（页面里执行 {@code location.href = url}），
+     * 等这次导航完成。
+     *
+     * <p>与 {@link #navigate} 的唯一实质区别在请求头：由文档发起的导航会带上
+     * {@code Referer: <当前地址>} 与 {@code Sec-Fetch-Site: same-origin}（跨站时是 {@code cross-site}），
+     * 这也正是真人点一个站内链接时浏览器发出的东西。
+     *
+     * <p>为什么本层要有这个方法、而不是让调用方自己 {@code page.navigate}：来源只能这样改
+     * （ADR-0007 Decision 6 的目标），而"怎么改"属于交互层。方法名只描述机制
+     * （"由当前文档发起"），不描述业务目的——"从列表页进详情页"是平台概念，由调用方拼。
+     *
+     * <p><b>已知限制</b>：这是页面内的跳转，不是用户点击。两者产生的请求头一致
+     * （{@code Sec-Fetch-Site} / {@code Referer} / {@code Sec-Fetch-User} 都相同，已实测），
+     * 但页面上不存在一次真实的 {@code mousedown}。要做到"点链接"，得先在列表里按岗位找到那张卡，
+     * 这项能力本期没有（spec 0006 §2.3）。
+     */
+    void navigateInPage(Page page, String url, int timeoutMs);
+
+    /**
+     * 本层是否生效（对应 {@code chat-job.humanize.enabled}）。
+     *
+     * <p>只给<b>层外拼起来的动作序列</b>用：像"先到列表页、再进详情页"这种由调用方决定要不要做的
+     * 复合动作，开关关掉时必须<b>整段跳过</b>，否则会多出一次列表页加载，那就不再是改造前的行为。
+     * 单条交互不必问这个——直接调，停用路径本身就等价于原生写法。
+     */
+    boolean active();
 
     /**
      * 清掉某个页面的预热标记。

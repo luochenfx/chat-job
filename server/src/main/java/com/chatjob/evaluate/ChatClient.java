@@ -80,9 +80,17 @@ public class ChatClient {
             throw new IllegalStateException("HTTP " + response.statusCode() + ": " + truncate(response.body()));
         }
         JsonNode root = json.readTree(response.body());
-        String content = root.path("choices").path(0).path("message").path("content").asText("");
+        JsonNode choice = root.path("choices").path(0);
+        String content = choice.path("message").path("content").asText("");
         if (content.isBlank()) {
             throw new IllegalStateException("模型返回内容为空: " + truncate(response.body()));
+        }
+        // finish_reason 是"输出为什么停"的唯一线索：length 表示撞到输出上限，
+        // 此时 JSON 必然是残缺的。不记它，事后只能看到"解析失败"而无法判断是模型写错还是被截断
+        String finishReason = choice.path("finish_reason").asText("");
+        if (!finishReason.isBlank() && !"stop".equals(finishReason)) {
+            log.warn("模型输出未正常结束（finish_reason={}），内容可能不完整 | 模型={} | 片段: {}",
+                    finishReason, provider.getModel(), truncate(content));
         }
         return content;
     }

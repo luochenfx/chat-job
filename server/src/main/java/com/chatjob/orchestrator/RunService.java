@@ -799,7 +799,11 @@ public class RunService {
 
             int resumeCard = (i == startIndex && run.getLastCardIndex() != null) ? run.getLastCardIndex() : 0;
             try {
-                adapter().openSearch(new SearchQuery(combo.getCity(), null, combo.getKeyword()));
+                // 同一个组合的搜索条件既用于打开列表页，也随投递传下去：投递时的详情页要
+                // 先从这张列表页进，来源才是站内（spec 0006 §3.5）。两处用同一个对象，
+                // 免得"扫描用的是城市 A、投递拼出来的列表页是城市 B"这种只在 URL 上可见的错位。
+                SearchQuery query = new SearchQuery(combo.getCity(), null, combo.getKeyword());
+                adapter().openSearch(query);
                 ScrollOutcome scroll = adapter().scrollUntilEnd(
                         new ScrollParams(cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
                                 cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds()),
@@ -808,7 +812,8 @@ public class RunService {
                 log(run, "INFO", "组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
                         + scroll.rounds() + " 轮，" + (scroll.loadedAll() ? "确认到底" : "撞到轮数上限") + "）");
 
-                StandbyGate.StopReason stop = processCards(run, cfg, combo, scroll.cards(), resumeCard, comboStartedAt);
+                StandbyGate.StopReason stop = processCards(run, cfg, combo, scroll.cards(), resumeCard,
+                        comboStartedAt, query);
                 if (stop != null) {
                     // 配额 / 评估到顶：这个组合没跑完，既不能记 DONE，也不能推进断点 ——
                     // 待命期配额被调高后要回到这张卡继续，而不是从下一个组合重来
@@ -852,7 +857,8 @@ public class RunService {
     }
 
     private StandbyGate.StopReason processCards(RunEntity run, PlatformConfigEntity cfg, CombinationRunEntity combo,
-                                                int cardCount, int startCard, long comboStartedAt) {
+                                                int cardCount, int startCard, long comboStartedAt,
+                                                SearchQuery query) {
         int cardsSinceWatch = 0;
         long lastWatchAt = System.currentTimeMillis();
         int limitSeconds = cfg.getCombinationTimeLimitSec() == null ? 1200 : cfg.getCombinationTimeLimitSec();
@@ -910,7 +916,7 @@ public class RunService {
             // 那里 incr 的两个点才是唯一口径，照抄一遍只会多出第二份真相。
             int evaluatedBefore = count(run.getEvaluatedCount());
             int deliveredBefore = count(run.getDeliveredCount());
-            processOneJob(run, cfg, detail);
+            processOneJob(run, cfg, detail, query);
             int evaluatedDelta = count(run.getEvaluatedCount()) - evaluatedBefore;
             int deliveredDelta = count(run.getDeliveredCount()) - deliveredBefore;
             if (evaluatedDelta > 0 || deliveredDelta > 0) {
@@ -969,8 +975,13 @@ public class RunService {
         }
     }
 
-    /** 单岗位的决策与投递 */
-    private void processOneJob(RunEntity run, PlatformConfigEntity cfg, JobDetail detail) {
+    /**
+     * 单岗位的决策与投递。
+     *
+     * @param query 这张卡所属的搜索组合。投递时随 {@link DeliveryOptions} 一起交给适配器，
+     *              用来拼"详情页的第 1 跳"那个列表页地址（spec 0006 §3.5）
+     */
+    private void processOneJob(RunEntity run, PlatformConfigEntity cfg, JobDetail detail, SearchQuery query) {
         BlacklistMatcher blacklist = new BlacklistMatcher(configStore.blacklist());
         var hit = blacklist.match(detail.companyName(), detail.jobName());
         if (hit.isPresent()) {
@@ -1012,10 +1023,14 @@ public class RunService {
             if (verdict.isFailure()) {
                 // fail-closed：判定不出来就不投
                 DeliveryEntity delivery = jobStore.startDelivery(job.getId(), run.getId(), "AI");
-                jobStore.finishDelivery(delivery, DeliveryResult.skipped("AI 判定失败：" + verdict.error()),
+                // 记 FAILED 而不是 SKIPPED：SKIPPED 在 JobStore.decide 里意味着"已判定不投"，
+                // 会给该岗位打 24 小时冷却。而这里根本没有判定结论 —— 模型不可达、返回坏了，
+                // 都被冷却吸收的话，一次模型故障会让整批岗位一天内不再尝试，且看起来像"AI 认为不合适"。
+                // 记成 FAILED 则下一轮会重新评估，连续失败达到上限后转人工。
+                jobStore.finishDelivery(delivery, DeliveryResult.failed("AI 判定失败：" + verdict.error()),
                         null, verdict.error(), null);
                 publish(run, "job.evaluated", jobEvent(job, "AI_FAILED", 0, verdict.error()));
-                log(run, "WARN", "AI 判定失败已跳过：" + job.getJobName() + " — " + verdict.error());
+                log(run, "WARN", "AI 判定失败，本轮不投（下轮重试）：" + job.getJobName() + " — " + verdict.error());
                 return;
             }
             score = verdict.score();
@@ -1052,7 +1067,7 @@ public class RunService {
 
         DeliveryEntity delivery = jobStore.startDelivery(job.getId(), run.getId(), decidedBy);
         boolean allowRepeat = cfg.getRepeatChatEnabled() != null && cfg.getRepeatChatEnabled() == 1;
-        DeliveryOptions options = new DeliveryOptions(allowRepeat, configStore.repeatMessages(cfg));
+        DeliveryOptions options = new DeliveryOptions(allowRepeat, configStore.repeatMessages(cfg), query);
         act(run, "投递中：" + job.getJobName() + " @ " + job.getCompanyName());
         DeliveryResult result = adapter().deliver(detail, greeting, options, this::shouldStop);
         jobStore.finishDelivery(delivery, result, score, aiReason, aiRaw);

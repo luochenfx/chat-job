@@ -4,9 +4,12 @@ import com.chatjob.config.SecretCipher;
 import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.AiConfigEntity;
+import com.chatjob.store.entity.ProviderEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -93,6 +96,63 @@ class AiJudgeTest {
     }
 
     @Test
+    void 真实坏样本补齐后按判定通过处理() {
+        // 2026-11-02 真实运行里被丢掉的那个岗位：72 分、判定要投，结尾是 。") 而不是 。"}
+        AiJudge.Verdict verdict = judge().parse(
+                "{\"shouldApply\": true, \"score\": 72, \"reason\": \"Java及前端Vue匹配，证券外包需注意\", "
+                        + "\"greeting\": \"您好，6年Java经验，熟悉Spring Boot、Vue与Oracle，关注AI提效，期待沟通证券项目。\")");
+
+        assertThat(verdict.isFailure()).as(verdict.error()).isFalse();
+        assertThat(verdict.shouldApply()).isTrue();
+        assertThat(verdict.score()).isEqualTo(72);
+        assertThat(verdict.greeting()).endsWith("期待沟通证券项目。");
+        // 落库的原文保持模型实际说的内容，便于复盘"当时到底收到了什么"
+        assertThat(verdict.raw()).endsWith("。\")");
+    }
+
+    @Test
+    void 缺shouldApply视为失败而不是默认不投() {
+        AiJudge.Verdict verdict = judge().parse("{\"score\": 80, \"reason\": \"匹配\", \"greeting\": \"您好\"}");
+
+        assertThat(verdict.isFailure()).isTrue();
+        assertThat(verdict.error()).contains("shouldApply");
+    }
+
+    @Test
+    void 首次契约不满足会重试一次() {
+        ScriptedChatClient client = new ScriptedChatClient(
+                "{\"shouldApply\": true, \"score\": 80, \"greeting\": \"您好，我有 6 年 Java 经",
+                GOOD_JSON);
+
+        AiJudge.Verdict verdict = judgeWith(client).judgeWith(new ProviderEntity(), "key", "prompt", 20);
+
+        assertThat(verdict.isFailure()).as(verdict.error()).isFalse();
+        assertThat(verdict.shouldApply()).isTrue();
+        assertThat(client.calls).isEqualTo(2);
+    }
+
+    @Test
+    void 两次都不满足契约则失败且只调用两次() {
+        ScriptedChatClient client = new ScriptedChatClient("我觉得这个岗位挺合适的", "还是不合适");
+
+        AiJudge.Verdict verdict = judgeWith(client).judgeWith(new ProviderEntity(), "key", "prompt", 20);
+
+        assertThat(verdict.isFailure()).isTrue();
+        assertThat(client.calls).isEqualTo(2);
+    }
+
+    @Test
+    void 传输失败不重试() {
+        ScriptedChatClient client = new ScriptedChatClient(new IllegalStateException("HTTP 502"));
+
+        AiJudge.Verdict verdict = judgeWith(client).judgeWith(new ProviderEntity(), "key", "prompt", 20);
+
+        assertThat(verdict.isFailure()).isTrue();
+        assertThat(verdict.error()).contains("HTTP 502");
+        assertThat(client.calls).isEqualTo(1);
+    }
+
+    @Test
     void 端点拼接不重复v1() {
         assertThat(AiJudge.chatEndpoint("https://api.deepseek.com/v1"))
                 .isEqualTo("https://api.deepseek.com/v1/chat/completions");
@@ -102,5 +162,39 @@ class AiJudgeTest {
                 .isEqualTo("https://api.deepseek.com/v1/chat/completions");
         assertThat(AiJudge.chatEndpoint("https://x.com/v1/chat/completions"))
                 .isEqualTo("https://x.com/v1/chat/completions");
+    }
+
+    private static final String GOOD_JSON =
+            "{\"shouldApply\": true, \"score\": 88, \"reason\": \"匹配\", \"greeting\": \"您好，我有 6 年 Java 经验。\"}";
+
+    private static AiJudge judgeWith(ChatClient client) {
+        ObjectMapper json = new ObjectMapper();
+        return new AiJudge((ConfigStore) null, new SecretCipher(), json, client);
+    }
+
+    /**
+     * 手写替身（项目禁 mock 框架）：按脚本依次返回内容，或抛出脚本里的异常。
+     * 记录调用次数，用来区分"重试了"和"没重试"。
+     */
+    private static final class ScriptedChatClient extends ChatClient {
+
+        private final Deque<Object> steps = new ArrayDeque<>();
+        private int calls;
+
+        private ScriptedChatClient(Object... steps) {
+            super(new ObjectMapper());
+            this.steps.addAll(List.of(steps));
+        }
+
+        @Override
+        public String complete(ProviderEntity provider, String apiKey, String systemPrompt, String userPrompt,
+                              int timeoutSeconds, double temperature) throws Exception {
+            calls++;
+            Object step = steps.isEmpty() ? "" : steps.poll();
+            if (step instanceof Exception error) {
+                throw error;
+            }
+            return (String) step;
+        }
     }
 }

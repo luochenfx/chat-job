@@ -185,8 +185,13 @@ page = session.newPage()
 human.warmUp(page)
 human.navigate(page, listUrl)        // 第 1 跳：搜索列表页，带齐城市/关键词
    → 等列表页出现至少一张卡片，最多 8 秒
-human.navigate(page, detailUrl)      // 第 2 跳：详情页，此时 Referer 是列表页
+human.navigateInPage(page, detailUrl) // 第 2 跳：详情页，此时 Referer 是列表页
 ```
+
+**第 2 跳必须由当前文档发起（2026-11-02 实测修正）**：本节初稿写的是两次 `navigate`，实测不成立。
+`page.navigate` 在协议层是浏览器发起的导航，没有发起方文档，所以**前一个页面是不是同站都不影响**——
+两跳之后仍是 `Referer` 空、`Sec-Fetch-Site: none`。四种进入方式的实测表见 ADR-0007 Decision 6。
+结论：第 2 跳用页面内跳转（`location.href`），第 1 跳照常 `navigate`（列表页自己没有来源可言）。
 
 `listUrl` 由 `BossUrlBuilder` / `ZhaopinUrlBuilder` 提供；`deliver` 只拿到 `JobDetail`，没有搜索条件，所以需要把 `SearchQuery` 一并传进 `deliver`，或在 `DeliveryOptions` 里带上。**这是本 spec 唯一改动 `Models` 的地方**，只加字段，不改已有字段语义。
 
@@ -512,3 +517,76 @@ Boss 处于风控期，跑不出页面级证据。为了让"滚轮真的有 `whe
 - `slow-mo-ms` 已归零。要复现改造前的节奏，用 `--chat-job.humanize.enabled=false --chat-job.browser.slow-mo-ms=50` 启动（Run 66 就是这样跑的）。
 - 阶段 3 接手时：`deliver` 改两跳 + `DeliveryOptions` 带搜索条件；`fetchDetail` 每 5–8 张插一次停顿。
   届时 `human.navigate` 才会第一次被调用。
+
+## 9. 实施记录：阶段 3（2026-11-02）
+
+`deliver` 改两跳、`DeliveryOptions` 带搜索条件、`fetchDetail` 补批次停顿。**过程中推翻了本节 §3.5 的一个前提**，
+这是本阶段最重要的一条，先写在最前面。
+
+### 9.1 被推翻的前提：两跳不等于有来源
+
+§3.5 初稿的推理是"上一个文档是列表页，所以下一次导航会带上 `Referer`"。实测不成立。
+`page.navigate` 在协议层是**浏览器发起**的导航，没有发起方文档，所以结果与上一页无关。
+同一详情地址、四种进入方式的请求头（`ListFirstEntryProbeTest`，本地 HTTP 服务读请求头）：
+
+| 进入方式 | Referer | Sec-Fetch-Site |
+|---|---|---|
+| 空白页 `page.navigate` | 空 | `none` |
+| 列表页之后 `page.navigate` | 空 | `none` |
+| `page.navigate` + `setReferer(列表页)` | 列表页 | `none` |
+| 列表页里由文档发起（点链接 / `location.href`） | 列表页 | `same-origin` |
+
+推论：来源由"**这次导航由谁发起**"决定，不由历史决定。所以第二跳改为页面内跳转
+（`Humanize.navigateInPage`），第一跳仍用 `navigate`。`setReferer` 虽然能补上 `Referer`，
+但那会得到"有 Referer 却是 `none`"这种真实浏览器不会出现的组合，因此没有采用。
+
+### 9.2 交付物
+
+| 类型 | 内容 |
+|---|---|
+| 本层 | `Humanize` 增加 `navigateInPage`（页面内跳转）与 `active()`（开关状态查询）；`navigate` 明确以 `DOMCONTENTLOADED` 为到达时刻 |
+| 本层 | 新增 `HumanBatchPacer`：每 5–8 个条目停 800–2000ms，批次长度每次重抽；停顿打一条 DEBUG，运行期可核对 |
+| 本层 | `Pacing` 增加 `uniformInt(min, max)`：批次长度这类"次数阈值"也要随机，而适配器不该持有随机源 |
+| 平台层 | 新增 `ListFirstEntry`：两跳的顺序与失败处置（第 1 跳失败不阻断投递）只写一份，URL 与卡片选择器由适配器传入 |
+| Boss | `deliver` 改两跳；`fetchDetail` 接批次停顿 |
+| 智联 | 同上 |
+| 编排 | `RunService` 每个组合建一份 `SearchQuery`，既给 `openSearch` 也给投递（同一个对象，避免"扫描用城市 A、投递拼出城市 B"） |
+| 模型 | `DeliveryOptions` 增加 `search` 字段 |
+| 测试 | `HumanBatchPacerTest`（5 例，纯逻辑）；`ListFirstEntryProbeTest`（5 例，真实浏览器 + 本地 HTTP 服务读请求头，默认跳过） |
+
+### 9.3 与设计的偏差
+
+| # | 设计原文 | 实现 | 理由 |
+|---|---|---|---|
+| 1 | 两跳都用 `human.navigate` | 第 2 跳用新增的 `navigateInPage` | 上面 9.1：`navigate` 拿不到来源，两跳等于没改 |
+| 2 | `Humanize` 11 个方法 | +2（`navigateInPage`、`active`） | `active` 是给层外的复合动作用的：开关关掉时"两跳"必须整段跳过，否则多出一次列表页加载 |
+| 3 | 两跳各写在两个适配器里 | 抽成 `platform/ListFirstEntry` | 顺序与"第 1 跳失败不阻断投递"是共同策略；平台知识（URL、卡片选择器）仍留在适配器。放在 `Humanize` 里会变成 ADR-0007 否决过的"深层导航"命名 |
+| 4 | `fetchDetail` 的停顿直接写在适配器 | 抽成 `HumanBatchPacer` + `Pacing.uniformInt` | 计数器与阈值重抽是纯逻辑，能脱离浏览器测；写两份迟早只改一处 |
+| 5 | 停顿只加在"读详情"上 | 两个适配器都在 `human.active()` 为真时才停 | 停顿是本期新增行为，开关关掉时留着它，"关掉即回到改造前"就不成立 |
+| 6 | 未提 `navigate` 的到达判据 | 明确 `DOMCONTENTLOADED` | 列表页与详情页都挂长连接与广告位，默认 `LOAD` 可能等到超时；改造前的导航用的就是 `DOMCONTENTLOADED` |
+| 7 | 阶段 3 验收要求"用 DevTools 抓一次真实请求" | 用本地 HTTP 服务读请求头 | 真实请求只出现在真实投递里，会给某家公司投一次简历；请求头由"谁发起导航"决定，与站点内容无关，本地服务能原样读回。真实站点的列表 URL 与页面状态另有日志与 bsk 佐证 |
+| 8 | 两跳的导航没有重试 | 第二跳失败重试一次 | 改造前智联的详情页导航是 `navigateWithRetry(..., 1)`；一次重试的成本远低于丢掉一次投递。Boss 原来没有重试，两跳之后统一成一次，差异只在"更容易成功"这一侧 |
+
+### 9.4 运行时验证（2026-11-02，智联）
+
+服务用 `java -jar server/target/chat-job.jar` 从仓库根启动，`humanize.enabled=true`。
+
+| 检查项 | 结果 |
+|---|---|
+| 启动 | `已装配平台: [boss, zhaopin]`；两个平台的会话声明都打印 `人类化交互: 启用` |
+| 滚动判据未被打坏 | Run 70：`列表加载完成：DOM 卡片 192 个（6 轮，确认到底）`，与改造前 Run 68 的 **192 张** 一致 |
+| 批次停顿确实发生、周期在变 | 应用日志两条：`连续读完一批 5 个条目，停顿 800–2000ms`（10:15:32）、`连续读完一批 8 个条目`（10:21:27）——先 5 后 8，证明批次长度每次重抽 |
+| 降级率 | Run 70：`人类化交互 21 次 / 降级 0 次（输入 0、点击 0、滚动 0）/ 漂移作废 0 次 / 降级率 0.0%` |
+| 数据库 | `run` 70 = `CANCELLED`，`last_card_index=13`、`evaluated_count=5`；`combination_run.cards_seen=192`，与日志一致；表仍是 20 张、迁移仍是 V16 |
+| 页面 | `bsk tab list` 读到 `https://www.zhaopin.com/jobs/?jl=681&kw=java`，标题「福州热门职位招聘」，与配置（福州 / java）一致 |
+| `enabled=false` 复跑（Run 71） | 192 张卡片、**10 轮**，与阶段 1/2 记录的停用态逐字一致；`run_log` 13 行，**没有**"人类化交互 …"汇总行，也**没有**批次停顿日志 |
+| DOM 级页面证据 | 未取到：`bsk cooperate sync` 报 `Could not establish connection`，与阶段 2 §8.4 同一现象；按"失败一次即停手"没有重试。页面证据停在 URL/标题层面 |
+
+### 9.5 未闭环
+
+- **真实投递上的实时请求头**没有取（本阶段刻意不跑真实投递）。要补的话只需跑一次正常模式的投递，
+  在服务端或代理上看详情页请求的 `Referer`；请求头一旦按"文档发起"实现，两者结论应当一致。
+- 第 1 跳会给每个岗位多一次列表页加载（约 2–4 秒 + 一次搜索请求）。Boss 处在风控期，
+  本阶段的运行数据全部来自智联，Boss 侧只有本地探针的结论。
+- 页面内跳转没有一次真实的 `mousedown`（见 ADR-0007 Consequences）。要补，需要"按岗位在列表里
+  定位到那张卡"的能力，仍是本 spec 的非目标。

@@ -1,6 +1,7 @@
 package com.chatjob.watcher;
 
 import com.chatjob.config.SecretCipher;
+import com.chatjob.evaluate.AiJson;
 import com.chatjob.evaluate.ChatClient;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.store.ConfigStore;
@@ -231,13 +232,16 @@ public class AiReplier {
     }
 
     Reply parse(String rawContent) {
-        String content = ChatClient.extractJson(rawContent);
-        JsonNode node;
-        try {
-            node = json.readTree(content);
-        } catch (Exception e) {
-            return Reply.fail("AI 返回的内容无法识别：" + ChatClient.truncate(content));
+        AiJson.Read read = AiJson.read(json, rawContent);
+        if (read.isFailure()) {
+            // 带上失败原因，才能区分"模型截断"和"模型没按格式说话"
+            return Reply.fail("AI 返回的内容无法识别（" + read.error() + "）："
+                    + ChatClient.truncate(ChatClient.extractJson(rawContent)));
         }
+        if (read.repaired()) {
+            log.warn("模型输出末尾不完整，已补齐后解析：{}", ChatClient.truncate(ChatClient.extractJson(rawContent)));
+        }
+        JsonNode node = read.node();
         boolean skip = node.path("skip").asBoolean(false);
         String note = clip(node.path("reason").asText(""), MAX_NOTE_CHARS);
         if (skip) {

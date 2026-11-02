@@ -5,8 +5,10 @@ import com.chatjob.driver.BrowserSession;
 import com.chatjob.driver.BrowserSessions;
 import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
+import com.chatjob.driver.human.HumanBatchPacer;
 import com.chatjob.driver.human.Humanize;
 import com.chatjob.platform.Digest;
+import com.chatjob.platform.ListFirstEntry;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
 import com.chatjob.platform.Models.DeliveryResult;
@@ -72,6 +74,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
     private static final int RESUME_CONFIRM_TIMEOUT_MS = 20_000;
     private static final int DEFAULT_COMMAND_TIMEOUT_MS = 45_000;
 
+    /**
+     * 投递第 1 跳（搜索列表页）最多等这么久出现卡片；等不到就直接进详情页，只记 WARN
+     * （spec 0006 §3.5：投递成功率优先于来源一致性）。
+     */
+    private static final int LIST_CARD_WAIT_MS = 8_000;
+
     private final BrowserSession session;
     private final PlaywrightExecutor executor;
     private final ConfigStore configStore;
@@ -83,6 +91,14 @@ public class ZhaopinAdapter implements PlatformAdapter {
      * "经本层的调用"与"裸的 Playwright 调用"（见 {@link Humanize} 的字段命名约定）。
      */
     private final Humanize human;
+
+    /**
+     * 详情页连读的批次停顿（spec 0006 §3.5：每 5–8 张插一次 800–2000ms）。
+     *
+     * <p>智联连读的是"点开卡片 → 读右侧面板"，比 Boss 更轻，但同样是一段没有停顿的连续操作，
+     * 加的节奏与 Boss 一致：只在批次边界停，单张之间原有的 {@code pause(300,500)} 不动。
+     */
+    private final HumanBatchPacer detailPacer;
 
     private Page listPage;
     private Page threadPage;
@@ -106,6 +122,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
         this.session = browser.session();
         this.executor = browser.executor();
         this.human = browser.humanize();
+        this.detailPacer = new HumanBatchPacer(human.pacing());
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -324,6 +341,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
     @Override
     public JobDetail fetchDetail(int cardIndex) {
         return executor.call(() -> {
+            // 批次边界落在两张卡之间：上一张的面板已经读完、下一张还没点。
+            // 开关关掉时整段跳过 —— 这段停顿是本期新增的行为，不是"页面怎么写"的细节，
+            // 留着它会让"关掉即回到改造前"不成立（spec 0006 §2.1 第 12 条）
+            if (human.active()) {
+                detailPacer.beforeNext();
+            }
             Page page = ensureListPage();
             ZhaopinRecord.PanelView panel = clickCardAndReadPanel(page, cardIndex);
             if (panel == null || panel.number().isBlank()) {
@@ -463,6 +486,9 @@ public class ZhaopinAdapter implements PlatformAdapter {
     /**
      * 投递 = 打开详情页 → 点「立即投递」→ 等平台的成功弹窗。
      *
+     * <p>打开详情页走两跳（先搜索列表页，再进详情页），目的是让详情页请求的来源是站内，
+     * 与 Boss 一致（spec 0006 §3.5）。第 1 跳失败不阻断投递。
+     *
      * <p>三条与 Boss 不同、且不能照抄的地方：
      * <ol>
      *   <li><b>不说话</b>：智联点一次就把简历和固定话术一起发出去了，所以 {@code greeting}
@@ -489,7 +515,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
             Page page = session.newPage();
             try {
-                navigateWithRetry(page, url, DEFAULT_COMMAND_TIMEOUT_MS, 1);
+                openDetailPage(page, url, options);
                 pause(1_000, 1_600);
                 if (isSecurityVerify(page)) {
                     throw new BlockedException(BlockedException.Kind.SECURITY_CHECK,
@@ -534,6 +560,31 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 closeQuietly(page);
             }
         });
+    }
+
+    /**
+     * 打开岗位详情页：先到搜索列表页，再进详情页（spec 0006 §3.5）。
+     *
+     * <p>智联的详情页是独立 URL（{@code /jobdetail/<id>.htm}），从空白页直接打开时请求来源是
+     * {@code none}；先到列表页再进，来源才变成站内。列表页地址与 {@link #openSearch} 用的是
+     * 同一条拼法（城市 + 关键词），所以多出来的是"一次列表页加载"，不是另一套筛选。
+     *
+     * <p>城市码查不到等拼不出地址的情况直接退化：详情页照常打开，只记 WARN。
+     */
+    private ListFirstEntry.Outcome openDetailPage(Page page, String detailUrl, DeliveryOptions options) {
+        SearchQuery query = options != null ? options.search() : null;
+        String listUrl = null;
+        if (query == null) {
+            log.warn("投递时没有带搜索条件，详情页只能从空白页直接打开（来源不是站内）");
+        } else {
+            try {
+                listUrl = urlBuilder.build(configStore.platformConfig(PLATFORM), query.city(), query.keyword());
+            } catch (Exception e) {
+                log.warn("拼列表页地址失败，详情页改从空白页直接打开: {}", e.getMessage());
+            }
+        }
+        return ListFirstEntry.open(human, page, listUrl, ZhaopinSelectors.CARD, detailUrl,
+                LIST_CARD_WAIT_MS, DEFAULT_COMMAND_TIMEOUT_MS);
     }
 
     /** 详情页投递区域当前文案；读不到返回空串（渲染中 / 改版） */
