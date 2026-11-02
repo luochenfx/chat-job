@@ -1,6 +1,6 @@
 # 文档
 
-> 面向需要改代码、调接口、定位实现问题的人。内容以**当前代码与实际接口响应**为准（核对日期 2026-11-01）。
+> 面向需要改代码、调接口、定位实现问题的人。内容以**当前代码与实际接口响应**为准（核对日期 2026-11-02）。
 > `spec/` 与 `adr/` 是设计文档与架构决策记录，其中标注「待评审」「非目标」「分期」「未取证」的条目**如实反映当时的状态**，不代表已经实现；与代码有出入时，以代码和实际接口为准。
 > 只想使用、不打算改代码的人看仓库根 [`README.md`](../README.md) 即可。
 
@@ -9,6 +9,7 @@
 | 想知道 | 看这里 |
 |---|---|
 | 某个能力落在哪段代码 | [已实现的能力与代码落点](#已实现的能力与代码落点) |
+| 点击 / 输入 / 滚动 / 跳转是怎么做的 | [人类化交互层（实现口径）](#人类化交互层实现口径) |
 | 技术栈、分层与目录 | [技术栈与分层](#技术栈与分层)、[目录结构](#目录结构) |
 | 怎么把环境跑起来 | [环境要求](#环境要求)、[构建与启动细节](#构建与启动细节) |
 | 发给别人的包里有什么 | [分发包构成](#分发包构成) |
@@ -43,6 +44,7 @@
 | 告警通知 | 企业微信群机器人，地址在「系统」页配置（控制台保存即生效；留空则回落 `chat-job.notify-config.wecom-webhook`）。三个类别开关：异常 / 进入待命 / 时段结束，默认全开，测试消息不受约束。同类消息默认 5 分钟合并一条，节流键含平台；页面上能看到「最近一次发送」的结果 | `notify/`（`NotifySettings`、`AlertCategory`、`WecomRobotNotifier`）、`web/ConfigController.java`、`web/SystemController.java` |
 | 控制台 | 概览 / 任务 / 岗位 / 配置 / 系统 五页；概览按平台并排展示，其余页面单平台切换；任务页有 SSE 实时事件与运行日志。平台配置页把「平台启用 / 扫描 / 值守」三枚开关排成一组，只值守时扫描侧字段整组禁用并说明；概览卡标注「仅值守 / 仅扫描」，只值守平台的扫描侧计数显示 `—`。选中平台持久化优先级：URL `?platform=` → localStorage → 平台清单第一项 | `console/pages/`、`console/composables/usePlatform.ts`、`console/composables/useRunStream.ts`、`console/components/PlatformSwitch.vue` |
 | 凭据保护 | API Key、Cookie 与告警 webhook 密文落库（Windows 用 DPAPI，其他平台退化为 AES-GCM + 本地 key 文件），GET 接口只返回「是否已配置」 | `config/SecretCipher.java`、`web/ConfigController.java` |
+| 人类化交互层 | 点击 / 输入 / 滚动 / 站内跳转统一走一层，适配器不得直接调 `locator.click`、`fill`、`window.scrollBy`；参数在 `application.yaml` 的 `chat-job.humanize`，关掉即回到改造前写法。实现口径与代价见下文「人类化交互层（实现口径）」 | `driver/human/`（`Humanize`、`Humanizer`、`HumanMotion`、`HumanAim`、`HumanTiming`、`HumanScrollPlan`、`HumanBatchPacer`、`HumanCounters`、`HumanizeConfig`、`Pacing`、`Rng`、`FallbackListener`）、`platform/ListFirstEntry.java`、`driver/PlatformBrowser.humanize()` |
 
 **未接通项与容易误判的口径**（按 spec 或直觉判断容易出错的地方）：
 
@@ -56,6 +58,23 @@
 - 智联这一期的筛选参数**只有城市 + 关键词**。页面上还有薪资、经验、学历等条件，但适配器不把它们拼进列表地址（`platform_config` 里留着这些字段不影响 Boss）。
 - **未启用值守的 Run 中止组合时，日志里那句「剩余卡片留待回扫时继续」不成立**：这一轮会以 `COMPLETED / SCAN_DONE` 结束，不会再回扫（`RunService.executeCombinations` 的中止文案是扫描侧通用措辞，未按值守开关分支）。
 - **概览与任务页的「组合」可能显示成 `2 / 1`**：`combination_index` 存的是当前组合 seq（0 基），`combinationTotal` 是该 Run 的组合行数，最后一轮时 `index` 会等于 `total`。这是既有口径，读的时候按「第 index+1 个」理解即可。
+
+## 人类化交互层（实现口径）
+
+改造前，点击、输入、滚动、页面跳转散在两个适配器与 `BossChatNavigator` 里约 30 处，各写各的间隔，也没有统一开关。现在这些动作只能经 `driver/human` 这一层（`Humanize` 接口，按平台各一个实例，从 `BrowserSessions` 经 `PlatformBrowser.humanize()` 成对取出）。`HumanizeSourceGuardTest` 扫描源码守卫这条约束：`CONVERTED = {boss, zhaopin}` 同时断言「适配器里没有裸调用」和「确实经过本层」。
+
+| 动作 | 做法 | 必须知道的约束 |
+|---|---|---|
+| 点击 | 先 `scrollIntoViewIfNeeded`，取元素外框；落点按元素宽高做截断高斯采样（center 0.5、σ 0.15、超出 ±0.4 重采）；鼠标沿二次贝塞尔曲线走 18–34 步（控制点在中点沿垂直方向偏移，偏移比例 0.05–0.25，保证到目标距离单调不增）；`mouse.down` → 保持 40–120ms → `mouse.up` | 元素在移动时按 `max(drift-px 8, 元素高 × 0.25)` 判漂移，重算 2 轮仍漂移就降级为 `locator.click` 并记原因。降级路径保留 Playwright 自己的 actionability 检查 |
+| 输入 | ASCII 字符逐个 `press`，间隔 55–165ms；每 8–15 个字符插一次 250–900ms 长停顿；按 `mistype-chance`（0.02）把一个字符打成相邻键再 `Backspace` | 错字回删只对能用单键打出的 ASCII 字母数字生效。中文等非 ASCII 走 `insertText`：只产生 `input`，没有字符级 `keydown`，与输入法组字一致。逐字符节奏对 CJK 不成立，所以有这条分支 |
+| 输入校验 | 写完静置 `verify-settle-ms`（300ms）读回，比对三个条件：无异常、文本一致、没有意外的 DOM 结构变化 | `contenteditable` 上任一条件不满足就回退 `innerText` + `dispatchEvent('input')`，把未通过的条件与原因记进日志与计数（「降级」）。普通 `input` 只做文本比对 |
+| 滚动 | 指针先停在列表容器上，再派发 `wheel`：单步 = 视口高 × 0.35–0.85，步间隔 90–260ms，累计到目标位移算一轮 | 「一轮」定义为**一次完整的滚动计划**，`ScrollParams.roundLimit` 的口径不变（BOSS 一轮 1.5 屏，与改造前 `scrollBy(0, innerHeight*1.5)` 位移相同）。智联仍是「滚到文档底部」。到底判据一律按卡片数是否增加，不按轮数 |
+| 站内跳转 | 进岗位详情改成两跳：先到列表页（`ListFirstEntry`），再由页面内 `location.href` 跳详情 | `page.navigate` 是协议层的浏览器发起导航，没有发起方文档 → `Referer` 为空、`Sec-Fetch-Site: none`，**上一页是不是同站都不影响**；`setReferer` 只能补 Referer，补不了 `Sec-Fetch-Site`。要站内来源只能由当前文档发起。`ListFirstEntryProbeTest` 用本地 HTTP 服务读请求头钉住了这条 |
+| 批次停顿 | `HumanBatchPacer`：每读完 5–8 张卡片的详情停 800–2000ms | 只在详情抓取链路里。`human.active()` 为 false 时整段跳过，否则关掉开关会多出一次列表页加载与停顿 |
+| 计数 | `HumanCounters` 记各类动作次数、降级次数（按输入 / 点击 / 滚动分列）、漂移作废、输入字符数；Run 结束时写一行「人类化交互 …」到 `run_log` | 计数是**平台级**的：扫描与值守共用同一个 `Humanizer`，值守期间回复写入的字符会算进 Run 的采样差。不能把「输入字符」当作本 Run 的投递字数 |
+| 配置 | `chat-job.humanize.enabled`（默认 true）、`seed`（0 = 真随机，非 0 可复现）、各段区间见 `application.yaml`；代码里另有等价默认值 `HumanizeConfig` | 关掉后每个方法等价于改造前的原生写法，且不产生任何计数，`run_log` 里不会有汇总行——这也是「关掉即回到改造前」的验证方式（逐行比对） |
+
+实测代价：BOSS 同一「搜索页 + 滚动」组合，启用 132s / 停用 81s（滚动段 +51s，40 轮每轮都是一次完整滚轮计划）；智联同组合滚动段 26s → 42s，轮数 10 → 6。换来的结果是 BOSS 能翻到的卡片 255 → 300、投递成功率 93.2%（41/44）→ 100%（4/4，单轮）。设计取舍与取证记录见 [`spec/0006-humanized-interaction.md`](spec/0006-humanized-interaction.md)、[`adr/0007-humanized-interaction-layer.md`](adr/0007-humanized-interaction-layer.md)。
 
 ## 技术栈与分层
 
@@ -282,7 +301,7 @@ mvn -B -f server/pom.xml test
 cd console && npm run build
 ```
 
-`server/src/test/java/` 下共 28 个测试类；全量 273 例通过（1 例按注解跳过，2026-11-01 实测）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
+`server/src/test/java/` 下共 42 个测试类；全量 352 例通过（12 例按注解跳过，2026-11-02 实测）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
 
 | 脚本 | 用途 | 副作用 |
 |---|---|---|
