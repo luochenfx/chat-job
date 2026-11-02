@@ -13,7 +13,7 @@
 
     <groupId>com.chatjob</groupId>
     <artifactId>chat-job</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <name>chat-job</name>
     <description>多平台求职投递自动化（当前装配 BOSS 直聘与智联招聘）</description>
 
