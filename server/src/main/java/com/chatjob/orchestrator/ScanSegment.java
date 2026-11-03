@@ -109,7 +109,7 @@ final class ScanSegment {
                 // 同一个组合的搜索条件既用于打开列表页，也随投递传下去：投递时的详情页要
                 // 先从这张列表页进，来源才是站内（spec 0006 §3.5）。两处用同一个对象，
                 // 免得"扫描用的是城市 A、投递拼出来的列表页是城市 B"这种只在 URL 上可见的错位。
-                SearchQuery query = new SearchQuery(combo.getCity(), null, combo.getKeyword());
+                SearchQuery query = new SearchQuery(combo.getCity(), combo.getKeyword());
                 adapter.openSearch(query);
                 ScrollOutcome scroll = adapter.scrollUntilEnd(
                         new ScrollParams(cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),

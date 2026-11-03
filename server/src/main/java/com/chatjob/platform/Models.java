@@ -10,8 +10,14 @@ public final class Models {
     private Models() {
     }
 
-    /** 一个搜索组合：城市 + 关键词。筛选参数在 openSearch 时由 adapter 自己从配置读取。 */
-    public record SearchQuery(String city, String cityCode, String keyword) {
+    /**
+     * 一个搜索组合：城市 + 关键词。筛选参数在 openSearch 时由 adapter 自己从配置读取。
+     *
+     * <p>只有城市名，没有城市码：智联的 {@code jl=} 要的是字典里的 code，由它自己的 urlBuilder
+     * 查表算出（查不到就报错，不推测）。城市码若放进这里，就成了「调用方必须知道某个平台要查表」
+     * 的隐性契约 —— 而调用方从来只持有城市名。
+     */
+    public record SearchQuery(String city, String keyword) {
     }
 
     public record ScrollParams(int roundLimit, int waitTimeSeconds) {
