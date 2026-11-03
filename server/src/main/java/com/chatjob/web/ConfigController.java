@@ -10,6 +10,7 @@ import com.chatjob.orchestrator.RunStore;
 import com.chatjob.platform.PlatformSwitches;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
+import com.chatjob.store.PlatformConfigChange;
 import com.chatjob.store.entity.AiConfigEntity;
 import com.chatjob.store.entity.NotifyConfigEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
@@ -193,6 +194,8 @@ public class ConfigController {
     @PutMapping("/ai")
     public Map<String, Object> saveAiConfig(@RequestBody AiConfigBody body) {
         AiConfigEntity entity = configStore.aiConfig();
+        // 解绑不在这里：Jackson 把「没传这个字段」和「显式传 null」都绑成 null，
+        // 用 null 表达「清除」与「没提」是同一份字节。清除走 DELETE /ai/provider
         entity.setProviderId(body.providerId());
         entity.setIntroduce(nullToEmpty(body.introduce()));
         entity.setPromptTemplate(nullToEmpty(body.promptTemplate()));
@@ -241,6 +244,22 @@ public class ConfigController {
         out.put("ok", true);
         out.put("toneTermsDropped", droppedTerms);
         return out;
+    }
+
+    /**
+     * 解绑当前模型。
+     *
+     * <p><b>为什么单独一个端点</b>：解绑要表达「把它清成空」，而在 JSON 绑定下「显式 null」与
+     * 「没传这个字段」不可区分 —— 用 {@code providerId: null} 编码清除，会与「这次不改模型」
+     * 撞成同一件事。{@code /notify/webhook} 那边因为同一个理由也单独开了 DELETE。
+     *
+     * <p>解绑<b>不等于</b>「不用 AI」：{@code ConfigStore.activeProvider()} 会回退到第一个启用的
+     * 模型。控制台上那个选项写的就是「自动」，不是「未选择」。
+     */
+    @DeleteMapping("/ai/provider")
+    public Map<String, Object> clearProvider() {
+        configStore.clearProviderId();
+        return Map.of("ok", true);
     }
 
     // ---------------------------------------------------------------- 告警配置
@@ -321,18 +340,8 @@ public class ConfigController {
 
     // ---------------------------------------------------------------- 平台配置
 
-    public record PlatformConfigBody(
-            Boolean enabled, Boolean scanEnabled, Boolean watchEnabled,
-            List<String> cities, List<String> keywords, String jobType,
-            List<String> salary, List<String> experience, List<String> degree, List<String> scale,
-            List<String> industry, List<String> stage, String activeLevelFloor,
-            Integer waitTimeSeconds, Integer dailyDeliveryQuota, Integer dailyEvalLimit,
-            Integer scrollRoundLimit, Integer combinationTimeLimitSec, Integer unreadScanLimit,
-            Integer watchIntervalSeconds,
-            Boolean repeatChatEnabled,
-            List<String> repeatChatMessages, Boolean resumeImageEnabled,
-            String dutyStartTime, String dutyEndTime) {
-    }
+    // 请求体的形状由 com.chatjob.store.PlatformConfigChange 定义：它属于「配置怎么变」，
+    // 与 ConfigStore 的默认值是一件事的两头，所以不在这一层再抄一份
 
     @GetMapping("/platform/{platform}")
     public Map<String, Object> platformConfig(@PathVariable String platform) {
@@ -376,11 +385,20 @@ public class ConfigController {
         return out;
     }
 
+    /**
+     * 保存平台配置。
+     *
+     * <p>请求体里<b>没出现的字段一律保持原值</b>：控制器不再逐字段决定「没传算默认还是算清空」，
+     * 那条规则只有 {@link PlatformConfigMerge#merge} 一处。要清空一个列表请显式传 {@code []}，
+     * 清空一个字符串请显式传 {@code ""}。
+     */
     @PutMapping("/platform/{platform}")
     public Map<String, Object> savePlatformConfig(@PathVariable String platform,
-                                                  @RequestBody PlatformConfigBody body) {
+                                                  @RequestBody PlatformConfigChange change) {
         PlatformConfigEntity entity = configStore.platformConfig(platform);
-        boolean turningOff = body.enabled() != null && !body.enabled()
+        // 只有显式传了 false 才算「要停用」。改造前这里判的是「没传 true 就当停用」，
+        // 于是漏一个字段就把整个平台关了
+        boolean turningOff = Boolean.FALSE.equals(change.enabled())
                 && (entity.getEnabled() == null || entity.getEnabled() != 0);
         // 停用前先看这个平台有没有未结束的 Run：有的话「关掉开关」会留下一条还在跑的任务，
         // 而它的浏览器已经打开、值守还在继续 —— 开关等于没关，人却以为关了
@@ -395,64 +413,28 @@ public class ConfigController {
                 }
             });
         }
-        entity.setEnabled(Boolean.TRUE.equals(body.enabled()) ? 1 : 0);
-        entity.setCities(configStore.writeList(body.cities()));
-        entity.setKeywords(configStore.writeList(body.keywords()));
-        entity.setJobType(nullToEmpty(body.jobType()));
-        entity.setSalary(configStore.writeList(body.salary()));
-        entity.setExperience(configStore.writeList(body.experience()));
-        entity.setDegree(configStore.writeList(body.degree()));
-        entity.setScale(configStore.writeList(body.scale()));
-        entity.setIndustry(configStore.writeList(body.industry()));
-        entity.setStage(configStore.writeList(body.stage()));
-        entity.setActiveLevelFloor(body.activeLevelFloor() == null ? "本月" : body.activeLevelFloor());
-        entity.setWaitTimeSeconds(body.waitTimeSeconds() == null ? 10 : body.waitTimeSeconds());
-        entity.setDailyDeliveryQuota(body.dailyDeliveryQuota() == null ? 30 : body.dailyDeliveryQuota());
-        entity.setDailyEvalLimit(body.dailyEvalLimit() == null ? 150 : body.dailyEvalLimit());
-        entity.setScrollRoundLimit(body.scrollRoundLimit() == null ? 300 : body.scrollRoundLimit());
-        // 未传按默认值（与其他配额同一口径），<=0 表示不限时间并原样保存
-        entity.setCombinationTimeLimitSec(
-                ConfigStore.normalizeCombinationTimeLimit(body.combinationTimeLimitSec()));
-        // 未传则保持原值（与 aiReplyEnabled 同一口径）：旧版控制台会把整个 platform 对象 PUT 回来，
-        // 按「null 当默认值」处理的话，保存任何一个无关配置都会把扫描上限重置掉。
-        if (body.unreadScanLimit() != null) {
-            entity.setUnreadScanLimit(ConfigStore.clampUnreadScanLimit(body.unreadScanLimit()));
-        }
-        // 同一口径：未传则保持原值。旧版控制台不会提交这个字段，
-        // 按「null 当默认 120」处理会把用户调过的间隔静默改回去。
-        if (body.watchIntervalSeconds() != null) {
-            entity.setWatchIntervalSeconds(ConfigStore.clampWatchInterval(body.watchIntervalSeconds()));
-        }
-        entity.setRepeatChatEnabled(Boolean.TRUE.equals(body.repeatChatEnabled()) ? 1 : 0);
-        entity.setRepeatChatMessages(configStore.writeList(body.repeatChatMessages()));
-        entity.setResumeImageEnabled(Boolean.TRUE.equals(body.resumeImageEnabled()) ? 1 : 0);
-        entity.setDutyStartTime(DutyWindow.normalize(body.dutyStartTime(), ConfigStore.DEFAULT_DUTY_START));
-        entity.setDutyEndTime(DutyWindow.normalize(body.dutyEndTime(), ConfigStore.DEFAULT_DUTY_END));
-        // 两个开关同「未传则保持原值」口径：旧控制台不提交这两个字段，若按默认值处理，
-        // 保存任何一个无关配置都会把用户关掉的开关重新打开（与 unreadScanLimit 同一个坑）。
-        // 判定用合并后的最终值，不是请求里那个字段 —— 只传一个时，另一个要按库里的旧值参与判断。
-        boolean scanOn = body.scanEnabled() != null
-                ? body.scanEnabled()
-                : (entity.getScanEnabled() == null || entity.getScanEnabled() != 0);
-        boolean watchOn = body.watchEnabled() != null
-                ? body.watchEnabled()
-                : (entity.getWatchEnabled() == null || entity.getWatchEnabled() != 0);
-        PlatformSwitches.requireSomethingOn(entity.getPlatform(), scanOn, watchOn);
-        entity.setScanEnabled(scanOn ? 1 : 0);
-        entity.setWatchEnabled(watchOn ? 1 : 0);
-        configStore.savePlatformConfig(entity);
+        PlatformConfigEntity merged = PlatformConfigMerge.merge(configStore, entity, change);
+        // 判定用合并后的最终值，不是请求里那个字段 —— 只传一个开关时，另一个要按库里的旧值参与判断
+        PlatformSwitches.requireSomethingOn(merged.getPlatform(),
+                on(merged.getScanEnabled()), on(merged.getWatchEnabled()));
+        configStore.savePlatformConfig(merged);
         if (turningOff) {
             // 停用的同一刻收掉它的浏览器：开着没意义，而且这正是「不再开第二个浏览器」要的效果
-            sessions.existing(entity.getPlatform()).ifPresent(browser -> {
+            sessions.existing(merged.getPlatform()).ifPresent(browser -> {
                 try {
                     browser.session().close();
-                    log.info("[{}] 平台已停用，浏览器会话已关闭", entity.getPlatform());
+                    log.info("[{}] 平台已停用，浏览器会话已关闭", merged.getPlatform());
                 } catch (Exception e) {
-                    log.warn("[{}] 停用后关闭浏览器失败: {}", entity.getPlatform(), e.getMessage());
+                    log.warn("[{}] 停用后关闭浏览器失败: {}", merged.getPlatform(), e.getMessage());
                 }
             });
         }
         return Map.of("ok", true);
+    }
+
+    /** 开关列的读法：{@code null} 即开，与 {@code ConfigStore.platformScanEnabled} 同口径 */
+    private static boolean on(Integer flag) {
+        return flag == null || flag != 0;
     }
 
     // ---------------------------------------------------------------- 字典

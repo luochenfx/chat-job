@@ -329,6 +329,9 @@ cd console && npm run build
 | [`adr/0005-scan-watch-switches.md`](adr/0005-scan-watch-switches.md) | 扫描与值守拆成两个平台级开关（P0–P3 已实现，P4 未做） |
 | [`adr/0006-alert-config-in-db.md`](adr/0006-alert-config-in-db.md) | 告警配置存进数据库，并从控制台配置（已实现） |
 | [`adr/0007-humanized-interaction-layer.md`](adr/0007-humanized-interaction-layer.md) | 交互收敛到单层；导航来源比鼠标轨迹更重要（已实现；五条 Open Questions 已取证 3 条，Boss 侧 DOM 观测受扩展版本限制） |
+| [`adr/0008-run-log-single-exit.md`](adr/0008-run-log-single-exit.md) | 运行日志只有一个出口，库与文件是它的两份副本（已实现） |
+| [`adr/0009-scan-judgement-before-loop.md`](adr/0009-scan-judgement-before-loop.md) | 扫描判据收成一处纯函数，循环留在编排层（已实现） |
+| [`adr/0010-config-write-back.md`](adr/0010-config-write-back.md) | 配置写回：没传的字段一律保持原值（已实现） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 
@@ -339,7 +342,7 @@ cd console && npm run build
 | 分组 | 接口 |
 |---|---|
 | 任务 | `POST /api/runs?platform=`（body `{"mode":"NORMAL"\|"DRY_RUN"}`）、`POST /api/runs/{id}/pause\|resume\|cancel`（只按 id 反查平台）、`GET /api/runs/current?platform=`、`GET /api/runs?limit=&platform=`、`GET /api/runs/{id}/events`（SSE）、`GET /api/runs/{id}/logs?afterId=&limit=` |
-| 配置 | `GET\|POST /api/config/providers`、`DELETE /api/config/providers/{id}`、`GET\|PUT /api/config/ai`、`GET\|PUT /api/config/notify`（webhook 不回显，留空即不改）、`DELETE /api/config/notify/webhook`（清除地址）、`GET\|PUT /api/config/platform/{platform}`（路径必填）、`GET /api/config/dictionary?platform=&type=`（两个参数必填）、`POST /api/config/dictionary/reload` |
+| 配置 | `GET\|POST /api/config/providers`、`DELETE /api/config/providers/{id}`、`GET\|PUT /api/config/ai`、`DELETE /api/config/ai/provider`（解绑模型，回落到第一个启用的模型）、`GET\|PUT /api/config/notify`（webhook 不回显，留空即不改）、`DELETE /api/config/notify/webhook`（清除地址）、`GET\|PUT /api/config/platform/{platform}`（路径必填；**没传的字段保持原值**，清空列表请显式传 `[]`）、`GET /api/config/dictionary?platform=&type=`（两个参数必填）、`POST /api/config/dictionary/reload` |
 | 岗位 | `GET /api/jobs?limit=&platform=`、`GET /api/jobs/{id}/deliveries`、`POST /api/jobs/{id}/reset`、`GET\|POST /api/blacklist`、`DELETE /api/blacklist/{id}` |
 | 值守 | `GET\|POST /api/reply/rules`、`DELETE /api/reply/rules/{id}`、`GET\|POST /api/reply/sensitive`、`DELETE /api/reply/sensitive/{id}`、`GET /api/reply/unmatched`、`GET /api/reply/logs`、`GET /api/watcher/stats`、`GET /api/watcher/unread-tasks`、`POST /api/watcher/unread-tasks/{id}/retry` |
 | 系统 | `GET /api/system/status?platform=`、`POST /api/system/self-check?platform=`、`POST /api/system/probe-login?platform=`、`POST /api/system/open-login?platform=`、`GET /api/system/platform?platform=`、`GET /api/system/platforms`（平台清单，来自 `PlatformInfo.KNOWN`）、`GET /api/system/overview`（概览页一次取全，含 `global` 与各 `platforms[]`）、`GET /api/system/counters?platform=`、`POST /api/system/notify-test`、`POST /api/system/cleanup` |

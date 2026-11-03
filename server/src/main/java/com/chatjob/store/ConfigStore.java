@@ -34,6 +34,9 @@ public class ConfigStore {
     public static final String DEFAULT_DUTY_START = "09:00";
     public static final String DEFAULT_DUTY_END = "22:00";
 
+    /** HR 活跃度下限的默认值，与 V1 迁移里的列默认值保持一致；取 {@code ActiveLevel.selectable()} 的一项 */
+    public static final String DEFAULT_ACTIVE_LEVEL_FLOOR = "本月";
+
     /** 未读列表一轮扫描条数的默认值，与 V6 迁移里的列默认值保持一致 */
     public static final int DEFAULT_UNREAD_SCAN_LIMIT = 100;
 
@@ -258,7 +261,7 @@ public class ConfigStore {
         created.setScale("[]");
         created.setIndustry("[]");
         created.setStage("[]");
-        created.setActiveLevelFloor("本月");
+        created.setActiveLevelFloor(DEFAULT_ACTIVE_LEVEL_FLOOR);
         created.setWaitTimeSeconds(10);
         created.setDailyDeliveryQuota(30);
         created.setDailyEvalLimit(150);
@@ -274,6 +277,13 @@ public class ConfigStore {
         return created;
     }
 
+    /**
+     * 整行写回。
+     *
+     * <p>这里只管落库，<b>合并规则不在这里</b> —— 「请求体里没传的字段保持原值」由
+     * {@code com.chatjob.web.PlatformConfigMerge} 实现，调用方必须先把 {@code change} 合并进实体
+     * 再调本方法。直接改实体再调本方法等于绕过那条规则。
+     */
     public void savePlatformConfig(PlatformConfigEntity entity) {
         entity.setUpdatedAt(time.stamp());
         if (entity.getId() == null) {
@@ -387,6 +397,23 @@ public class ConfigStore {
         } else {
             aiConfigMapper.updateById(entity);
         }
+    }
+
+    /**
+     * 解绑当前模型：把 {@code ai_config.provider_id} 置空。
+     *
+     * <p><b>为什么不能走 {@link #saveAiConfig}</b>：它用 {@code updateById}，字段策略是
+     * {@code NOT_NULL} —— 「把字段设成 null 再存」会被整列跳过。请求返回 200、库里没变，
+     * 控制台回读后下拉框又跳回原来那个模型，看起来像「保存没生效」而不是「这个操作根本做不到」。
+     * 这一格必须显式写 SQL。
+     *
+     * <p>置空之后 {@link #activeProvider()} 回退到第一个启用的模型：解绑在行为上是「自动」，
+     * 不是「不用 AI」。
+     */
+    public void clearProviderId() {
+        AiConfigEntity ai = aiConfig();
+        aiConfigMapper.clearProviderId(ai.getId(), time.stamp());
+        log.info("已解绑模型：providerId 置空，回落到第一个启用的模型");
     }
 
     public boolean qualityGateEnabled() {

@@ -133,7 +133,7 @@
           <div class="field">
             <label>使用哪个模型</label>
             <select v-model.number="ai.providerId">
-              <option :value="null">未选择</option>
+              <option :value="null">自动（第一个启用的模型）</option>
               <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.model }} · {{ p.name }}</option>
             </select>
           </div>
@@ -462,9 +462,12 @@
             <input v-model.number="platform.dailyEvalLimit" type="number" min="10" max="1000" :disabled="scanOff" />
           </div>
           <div class="field">
-            <label>每个动作之间的间隔（秒）</label>
+            <label>两个岗位之间的停顿（秒）</label>
             <input v-model.number="platform.waitTimeSeconds" type="number" min="3" max="60" :disabled="scanOff" />
-            <div class="desc">实际等待时间会在这个数的一半到它之间随机</div>
+            <div class="desc">
+              扫描时处理完一个岗位、到下一个岗位之间等这么久，实际值在这个数的一半到它之间随机。
+              页面里的点击、输入、滚动节奏不由此控制
+            </div>
           </div>
           <div class="field">
             <label>每组条件最多翻多少轮</label>
@@ -752,6 +755,9 @@ const effectiveReplyTimeout = computed(() => {
   const configured = Number(ai.aiReplyTimeoutSeconds)
   if (!Number.isInteger(configured) || configured < 1) return null
   const p = (providers.value || []).find((x: any) => String(x.id) === String(ai.providerId))
+    // 没指定具体模型时，后端回落到第一个启用的那个（ConfigStore.activeProvider）。
+    // 这里跟同一条规则，否则选了「自动」之后这句「实际只等 N 秒」会消失
+    || (providers.value || []).find((x: any) => x.enabled)
   if (!p) return null
   const providerTimeout = Number(p.timeoutSeconds) || 60
   return Math.min(configured, Math.max(1, providerTimeout))
@@ -793,6 +799,9 @@ async function loadAll() {
     // 统一归一化成空串 —— 空串的语义是「没配」，与「关闭」无关
     ai.aiReplyStyle = a?.aiReplyStyle ?? ''
     ai.aiReplyToneTerms = a?.aiReplyToneTerms ?? ''
+    // providerId 解绑后后端回的是 null，而 Jackson 的 non_null 会把这个字段整个省掉 ——
+    // 不显式归一的话，下拉框会留着上一次选中的模型，看起来像「解绑没生效」
+    ai.providerId = a?.providerId ?? null
     aiStyleDefault.value = (a?.aiReplyStyleDefault ?? '').trim()
     aiToneTermsDefault.value = (a?.aiReplyToneTermsDefault ?? '').trim()
     aiToneTermsEffectiveCount.value = a?.aiReplyToneTermsEffectiveCount ?? 0
@@ -981,6 +990,11 @@ async function saveAi() {
         aiReplySkipAlertMinSample: minSample
       }
     })
+    // 「自动」在服务端是一次解绑：PUT 里的 null 表达不了「清除」（与「没传这个字段」是同一份
+    // 字节），所以后端单独开了 DELETE。这里跟着走一次，否则选中「自动」再保存不会有任何变化
+    if (ai.providerId === null || ai.providerId === undefined || ai.providerId === '') {
+      await call('/config/ai/provider', { method: 'DELETE' })
+    }
     // 后端会丢弃超长行（一行 50 字基本是误粘的整段文本）。不说一声，用户会以为整段都生效了
     if (res?.toneTermsDropped > 0) {
       show(`已保存，但有 ${res.toneTermsDropped} 行超过 20 个字，没有保存进去`, true)
