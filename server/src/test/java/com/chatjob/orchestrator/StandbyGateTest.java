@@ -9,11 +9,11 @@ import java.time.LocalTime;
 import static com.chatjob.orchestrator.StandbyGate.Action.PARK;
 import static com.chatjob.orchestrator.StandbyGate.Action.SCAN;
 import static com.chatjob.orchestrator.StandbyGate.Action.WATCH;
-import static com.chatjob.orchestrator.StandbyGate.StopReason.COMBINATION_TIMEOUT;
-import static com.chatjob.orchestrator.StandbyGate.StopReason.COMBOS_EXHAUSTED;
-import static com.chatjob.orchestrator.StandbyGate.StopReason.EVAL_LIMIT;
-import static com.chatjob.orchestrator.StandbyGate.StopReason.QUOTA;
-import static com.chatjob.orchestrator.StandbyGate.StopReason.SCAN_DISABLED;
+import static com.chatjob.scan.ScanStop.COMBINATION_TIMEOUT;
+import static com.chatjob.scan.ScanStop.COMBOS_EXHAUSTED;
+import static com.chatjob.scan.ScanStop.EVAL_LIMIT;
+import static com.chatjob.scan.ScanStop.QUOTA;
+import static com.chatjob.scan.ScanStop.SCAN_DISABLED;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**

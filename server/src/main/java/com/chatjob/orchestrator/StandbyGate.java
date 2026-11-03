@@ -1,5 +1,7 @@
 package com.chatjob.orchestrator;
 
+import com.chatjob.scan.ScanStop;
+
 import java.time.LocalTime;
 
 /**
@@ -11,37 +13,11 @@ import java.time.LocalTime;
  *
  * <p>不碰 IO、不读时钟（{@code now} 与 {@code today} 都由调用方传进来），
  * 所以跨自然日这类场景在单测里不需要改系统时间。
+ *
+ * <p>入参 {@link ScanStop} 描述的是「扫描段怎么结束的」，本类据此决定下一步。
+ * 本类依赖它而不是反过来：扫描段是独立模块（ADR-0009）。
  */
 public final class StandbyGate {
-
-    /**
-     * 扫描为什么停。
-     *
-     * <p>前三个是「今天不再找岗位」的三个理由，共同出口是待命而不是结束值守期。
-     * {@link RunStatus#QUOTA_REACHED} 已不再写入，配额这一档现在由 {@link #QUOTA} 表达。
-     *
-     * <p>{@link #SCAN_DISABLED} 与前三个不同类：它不是「今天扫完了」，而是「这个平台根本不扫」，
-     * 由扫描开关关闭引起（spec 0005）。{@link #COMBOS_EXHAUSTED} 不能替代它——只值守的 Run
-     * 从未扫描，写「搜索组合已全部扫完」会让排查的人去翻一张空表。
-     */
-    public enum StopReason {
-        /** 今日投递数达配额 */
-        QUOTA,
-        /** 今日评估数达上限 */
-        EVAL_LIMIT,
-        /** 组合队列已扫完 */
-        COMBOS_EXHAUSTED,
-        /**
-         * 单个组合跑到时间上限（{@code combination_time_limit_sec}）。
-         *
-         * <p>不并入 {@link #COMBOS_EXHAUSTED}：那个说「都跑完了」，这一个说「还没跑完就停下了」，
-         * 而且断点停在原地，下次回扫从这张卡继续。混用会让界面上的「岗位 0」与「已投递 12」
-         * 互相矛盾——归零之后没人看得出扫到了哪。
-         */
-        COMBINATION_TIMEOUT,
-        /** 该平台未启用扫描：本次运行从头到尾不扫 */
-        SCAN_DISABLED
-    }
 
     /** 待命一轮之后的走向 */
     public enum Action {
@@ -77,7 +53,7 @@ public final class StandbyGate {
      * @param scanEnabled 该平台是否参与扫描；false 时任何情况都不返回 {@code SCAN}。
      *                    放最后一位，是为了既有用例只需在尾部补一个 {@code true}
      */
-    public static Action decide(LocalTime now, DutyWindow window, StopReason reason,
+    public static Action decide(LocalTime now, DutyWindow window, ScanStop reason,
                                 String scanDay, String today,
                                 int deliveredToday, int quota, int evaluatedToday, int evalLimit,
                                 boolean scanEnabled) {
@@ -90,10 +66,10 @@ public final class StandbyGate {
         if (scanDay == null || today == null || !scanDay.equals(today)) {
             return Action.SCAN;
         }
-        if (reason == StopReason.QUOTA && deliveredToday < quota) {
+        if (reason == ScanStop.QUOTA && deliveredToday < quota) {
             return Action.SCAN;
         }
-        if (reason == StopReason.EVAL_LIMIT && evaluatedToday < evalLimit) {
+        if (reason == ScanStop.EVAL_LIMIT && evaluatedToday < evalLimit) {
             return Action.SCAN;
         }
         return Action.WATCH;
