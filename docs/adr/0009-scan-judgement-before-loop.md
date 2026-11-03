@@ -2,9 +2,9 @@
 
 ## Status
 
-accepted（2026-11-04，架构审查「重构顺序」第 3 步 = 3a）。实现：`com.chatjob.scan`
-（`ScanStop`、`ScanBoundary`）；守卫：`ScanBoundaryTest`、`ScanBoundarySingleSiteTest`。
-3b（把组合循环与卡片循环搬进 `ScanSegment`）尚未开始。
+accepted（2026-11-04，架构审查「重构顺序」第 3 步）。分两次落地：3a 判据（`com.chatjob.scan`：
+`ScanStop`、`ScanBoundary`），3b 循环（`orchestrator.ScanSegment` + `ScanHost` + `JobProcessor`）。
+守卫：`ScanBoundaryTest`、`ScanBoundarySingleSiteTest`、`ScanSegmentTest`、`StandbyGateTest`。
 
 ## Context
 
@@ -62,11 +62,30 @@ SSE 出口全在一个类里。其中扫描段最混杂：分页、AI 判定、�
    「不再投递」，合成一个函数只是把两个不同时机塞进一个签名。合并成一个函数的冲动来自
    「同一概念一处」的口号，但这两处本来就不是同一次判断。
 
+## 3b 实施补记（2026-11-04 同日）
+
+循环搬出去时，有三处按当时的事实改了做法：
+
+1. **`ScanSegment` 落在 `com.chatjob.orchestrator`，不在 `scan` 包。** 它要用 `RunStore` 与
+   `RunStatus`（都在 orchestrator）。放进 `scan` 就是 `scan` ↔ `orchestrator` 的包级环 ——
+   与 Decision 2 搬 `ScanStop` 的理由自相矛盾。`scan` 因此保持纯判据（`ScanStop`、`ScanBoundary`），
+   宿主接口与单卡接缝跟着循环走，住在 orchestrator。
+
+2. **中断编码没改。** 原计划在 3b 把 `null` 换成 `INTERRUPTED`，实际没做：`cards()` 的 `null`
+   同时表示「跑完最后一张」与「被打断」，而 `runLoop` 之后仍要靠运行标志区分停止与时段到点。
+   只换常量、不改状态机，等于把同一份隐式约定换个写法。Open Question 1 继续挂着，等
+   「Run 生命周期」那一步一起改。
+
+3. **单卡处理抽成 `JobProcessor` 接口。** 不抽的话 `ScanSegment` 要直接持有 `JobStore`、
+   `AiJudge`、`BlacklistMatcher` —— 那三样要真库与真网络，扫描段的循环就只能等整机跑起来才测得了。
+   接口只有一个方法，`RunService` 用 `this::processOneJob` 实现，实现体一行没动。
+
 ## Consequences
 
-- **`RunService` 从 1596 涨到 1604 行。** 本步不减行数：判据搬走后，调用点要量出四个参数、
-  要按原因分四种写日志，比原来四个 `if` 长。行数在 3b 才降，这一点在计划里要写清，
-  否则下一步会有人拿行数判断本步白做了。
+- **行数先涨后降。** 3a 之后 `RunService` 从 1596 涨到 1604（判据搬走后，调用点要量出四个参数、
+  要按原因分四种写日志）。3b 之后是 **1401**，另有 `ScanSegment` 328 行、`ScanHost` 51 行、
+  `JobProcessor` 29 行。**离架构审查写的「800 行以下」还差约 600** —— 那要把待命状态机与
+  Run 生命周期也抽走，属于另外两步，不是这一步没做完。
 - **每段扫描最多多一次 `evaluatedToday` 查询**：改造前它只在配额未到顶时读，现在两个计数都在
   调用前量好。它发生在「配额已到顶」那一张卡上，紧接着就 `return`。
 - **判据的边界逐字保留**：`>=` 而不是 `>`，时间上限用严格大于（刚好用满不算超时），
@@ -74,8 +93,15 @@ SSE 出口全在一个类里。其中扫描段最混杂：分页、AI 判定、�
 - **`RunService` 里 switch 的 `COMBOS_EXHAUSTED` 分支是不可达的**，写成 `throw` 而不是静默跳过：
   真发生了说明 `ScanBoundary` 的契约被改了，宁可当场炸也不要把「扫完了」记成「停了」。
   不可达性本身由 `ScanBoundaryTest.卡片边界永不返回组合耗尽` 在一个输入矩阵上验证。
-- **3b 的三个前置**：控制面抽成一个接口且**同时服务待命段**（否则同一概念两种写法）、
-  共享的 `FakeAdapter`（现在私有藏在 `UnreadWatcherTest` 里）、重取后的 `run_log` 基线。
+- **三个前置在 3b 都落地了**：`ScanHost` 一个接口、同时服务待命段（`standbyLoop` 的 3 处裸读
+  改走它）；`FakePlatformAdapter` 提到 `com.chatjob.testing` 两个测试类共用；`run_log` 基线用
+  3a 的五轮真实演练重取。
+- **真实演练的对照证据**：`run 94`（3a 代码）与 `run 100`（3b 代码）用同一配置、同一组合跑演练，
+  `run_log` 序列逐行一致（都停在 `COMBINATION_TIMEOUT`，都打印「已处理 N/139 张卡，
+  剩余 M 张留待下次扫描继续」）。差别只有卡片数 19 对 20（时序）与一行偶发的
+  「多出一个标签页」对账提示。两次都没有发送任何消息、没有清未读红点（值守开关全程关闭）。
+- **测试从 381 涨到 398**：`ScanSegmentTest` 5 例覆盖「配额在第一张卡前停」「关扫描不导航」
+  「断点从上次那张继续」「组合跑完记 DONE」「人工停止不再抓下一张」。
 
 ## Open Questions
 

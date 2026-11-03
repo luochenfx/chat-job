@@ -3,11 +3,11 @@ package com.chatjob.watcher;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
-import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.runlog.RunLog;
 import com.chatjob.runlog.RunLogLevel;
 import com.chatjob.store.ConfigStore;
+import com.chatjob.testing.FakePlatformAdapter;
 import com.chatjob.time.FixedTimeSource;
 import com.chatjob.store.entity.ConversationEntity;
 import com.chatjob.store.entity.ReplyLogEntity;
@@ -576,7 +576,7 @@ class UnreadWatcherTest {
      */
     private static final class Fixture {
         final FakeMapper mapper = new FakeMapper();
-        final FakeAdapter adapter = new FakeAdapter();
+        final FakePlatformAdapter adapter = new FakePlatformAdapter();
         final FakeReplyStore replyStore = new FakeReplyStore(adapter);
         final FakeConfig config;
         final FakeReplier replier = new FakeReplier();
@@ -665,7 +665,7 @@ class UnreadWatcherTest {
         final List<ReplyLogEntity> logs = new ArrayList<>();
         private long seq = 0;
 
-        FakeReplyStore(FakeAdapter adapter) {
+        FakeReplyStore(FakePlatformAdapter adapter) {
             super(null, null, null, null, null, TIME);
         }
 
@@ -721,100 +721,6 @@ class UnreadWatcherTest {
         @Override
         public void log(ReplyLogEntity entity) {
             logs.add(entity);
-        }
-    }
-
-    private static final class FakeAdapter implements PlatformAdapter {
-        final List<UnreadThread> unread = new ArrayList<>();
-        final List<String> events = new ArrayList<>();
-        final List<String> readCalls = new ArrayList<>();
-        final List<String> readTitles = new ArrayList<>();
-        final List<String> sendCalls = new ArrayList<>();
-        final List<String> resumeCalls = new ArrayList<>();
-        final List<String> digests = new ArrayList<>();
-        List<ChatMessage> messages = List.of(new ChatMessage("mid-1", "你好", false, false));
-        boolean emptyMessages = false;
-        boolean sendOk = true;
-        com.chatjob.platform.Models.ResumeResult resumeResult =
-                com.chatjob.platform.Models.ResumeResult.sent("简历卡片已出现");
-        @Nullable ThreadTargetUnsafeException throwOnRead;
-
-        @Override
-        public String platform() {
-            return PLATFORM;
-        }
-
-        @Override
-        public List<UnreadThread> listUnreadThreads() {
-            return unread;
-        }
-
-        @Override
-        public List<ChatMessage> readMessages(UnreadThread thread) {
-            readCalls.add("read:" + thread.title());
-            readTitles.add(thread.title());
-            digests.add(thread.expectedDigest());
-            events.add("read:" + thread.title());
-            if (throwOnRead != null) {
-                throw throwOnRead;
-            }
-            return emptyMessages ? List.of() : messages;
-        }
-
-        @Override
-        public boolean sendText(UnreadThread thread, String text) {
-            sendCalls.add("send:" + thread.title() + ":" + text);
-            events.add("send:" + thread.title());
-            return sendOk;
-        }
-
-        @Override
-        public com.chatjob.platform.Models.ResumeResult sendResume(UnreadThread thread) {
-            resumeCalls.add("resume:" + thread.title());
-            events.add("resume:" + thread.title());
-            return resumeResult;
-        }
-
-        @Override
-        public void closeThread() {
-        }
-
-        // ---- 以下值守不会调用
-
-        @Override
-        public com.chatjob.platform.Models.LoginState probeLogin() {
-            return null;
-        }
-
-        @Override
-        public void openLogin() {
-        }
-
-        @Override
-        public void openSearch(com.chatjob.platform.Models.SearchQuery query) {
-        }
-
-        @Override
-        public com.chatjob.platform.Models.ScrollOutcome scrollUntilEnd(
-                com.chatjob.platform.Models.ScrollParams params, BooleanSupplier stop) {
-            return null;
-        }
-
-        @Override
-        public int cardCount() {
-            return 0;
-        }
-
-        @Override
-        public com.chatjob.platform.Models.JobDetail fetchDetail(int cardIndex) {
-            return null;
-        }
-
-        @Override
-        public com.chatjob.platform.Models.DeliveryResult deliver(
-                com.chatjob.platform.Models.JobDetail job, String greeting,
-                com.chatjob.platform.Models.DeliveryOptions options, BooleanSupplier stop) {
-            return null;
         }
     }
 

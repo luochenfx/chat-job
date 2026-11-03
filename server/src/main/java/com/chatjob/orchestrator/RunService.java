@@ -80,11 +80,6 @@ import java.util.concurrent.ThreadLocalRandom;
 @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
 public class RunService {
 
-    /** 每处理这么多张卡片做一次未读检查 */
-    private static final int WATCH_EVERY_CARDS = 5;
-    /** 或者每隔这么久（秒）做一次 */
-    private static final int WATCH_EVERY_SECONDS = 120;
-
     private final RunStore runStore;
     private final JobStore jobStore;
     private final ConfigStore configStore;
@@ -323,6 +318,9 @@ public class RunService {
     private void runLoop(RunEntity run) {
         String platform = run.getPlatform();
         RunLog runLog = runLogs.of(run);
+        // 本轮的宿主：扫描段与待命段都通过它问「能不能继续 / 要不要等 / 到点没有」。
+        // 每轮 Run 一个，因为它绑定 run 实体；两条循环共用同一个实例，运行状态只有一种读法。
+        RunHost host = new RunHost(run);
         long startedAt = System.currentTimeMillis();
         // 交互计数的起点。为 null 表示这条 Run 还没走到"真的开始干活"（时段外挂起、
         // driver 不可用、自检失败、登录态失效都会在此之前返回），那种情况下不该写汇总行
@@ -395,7 +393,9 @@ public class RunService {
             while (true) {
                 if (scanEnabled) {
                     ensureScanDay(run);
-                    reason = executeCombinations(run);
+                    ScanSegment segment = new ScanSegment(run, adapter(), configStore, runStore,
+                            unreadWatcher, runLogs, time, this::processOneJob, host);
+                    reason = segment.run().orElse(null);
 
                     // 三个既有判定顺序不变：停止是 CANCELLED、演练不进待命、到点挂起。
                     // 下面的「未启用值守」只能排在它们之后 —— 排在前面就会把用户点停止
@@ -414,7 +414,7 @@ public class RunService {
                         return;
                     }
                     // 扫描开、值守关：扫完就结束，不进待命（spec 0005 §3.2 第二行）。
-                    // reason 在这里必不为 null：executeCombinations 只在停止或到点两处返回 null，
+                    // reason 在这里必不为 null：扫描段只在停止或到点两处返回空，
                     // 而这两种情况上面已经各自 return 了。
                     // 读当下的配置而不是启动那一刻的值：扫描中途被关掉的值守，要在走到这里时
                     // 直接收尾，而不是先进待命发一条「值守继续」的横幅与企业微信通知、再立刻结束。
@@ -430,7 +430,7 @@ public class RunService {
                     enterStandby(run, reason);
                 }
 
-                StandbyExit exit = standbyLoop(run, reason, scanEnabled);
+                StandbyExit exit = standbyLoop(run, host, reason, scanEnabled);
                 if (exit == StandbyExit.STOPPED) {
                     finish(run, RunStatus.CANCELLED, "CANCELLED", "用户主动停止");
                     return;
@@ -511,7 +511,7 @@ public class RunService {
      *
      * @param scanEnabled 本轮是否参与扫描，取自 {@code runLoop} 启动时那一次读取
      */
-    private StandbyExit standbyLoop(RunEntity run, ScanStop reason, boolean scanEnabled) {
+    private StandbyExit standbyLoop(RunEntity run, ScanHost host, ScanStop reason, boolean scanEnabled) {
         int round = 0;
         long enteredAt = System.currentTimeMillis();
         RunLog runLog = runLogs.of(run);
@@ -519,11 +519,11 @@ public class RunService {
                 && configStore.aiConfig().getCollectEffectMetrics() == 1;
 
         while (true) {
-            if (stopRequested) {
+            if (host.stopRequested()) {
                 return StandbyExit.STOPPED;
             }
-            awaitResume(run);
-            if (stopRequested) {
+            host.awaitResume();
+            if (host.stopRequested()) {
                 return StandbyExit.STOPPED;
             }
 
@@ -548,7 +548,7 @@ public class RunService {
             int evaluated = runStore.evaluatedToday(run.getPlatform());
 
             StandbyGate.Action action = StandbyGate.decide(now, window, reason, run.getScanDay(), time.today(),
-                    delivered, quota(cfg), evaluated, evalLimit(cfg), scanEnabled);
+                    delivered, ScanBoundary.quotaOf(cfg), evaluated, ScanBoundary.evalLimitOf(cfg), scanEnabled);
             if (action == StandbyGate.Action.PARK) {
                 park(run, "DUTY_END");
                 return StandbyExit.PARKED;
@@ -559,8 +559,8 @@ public class RunService {
                         : reason == ScanStop.EVAL_LIMIT ? "EVAL_LIMIT_RAISED" : "QUOTA_RAISED";
                 String why = newDay ? "已跨自然日（" + time.today() + "），恢复扫描"
                         : reason == ScanStop.EVAL_LIMIT
-                        ? "评估上限已回升（" + evaluated + "/" + evalLimit(cfg) + "），恢复扫描"
-                        : "主动投递配额已回升（" + delivered + "/" + quota(cfg) + "），恢复扫描";
+                        ? "评估上限已回升（" + evaluated + "/" + ScanBoundary.evalLimitOf(cfg) + "），恢复扫描"
+                        : "主动投递配额已回升（" + delivered + "/" + ScanBoundary.quotaOf(cfg) + "），恢复扫描";
                 runLog.info(why);
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("reason", code);
@@ -578,7 +578,7 @@ public class RunService {
             act(run, "检查未读消息：读取消息列表");
             UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
                     adapter, run.getPlatform(), collectMetrics, false, runLog);
-            publishUnread(run, sweep);
+            host.publishUnread(sweep);
             // 抖动：每 120 秒整刷一次列表是个太像机器的特征
             int jittered = jitterSeconds(interval);
             long standbyMinutes = (System.currentTimeMillis() - enteredAt) / 60_000;
@@ -632,7 +632,7 @@ public class RunService {
         data.put("reason", why0.name());
         data.put("delivered", delivered);
         data.put("evaluated", evaluated);
-        data.put("quota", quota(cfg));
+        data.put("quota", ScanBoundary.quotaOf(cfg));
         publish(run, "run.standby", data);
         notify(run, "standby",
                 neverScanned ? "没有开启搜索，正在处理消息" : timedOut ? "搜索超时，继续处理消息" : "搜索已结束，继续处理消息",
@@ -655,11 +655,11 @@ public class RunService {
     private String whyOf(ScanStop reason, PlatformConfigEntity cfg, int delivered, int evaluated,
                          int cards) {
         return switch (reason) {
-            case QUOTA -> "今天主动联系的名额已经用完（" + delivered + "/" + quota(cfg) + "）";
-            case EVAL_LIMIT -> "今天查看岗位的数量已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
+            case QUOTA -> "今天主动联系的名额已经用完（" + delivered + "/" + ScanBoundary.quotaOf(cfg) + "）";
+            case EVAL_LIMIT -> "今天查看岗位的数量已达上限（" + evaluated + "/" + ScanBoundary.evalLimitOf(cfg) + "）";
             // 不再套一层括号：调用方已经把这一句包在「搜索已结束（…）」里，再套一层读起来像嵌套条件
             case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了，共 " + cards + " 张卡；评估 " + evaluated + "/"
-                    + evalLimit(cfg) + "、投递 " + delivered + "/" + quota(cfg) + " 都还没到上限";
+                    + ScanBoundary.evalLimitOf(cfg) + "、投递 " + delivered + "/" + ScanBoundary.quotaOf(cfg) + " 都还没到上限";
             // 带上具体上限值与剩余量：只说「超时」，读的人分不清是配置上限到了还是页面卡死了
             case COMBINATION_TIMEOUT -> "单个搜索组合跑到了时间上限 "
                     + ConfigStore.normalizeCombinationTimeLimit(cfg.getCombinationTimeLimitSec())
@@ -790,17 +790,6 @@ public class RunService {
         return seconds % 60 == 0 ? (seconds / 60) + " 分钟" : seconds + " 秒";
     }
 
-    private static String stopLabel(ScanStop reason) {
-        return switch (reason) {
-            case QUOTA -> "每天主动联系的名额";
-            case EVAL_LIMIT -> "每天查看岗位的上限";
-            case COMBOS_EXHAUSTED -> "搜索组合已跑完";
-            case COMBINATION_TIMEOUT -> "组合时间上限";
-            // 单独文案在 executeCombinations 里：那里「留待回扫时继续」这半句不成立，不能复用整句
-            case SCAN_DISABLED -> "没有开启「搜索岗位」";
-        };
-    }
-
     /**
      * 演练模式跑完即结束，不进入待命。
      *
@@ -823,228 +812,6 @@ public class RunService {
             case COMBINATION_TIMEOUT -> finish(run, RunStatus.COMPLETED, "COMBINATION_TIMEOUT",
                     "演练模式：组合时间上限已到，演练结束（不进入待命）");
         }
-    }
-
-    /**
-     * 跑组合队列。
-     *
-     * <p>进组合之前先判一次扫描开关，而不只依赖卡片边界的判定：再往下一步就是
-     * {@code openSearch}，关掉扫描之后不得再有任何搜索页导航（spec 0005 §3.5）。
-     *
-     * @return 扫描为什么停；{@code null} 表示被人停 / 到点 / 组合超时这类「不需要待命理由」的退出
-     */
-    private ScanStop executeCombinations(RunEntity run) {
-        RunLog runLog = runLogs.of(run);
-        PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
-        List<CombinationRunEntity> combos = runStore.combinations(run.getId());
-        int startIndex = run.getCombinationIndex() == null ? 0 : run.getCombinationIndex();
-
-        for (int i = startIndex; i < combos.size(); i++) {
-            if (stopRequested || dutyEnded) {
-                return null;
-            }
-            awaitResume(run);
-            CombinationRunEntity combo = combos.get(i);
-            // 组合入口也要判扫描开关，而不是只判卡片边界：再往下一步就是 openSearch，
-            // 关掉扫描之后不得再有任何搜索页导航（spec 0005 §3.5）。放在「开始组合」之前，
-            // 所以关掉之后日志里不会再出现这一行 —— 验收时正是看它。
-            if (!configStore.platformScanEnabled(run.getPlatform())) {
-                runLog.info("该平台已关闭扫描，停止扫描；组合 #" + combo.getSeq() + " 未开始");
-                return ScanStop.SCAN_DISABLED;
-            }
-            long comboStartedAt = System.currentTimeMillis();
-            combo.setStatus("RUNNING");
-            combo.setStartedAt(time.stamp());
-            runStore.updateCombination(combo);
-            publish(run, "combination.started", Map.of(
-                    "seq", combo.getSeq(),
-                    "city", combo.getCity(),
-                    "keyword", combo.getKeyword()));
-            runLog.info("开始组合 #" + combo.getSeq() + " " + combo.getCity() + " / " + combo.getKeyword());
-
-            int resumeCard = (i == startIndex && run.getLastCardIndex() != null) ? run.getLastCardIndex() : 0;
-            try {
-                // 同一个组合的搜索条件既用于打开列表页，也随投递传下去：投递时的详情页要
-                // 先从这张列表页进，来源才是站内（spec 0006 §3.5）。两处用同一个对象，
-                // 免得"扫描用的是城市 A、投递拼出来的列表页是城市 B"这种只在 URL 上可见的错位。
-                SearchQuery query = new SearchQuery(combo.getCity(), null, combo.getKeyword());
-                adapter().openSearch(query);
-                ScrollOutcome scroll = adapter().scrollUntilEnd(
-                        new ScrollParams(cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
-                                cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds()),
-                        this::shouldStop);
-                combo.setCardsSeen(scroll.cards());
-                runLog.info("组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
-                        + scroll.rounds() + " 轮，" + (scroll.loadedAll() ? "确认到底" : "撞到轮数上限") + "）");
-
-                ScanStop stop = processCards(run, cfg, combo, scroll.cards(), resumeCard,
-                        comboStartedAt, query);
-                if (stop != null) {
-                    // 配额 / 评估到顶 / 时间上限：这个组合没跑完，既不能记 DONE，也不能推进断点 ——
-                    // 待命期配额被调高后要回到这张卡继续，而不是从下一个组合重来
-                    if (stop == ScanStop.COMBINATION_TIMEOUT) {
-                        // 单独一个状态：DONE 会被读成「扫完了」，SKIPPED 会与「人工跳过」混在一起。
-                        // 断点停在当前卡（processCards 每张卡都会写一次），同日回扫接着扫。
-                        combo.setStatus("TIMEOUT");
-                        // 断点语义分两种：同日回扫（配额被调高）从这张卡继续；跨日会复位组合队列
-                        // （ensureScanDay），从头重扫。两句都写出来，否则「保留断点」会被当成
-                        // 「明天从第 19 张开始」，而实际上明天是第 1 张。
-                        runLog.info("组合 #" + combo.getSeq() + " 未跑完：已处理到第 "
-                                + count(run.getLastCardIndex()) + "/" + count(combo.getCardsSeen())
-                                + " 张；同日回扫从这里继续，跨日会从第 1 张重扫");
-                    } else {
-                        combo.setStatus("SKIPPED");
-                    }
-                    if (stop == ScanStop.SCAN_DISABLED) {
-                        // 「留待回扫时继续」在这里不成立：关掉扫描的 Run 不会被 StandbyGate 送回扫描
-                        runLog.info("组合 #" + combo.getSeq() + " 中止：该平台已关闭扫描，剩余卡片不再处理");
-                    } else if (stop != ScanStop.COMBINATION_TIMEOUT) {
-                        runLog.info("组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
-                                + "」处中止，剩余卡片留待回扫时继续");
-                    }
-                    return stop;
-                }
-
-                if (stopRequested || dutyEnded) {
-                    combo.setStatus("SKIPPED");
-                } else if (runStatusOf(run) == RunStatus.RUNNING) {
-                    combo.setStatus("DONE");
-                }
-            } catch (BlockedException e) {
-                combo.setStatus("FAILED");
-                throw e;
-            } catch (Exception e) {
-                combo.setStatus("FAILED");
-                // 一句话 + 堆栈走同一个出口：库里的行只有这句话，堆栈进文件。
-                // 原来这里分两条（一行写库、一行只写文件），库里一行、文件里两行，且两行的措辞不一致。
-                runLog.warn("组合 #" + combo.getSeq() + " 失败已跳过：" + e.getMessage(), e);
-            } finally {
-                combo.setFinishedAt(time.stamp());
-                runStore.updateCombination(combo);
-            }
-
-            if (stopRequested || dutyEnded) {
-                return null;
-            }
-            // 组合跑完，断点前进到下一个组合的第 0 张卡
-            runStore.checkpoint(run, i + 1, 0, 0);
-            run.setCombinationIndex(i + 1);
-            run.setLastCardIndex(0);
-        }
-        return ScanStop.COMBOS_EXHAUSTED;
-    }
-
-    private ScanStop processCards(RunEntity run, PlatformConfigEntity cfg, CombinationRunEntity combo,
-                                                int cardCount, int startCard, long comboStartedAt,
-                                                SearchQuery query) {
-        RunLog runLog = runLogs.of(run);
-        int cardsSinceWatch = 0;
-        long lastWatchAt = System.currentTimeMillis();
-        // <=0 表示不限时间（配置页可填 0 或 -1）：此时只有配额、评估上限、
-        // 值守时段结束、人工停止这几个出口能中止组合，超时判据整段跳过
-        int limitSeconds = ConfigStore.normalizeCombinationTimeLimit(cfg.getCombinationTimeLimitSec());
-        boolean collectMetrics = configStore.aiConfig().getCollectEffectMetrics() != null
-                && configStore.aiConfig().getCollectEffectMetrics() == 1;
-        // 演练态从这里显式流下去。sweep 的签名要求它，而不是让 UnreadWatcher 自己去猜 ——
-        // 上一轮的 bug 就是「投递路径判了 DRY_RUN，值守路径忘了判」，而值守会真的给 HR 发消息。
-        boolean dryRun = "DRY_RUN".equals(run.getMode());
-
-        for (int card = startCard; card < cardCount; card++) {
-            if (stopRequested) {
-                return null;
-            }
-            awaitResume(run);
-            // 卡片边界是唯一可靠的收工点：这里之前的所有动作要么不发消息，要么已经发完了
-            if (checkDutyWindow(run, cfg)) {
-                return null;
-            }
-            // 卡片边界是唯一可靠的收工点：这里之前的所有动作要么不发消息，要么已经发完了，
-            // 半条招呼语比晚几秒停止更糟。
-            // 四个判据（扫描开关 / 配额 / 评估上限 / 时间上限）与它们的优先级都在 ScanBoundary 里，
-            // 这里只做两件事：把参数量出来、按原因写日志。判据与文案分开，判据才能被直接测。
-            // 读配置而不读 runLoop 里的局部变量：那个值只在启动时读一次，运行中关掉不会变。
-            int delivered = runStore.deliveredToday(run.getPlatform());
-            int evaluated = runStore.evaluatedToday(run.getPlatform());
-            long usedSeconds = (System.currentTimeMillis() - comboStartedAt) / 1000;
-            Optional<ScanStop> boundary = ScanBoundary.atCard(
-                    configStore.platformScanEnabled(run.getPlatform()),
-                    delivered, quota(cfg), evaluated, evalLimit(cfg), usedSeconds, limitSeconds);
-            if (boundary.isPresent()) {
-                ScanStop stop = boundary.get();
-                // 四种原因分开写：它们在界面上的下一步不同（继续值守 / 留待回扫 / 不再导航），
-                // 合并成一句会把「已经停了」读成「还会继续」。
-                switch (stop) {
-                    case SCAN_DISABLED -> runLog.info(
-                            "该平台已关闭扫描，在第 " + (card + 1) + " 张卡前停止；值守继续");
-                    case QUOTA -> runLog.info("今日主动投递已达配额 " + quota(cfg) + "（" + delivered
-                            + "），中止扫描；值守继续");
-                    case EVAL_LIMIT -> runLog.info("今日评估已达上限 " + evalLimit(cfg) + "（" + evaluated
-                            + "），中止扫描；值守继续");
-                    // 超时点在卡片边界：上一张卡的动作已经做完，这里停下不会留下半条招呼语。
-                    // 文案必须带进度：只说「超时（Ns）」时，界面上唯一的痕迹是一句 WARN，
-                    // 而进度行已经被断点归零，看不出是扫到一半停的还是根本没扫。
-                    case COMBINATION_TIMEOUT -> runLog.warn("组合 #" + combo.getSeq() + " 到达时间上限（"
-                            + limitSeconds + "s，实际 " + usedSeconds + "s）：已处理 " + card + "/" + cardCount
-                            + " 张卡，评估 " + count(combo.getEvaluated()) + "、投递 " + count(combo.getDelivered())
-                            + "；剩余 " + (cardCount - card) + " 张留待下次扫描继续");
-                    // 组合队列耗尽由 executeCombinations 在队列末尾产出，卡片边界不该出现它。
-                    // 真出现了说明 ScanBoundary 的契约被改了，宁可当场炸也不要把「扫完了」记成「停了」。
-                    case COMBOS_EXHAUSTED -> throw new IllegalStateException(
-                            "卡片边界不应返回 " + stop + "，它由组合队列耗尽产出");
-                }
-                return stop;
-            }
-
-            act(run, "查看第 " + (card + 1) + " 个岗位的详情");
-            JobDetail detail = adapter().fetchDetail(card);
-            if (detail == null) {
-                runLog.warn("第 " + (card + 1) + " 张卡片没抓到详情，跳过");
-                continue;
-            }
-
-            // 组合维度的账以前没人记：daily_counter 是平台维度的当日配额，run.evaluatedCount 是
-            // 整个 Run 的累计，两者都不是「这个城市×关键词」这一格的数，于是 combination_run 的
-            // evaluated / delivered 从建表起就一直是 0（Run 上写着 20，组合上写 0）。
-            // 这里按单张卡处理前后的差值补记，而不是在 processOneJob 里再判一次「算不算评估/投递」——
-            // 那里 incr 的两个点才是唯一口径，照抄一遍只会多出第二份真相。
-            int evaluatedBefore = count(run.getEvaluatedCount());
-            int deliveredBefore = count(run.getDeliveredCount());
-            processOneJob(run, cfg, detail, query);
-            int evaluatedDelta = count(run.getEvaluatedCount()) - evaluatedBefore;
-            int deliveredDelta = count(run.getDeliveredCount()) - deliveredBefore;
-            if (evaluatedDelta > 0 || deliveredDelta > 0) {
-                combo.setEvaluated(count(combo.getEvaluated()) + evaluatedDelta);
-                combo.setDelivered(count(combo.getDelivered()) + deliveredDelta);
-                // 紧跟 checkpoint 落库：组合被配额 / 超时 / 停止打断时，已经扫过的那几张卡的账不能丢
-                runStore.updateCombination(combo);
-            }
-
-            cardsSinceWatch++;
-            boolean timeUp = (System.currentTimeMillis() - lastWatchAt) / 1000 >= WATCH_EVERY_SECONDS;
-            if (cardsSinceWatch >= WATCH_EVERY_CARDS || timeUp) {
-                // 计数先归零再判开关：关掉值守期间不该累计卡片数，否则重新打开的那一刻
-                // 会立刻补一次巡检（那一刻并没有到间隔）。
-                cardsSinceWatch = 0;
-                lastWatchAt = System.currentTimeMillis();
-                // 插空巡检是「即刻生效」的第二个点：扫描进行中关掉值守，扫描继续，但不再碰消息列表
-                // （spec 0005 §3.6）。读配置而不读 runLoop 里的局部值 —— 这个开关可以在扫描中途被改。
-                // 跳过时不打日志：每 5 张卡一行会盖住投递日志，而「没有 unread.detected 事件」
-                // 本身就是可核对的事实。
-                if (configStore.platformWatchEnabled(run.getPlatform())) {
-                    UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
-                            adapter, run.getPlatform(), collectMetrics, dryRun, runLog);
-                    publishUnread(run, sweep);
-                }
-            }
-
-            runStore.checkpoint(run, run.getCombinationIndex(), 0, card + 1);
-            run.setLastCardIndex(card + 1);
-
-            // 节奏：每张卡片后随机 [waitTime/2, waitTime]
-            String next = card + 2 <= cardCount ? "查看第 " + (card + 2) + " 个岗位" : "进入下一组搜索条件";
-            pauseFor(run, cfg, next);
-        }
-        return null;
     }
 
     /**
@@ -1176,7 +943,7 @@ public class RunService {
         if (result.status() == DeliveryResult.Status.DELIVERED) {
             runStore.incrementDelivered(run.getPlatform());
             run.setDeliveredCount((run.getDeliveredCount() == null ? 0 : run.getDeliveredCount()) + 1);
-            runLog.info("已投递（" + run.getDeliveredCount() + "/" + quota(cfg) + "）："
+            runLog.info("已投递（" + run.getDeliveredCount() + "/" + ScanBoundary.quotaOf(cfg) + "）："
                     + job.getJobName() + " @ " + job.getCompanyName());
         } else if (result.status() == DeliveryResult.Status.SKIPPED) {
             runLog.info("未投递（" + result.failureReason() + "）：" + job.getJobName());
@@ -1415,26 +1182,8 @@ public class RunService {
         }
     }
 
-    private void pauseFor(RunEntity run, PlatformConfigEntity cfg, String next) {
-        int wait = cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds();
-        int min = Math.max(1, wait / 2);
-        int max = Math.max(min + 1, wait);
-        int millis = ThreadLocalRandom.current().nextInt(min * 1000, max * 1000);
-        // 等待前先写「在等多久、等完干什么」：这是界面区分「在等」与「卡死」的唯一依据
-        act(run, "等待 " + Math.max(1, millis / 1000) + " 秒后" + next);
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     private boolean shouldStop() {
         return stopRequested;
-    }
-
-    private static int quota(PlatformConfigEntity cfg) {
-        return cfg.getDailyDeliveryQuota() == null ? 30 : cfg.getDailyDeliveryQuota();
     }
 
     /**
@@ -1444,10 +1193,6 @@ public class RunService {
      */
     private static String modeLabel(String mode) {
         return "DRY_RUN".equals(mode) ? "演练模式（不发送任何消息）" : "正常投递";
-    }
-
-    private static int evalLimit(PlatformConfigEntity cfg) {
-        return cfg.getDailyEvalLimit() == null ? 150 : cfg.getDailyEvalLimit();
     }
 
     private RunStatus runStatusOf(RunEntity run) {
@@ -1600,5 +1345,57 @@ public class RunService {
         return ActivityStaleness.staleAfterSeconds(status,
                 cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds(),
                 ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds()));
+    }
+
+    /**
+     * 一条 Run 的宿主实现：把 {@link ScanHost} 的问题翻成本类的运行状态与出口。
+     *
+     * <p>为什么是内部类而不是让 {@code RunService} 直接实现接口：接口方法不带 {@code run} 参数，
+     * 而这里每个动作都要知道「哪条 Run」。内部类把它绑在实例上，本类也就不用回答
+     * 「现在跑的是哪条 Run」—— 那个问题在 {@code wakeIfWaiting} 里没有正确答案
+     * （手里的 Run 与 worker 正在跑的不是同一条，见 ADR-0008 第 2 条）。
+     */
+    private final class RunHost implements ScanHost {
+
+        private final RunEntity run;
+
+        private RunHost(RunEntity run) {
+            this.run = run;
+        }
+
+        @Override
+        public boolean stopRequested() {
+            return RunService.this.stopRequested;
+        }
+
+        @Override
+        public boolean interrupted() {
+            return RunService.this.stopRequested || RunService.this.dutyEnded;
+        }
+
+        @Override
+        public void awaitResume() {
+            RunService.this.awaitResume(run);
+        }
+
+        @Override
+        public boolean endIfOutOfDuty(PlatformConfigEntity cfg) {
+            return RunService.this.checkDutyWindow(run, cfg);
+        }
+
+        @Override
+        public void act(String action) {
+            RunService.this.act(run, action);
+        }
+
+        @Override
+        public void publish(String type, Object data) {
+            RunService.this.publish(run, type, data);
+        }
+
+        @Override
+        public void publishUnread(UnreadWatcher.SweepResult sweep) {
+            RunService.this.publishUnread(run, sweep);
+        }
     }
 }

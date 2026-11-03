@@ -1,18 +1,21 @@
 package com.chatjob.scan;
 
+import com.chatjob.store.entity.PlatformConfigEntity;
+
 import java.util.Optional;
 
 /**
- * 卡片边界上「该不该停、为什么停」的判定。
+ * 卡片边界上「该不该停、为什么停」的判定，以及两个当日上限的缺省口径。
  *
  * <p>抽成静态纯函数是为了能直接喂参数测：这段判定原来写在卡片循环体里，而循环要开浏览器、
  * 要 sleep、要写库，用测试替身驱动只能验证「它会不会调下一个动作」，验证不了
  * 「配额和上限同时到顶时先记哪一个」——而那正是这一段最容易改错的地方（与
  * {@code StandbyGate} 同一模式）。
  *
- * <p><b>不碰 IO、不读配置、不读时钟</b>：配额、上限、已用量、已耗时全部由调用方量好后传进来。
- * 配置的缺省值（配额 30、上限 150）留在调用方，因为待命期与收尾文案也读同一份缺省，
- * 抄到这里就是第二份真相。
+ * <p><b>两个判定方法不碰 IO、不读配置、不读时钟</b>：配额、上限、已用量、已耗时全部由调用方
+ * 量好后传进来。{@link #quotaOf} / {@link #evalLimitOf} 只负责「没配过时按多少算」，
+ * 它们跟判据住在一起，是因为「配额是 30」这件事只有配上「到了就停」才有意义 ——
+ * 分开放就会出现「判据用 30、文案用 150」那种只在日志里看得见的错位。
  *
  * <p><b>判定顺序即优先级</b>，顺序本身是被测对象：
  * <ol>
@@ -28,6 +31,16 @@ import java.util.Optional;
 public final class ScanBoundary {
 
     private ScanBoundary() {
+    }
+
+    /** 投递配额的缺省值。库里这一列有 DEFAULT，读到 null 只可能是实体刚构造还没落库 */
+    public static int quotaOf(PlatformConfigEntity cfg) {
+        return cfg.getDailyDeliveryQuota() == null ? 30 : cfg.getDailyDeliveryQuota();
+    }
+
+    /** 评估上限的缺省值，口径同上 */
+    public static int evalLimitOf(PlatformConfigEntity cfg) {
+        return cfg.getDailyEvalLimit() == null ? 150 : cfg.getDailyEvalLimit();
     }
 
     /**
