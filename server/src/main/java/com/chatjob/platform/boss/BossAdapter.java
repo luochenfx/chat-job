@@ -7,7 +7,6 @@ import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
 import com.chatjob.driver.human.HumanBatchPacer;
 import com.chatjob.driver.human.Humanize;
-import com.chatjob.platform.Digest;
 import com.chatjob.platform.ListFirstEntry;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
@@ -19,8 +18,8 @@ import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
-import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.platform.UnreadScanLimit;
+import com.chatjob.platform.page.PageKit;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -100,6 +99,12 @@ public class BossAdapter implements PlatformAdapter {
      */
     private final HumanBatchPacer detailPacer;
 
+    /**
+     * 与页面形状无关的那一半动作（导航重试、会话定位、读未读、填输入框、关标签）。
+     * 选择器留在 {@link BossSelectors}，行为在 {@link PageKit}，本类只提供两者之间的取值。
+     */
+    private final PageKit kit;
+
     private Page listPage;
     private Page threadPage;
 
@@ -114,6 +119,23 @@ public class BossAdapter implements PlatformAdapter {
         this.executor = browser.executor();
         this.human = browser.humanize();
         this.detailPacer = new HumanBatchPacer(human.pacing());
+        // 会话列表在聊天页的右侧面板里，点开就地切换，没有可判的容器 —— 所以 threadPanel 传空串
+        this.kit = new PageKit(
+                new PageKit.Profile("zhipin.com", new PageKit.Selectors(
+                        "聊天列表",
+                        BossSelectors.LIST_CONTAINER,
+                        BossSelectors.SECURITY_VERIFY_MARK,
+                        List.of("/web/user/", "safe/verify", "security-check"),
+                        BossSelectors.CHAT_LIST_ITEM,
+                        BossSelectors.CHAT_LIST_TITLE,
+                        BossSelectors.CHAT_LIST_LAST_MSG,
+                        BossSelectors.CHAT_LIST_ITEM_BODY,
+                        BossSelectors.CHAT_LIST_UNREAD,
+                        "",
+                        BossSelectors.CHAT_INPUT),
+                        400, 800, "填入招呼语失败"),
+                human,
+                (target, options, note) -> human.click(target, options));
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -146,7 +168,7 @@ public class BossAdapter implements PlatformAdapter {
             if (page == null) {
                 return LoginState.lost("还没有打开页面，也没有找到登录信息");
             }
-            String url = safeUrl(page);
+            String url = PageKit.safeUrl(page);
             if (url.contains("/web/user/")) {
                 return LoginState.lost("页面停在了登录页：" + url);
             }
@@ -168,7 +190,7 @@ public class BossAdapter implements PlatformAdapter {
         executor.run(() -> {
             Page page = ensureListPage();
             log.info("打开 BOSS 登录页，请在浏览器窗口中扫码完成登录: {}", BossEndpoints.LOGIN_URL);
-            navigateWithRetry(page, BossEndpoints.LOGIN_URL, 45_000, 1);
+            kit.navigateWithRetry(page, BossEndpoints.LOGIN_URL, 45_000, 1);
         });
     }
 
@@ -181,11 +203,11 @@ public class BossAdapter implements PlatformAdapter {
             String url = urlBuilder.build(cfg, query.city(), query.keyword());
             Page page = ensureListPage();
             log.info("打开搜索页: 城市={} 关键词={} → {}", query.city(), query.keyword(), url);
-            navigateWithRetry(page, url, 45_000, 1);
-            waitForList(page);
-            if (isSecurityVerify(page)) {
+            kit.navigateWithRetry(page, url, 45_000, 1);
+            kit.waitForList(page);
+            if (kit.isSecurityVerify(page)) {
                 throw new BlockedException(BlockedException.Kind.SECURITY_CHECK,
-                        "搜索页被重定向到安全验证页: " + safeUrl(page));
+                        "搜索页被重定向到安全验证页: " + PageKit.safeUrl(page));
             }
         });
     }
@@ -246,9 +268,9 @@ public class BossAdapter implements PlatformAdapter {
                         break;
                     }
                     // 滚动本身很便宜，但节奏别太快：懒加载请求密集时会触发风控
-                    pause(400, 700);
+                    kit.pause(400, 700);
                 } catch (Exception e) {
-                    if (!isStaleError(e)) {
+                    if (!PageKit.isStaleError(e)) {
                         throw e;
                     }
                     staleHits++;
@@ -256,7 +278,7 @@ public class BossAdapter implements PlatformAdapter {
                         log.warn("滚动期间反复出现失效对象异常（{} 次），停止继续加载", staleHits);
                         break;
                     }
-                    pause(800, 1_200);
+                    kit.pause(800, 1_200);
                 }
             }
             int cards = page.locator(BossSelectors.CARD).count();
@@ -301,7 +323,7 @@ public class BossAdapter implements PlatformAdapter {
                     // 第一张卡片默认展开，点它不会触发详情请求。
                     // 必须先点第二张，再点回第一张，并在"点回"时挂监听。
                     human.click(cards.nth(1), new Locator.ClickOptions().setTimeout(10_000));
-                    pause(800, 1_200);
+                    kit.pause(800, 1_200);
                     response = page.waitForResponse(BossAdapter::isDetailResponse,
                             () -> human.click(page.locator(BossSelectors.CARD).nth(0),
                                     new Locator.ClickOptions().setTimeout(10_000)));
@@ -431,7 +453,7 @@ public class BossAdapter implements PlatformAdapter {
             Page chatPage = detailPage;
             try {
                 openDetailPage(detailPage, detailUrl, options);
-                pause(1_000, 1_600);
+                kit.pause(1_000, 1_600);
 
                 String buttonText = waitForChatButton(detailPage, stop);
                 if (buttonText == null) {
@@ -473,7 +495,7 @@ public class BossAdapter implements PlatformAdapter {
                         return DeliveryResult.skipped("招呼语为空");
                     }
 
-                    if (!fillInput(chatPage, message)) {
+                    if (!kit.fillInput(chatPage, message)) {
                         return DeliveryResult.failed("输入框填入失败");
                     }
                     if (!clickSend(chatPage)) {
@@ -519,8 +541,8 @@ public class BossAdapter implements PlatformAdapter {
                 log.warn("投递异常 | {} @ {}: {}", job.jobName(), job.companyName(), e.getMessage());
                 return DeliveryResult.failed(e.getClass().getSimpleName() + ": " + e.getMessage());
             } finally {
-                closeQuietly(chatPage);
-                closeQuietly(detailPage); // navigator 已关掉的会跳过
+                PageKit.closeQuietly(chatPage);
+                PageKit.closeQuietly(detailPage); // navigator 已关掉的会跳过
             }
         });
     }
@@ -603,7 +625,7 @@ public class BossAdapter implements PlatformAdapter {
         String lastText = "";
 
         // 发送请求落地前别动页面
-        pause(2_000, 3_000);
+        kit.pause(2_000, 3_000);
 
         while (System.currentTimeMillis() < deadline) {
             if (stop != null && stop.getAsBoolean()) {
@@ -611,11 +633,11 @@ public class BossAdapter implements PlatformAdapter {
             }
             // 同标签页场景下，聊天页就是详情页本身，URL 已经不是 job_detail → 这里会把它导回去。
             // 导航次数封顶：真导不回去时不要让每轮都吃一次 30s 导航超时，那样窗口直接被吃光。
-            if (!landedOn(detailPage, detailUrl) && navAttempts < 3) {
+            if (!kit.landedOn(detailPage, detailUrl) && navAttempts < 3) {
                 navAttempts++;
                 try {
-                    navigateWithRetry(detailPage, detailUrl, 30_000, 1);
-                    pause(800, 1_400);
+                    kit.navigateWithRetry(detailPage, detailUrl, 30_000, 1);
+                    kit.pause(800, 1_400);
                 } catch (Exception e) {
                     log.debug("复核送达时导航回详情页失败（第 {} 次）: {}", navAttempts, e.getMessage());
                 }
@@ -627,8 +649,8 @@ public class BossAdapter implements PlatformAdapter {
                         chatPage.equals(detailPage) ? "" : "（聊天页我方消息 " + countSelfMessages(chatPage) + " 条）");
                 return new ButtonConfirm(true, lastText);
             }
-            if (isSecurityVerify(detailPage)) {
-                log.warn("复核送达时页面落在安全验证页: {}", safeUrl(detailPage));
+            if (kit.isSecurityVerify(detailPage)) {
+                log.warn("复核送达时页面落在安全验证页: {}", PageKit.safeUrl(detailPage));
                 return new ButtonConfirm(false, "安全验证页");
             }
             if (!reloaded && System.currentTimeMillis() - start > 15_000) {
@@ -638,7 +660,7 @@ public class BossAdapter implements PlatformAdapter {
                     detailPage.reload(new Page.ReloadOptions()
                             .setTimeout(30_000)
                             .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-                    pause(800, 1_400);
+                    kit.pause(800, 1_400);
                     continue;
                 } catch (Exception e) {
                     log.debug("复核送达时重载详情页失败（继续轮询）: {}", e.getMessage());
@@ -647,7 +669,7 @@ public class BossAdapter implements PlatformAdapter {
             detailPage.waitForTimeout(1_500);
         }
         log.warn("详情页按钮在 {}s 内始终未变为「继续沟通」（最后读到「{}」，页面: {}）",
-                DELIVER_CONFIRM_TIMEOUT_MS / 1000, lastText, safeUrl(detailPage));
+                DELIVER_CONFIRM_TIMEOUT_MS / 1000, lastText, PageKit.safeUrl(detailPage));
         return new ButtonConfirm(false, lastText);
     }
 
@@ -666,15 +688,6 @@ public class BossAdapter implements PlatformAdapter {
         }
     }
 
-    private void closeQuietly(Page page) {
-        try {
-            if (page != null && !page.isClosed()) {
-                page.close();
-            }
-        } catch (Exception ignore) {
-            // 关页失败不影响投递结论
-        }
-    }
 
     private int countSelfMessages(Page page) {
         try {
@@ -685,33 +698,6 @@ public class BossAdapter implements PlatformAdapter {
         }
     }
 
-    /**
-     * 把招呼语写进聊天输入框。
-     *
-     * <p>这里原来按标签分两条路：{@code textarea} 用 {@code fill}，Boss 的
-     * {@code div[contenteditable]} 因为 {@code fill} 填不进去改用 JS 赋 {@code innerText}。
-     * 后者只有一次 {@code input} 事件、没有 {@code keydown}，是页面上最容易识别的信号之一
-     * （spec 0006 §1.2）。现在两条路都交给 {@link Humanize#type}：它自己判断元素种类、
-     * 逐字输入、校验终态，失败时才退回原来那两种写法并记一条 WARN。
-     *
-     * @return 终态是否与目标文本一致。<b>降级之后也读一次</b>，所以 {@code false} 表示
-     *         "两种写法都没写对"，调用方应直接判失败
-     */
-    private boolean fillInput(Page page, String message) {
-        try {
-            Locator input = page.locator(BossSelectors.CHAT_INPUT).first();
-            if (!input.isVisible(new Locator.IsVisibleOptions().setTimeout(5_000))) {
-                return false;
-            }
-            // 焦点由 human.type 内部用真实点击建立：某些编辑器在 focus() 与真实点击下行为不同
-            boolean written = human.type(input, message);
-            pause(400, 800);
-            return written;
-        } catch (Exception e) {
-            log.warn("填入招呼语失败: {}", e.getMessage());
-            return false;
-        }
-    }
 
     private boolean clickSend(Page page) {
         try {
@@ -745,9 +731,9 @@ public class BossAdapter implements PlatformAdapter {
     public List<UnreadThread> listUnreadThreads() {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!safeUrl(page).contains("/web/geek/chat")) {
-                navigateWithRetry(page, BossSelectors.CHAT_LIST_URL, 45_000, 1);
-                pause(1_500, 2_500);
+            if (!PageKit.safeUrl(page).contains("/web/geek/chat")) {
+                kit.navigateWithRetry(page, BossSelectors.CHAT_LIST_URL, 45_000, 1);
+                kit.pause(1_500, 2_500);
             }
             List<UnreadThread> out = new ArrayList<>();
             Locator items = page.locator(BossSelectors.CHAT_LIST_ITEM);
@@ -766,9 +752,9 @@ public class BossAdapter implements PlatformAdapter {
                     // 必须与 openThread 比较时用同一个归一化函数（nameOf）。两边口径不同
                     // 就等于「写进去的标题永远匹配不上」—— 而它只会打 debug 日志，
                     // 表现为值守整体静默空转，是最难查的一类故障。
-                    String title = nameOf(item);
-                    String last = firstText(item, BossSelectors.CHAT_LIST_LAST_MSG);
-                    int unread = readUnread(item);
+                    String title = kit.nameOf(item);
+                    String last = kit.firstText(item, BossSelectors.CHAT_LIST_LAST_MSG);
+                    int unread = kit.readUnread(item);
                     if (title.isBlank()) {
                         continue;
                     }
@@ -781,57 +767,13 @@ public class BossAdapter implements PlatformAdapter {
         });
     }
 
-    private String firstText(Locator root, String selector) {
-        try {
-            Locator node = root.locator(selector).first();
-            if (node.count() == 0) {
-                return "";
-            }
-            String text = node.textContent();
-            return text == null ? "" : text.trim();
-        } catch (Exception e) {
-            return "";
-        }
-    }
 
-    /**
-     * 读一个会话项的未读数。
-     *
-     * <p>返回值语义必须严格三分，混在一起就会静默失效（这正是改造前线上发生的事）：
-     * <ul>
-     *   <li>{@code 0} —— 确定没有未读</li>
-     *   <li>{@code >0} —— 未读条数；纯红点无数字时记 1</li>
-     *   <li>{@code -1} —— <b>读不到</b>：结构对不上或读取出错，上层必须当作异常而非「没未读」</li>
-     * </ul>
-     * 区分「确实没有」与「读不到」靠的是第 1 步的结构自检：整个条目里连
-     * {@code .friend-content} 都没有，说明页面改版了，而不是这人没有新消息。
-     */
-    private int readUnread(Locator item) {
-        try {
-            if (item.locator(BossSelectors.CHAT_LIST_ITEM_BODY).count() == 0) {
-                return -1;
-            }
-            Locator badge = item.locator(BossSelectors.CHAT_LIST_UNREAD).first();
-            if (badge.count() == 0) {
-                return 0;
-            }
-            String text = badge.textContent();
-            if (text == null || text.isBlank()) {
-                return 1; // .dot：纯红点没有数字
-            }
-            String digits = text.replaceAll("[^0-9]", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
-        } catch (Exception e) {
-            log.debug("读取未读数失败: {}", e.getMessage());
-            return -1;
-        }
-    }
 
     @Override
     public List<ChatMessage> readMessages(UnreadThread thread) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return List.of();
             }
             List<ChatMessage> out = new ArrayList<>();
@@ -843,7 +785,7 @@ public class BossAdapter implements PlatformAdapter {
                     String cls = item.getAttribute("class");
                     boolean fromSelf = item.locator(BossSelectors.MESSAGE_SELF).count() > 0
                             || cls != null && cls.contains("item-myself");
-                    String text = firstText(item, BossSelectors.MESSAGE_TEXT);
+                    String text = kit.firstText(item, BossSelectors.MESSAGE_TEXT);
                     boolean image = item.locator(BossSelectors.MESSAGE_IMAGE).count() > 0;
                     out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image));
                 } catch (Exception e) {
@@ -879,11 +821,11 @@ public class BossAdapter implements PlatformAdapter {
     public boolean sendText(UnreadThread thread, String text) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return false;
             }
             int before = countSelfMessages(page);
-            if (!fillInput(page, text) || !clickSend(page)) {
+            if (!kit.fillInput(page, text) || !clickSend(page)) {
                 return false;
             }
             return waitForOwnMessage(page, before, 30_000);
@@ -913,7 +855,7 @@ public class BossAdapter implements PlatformAdapter {
     public ResumeResult sendResume(UnreadThread thread) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return ResumeResult.failed("会话打不开，没法发简历");
             }
 
@@ -923,7 +865,7 @@ public class BossAdapter implements PlatformAdapter {
             }
             if (hasClass(button, BossSelectors.TOOLBAR_UNABLE_CLASS)) {
                 // aria-label 里写着平台的原因（"求简历：双方回复后可用"），原样带回去给日志用
-                String why = attr(button, "aria-label");
+                String why = kit.attr(button, "aria-label");
                 return ResumeResult.unavailable(why.isBlank() ? "「发简历」按钮当前不可用" : why);
             }
 
@@ -933,7 +875,7 @@ public class BossAdapter implements PlatformAdapter {
             } catch (Exception e) {
                 return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
             }
-            pause(800, 1_400);
+            kit.pause(800, 1_400);
 
             // 气泡是可选步骤：对方已经主动索要过简历时，平台不发二次确认，点了就直接发。
             // 所以「没弹气泡」不是失败，只是不用点「确定」—— 成不成一律看卡片。
@@ -1003,7 +945,7 @@ public class BossAdapter implements PlatformAdapter {
     }
 
     private boolean hasClass(Locator locator, String cls) {
-        String value = attr(locator, "class");
+        String value = kit.attr(locator, "class");
         for (String token : value.split("\\s+")) {
             if (token.equals(cls)) {
                 return true;
@@ -1012,98 +954,9 @@ public class BossAdapter implements PlatformAdapter {
         return false;
     }
 
-    private String attr(Locator locator, String name) {
-        try {
-            String value = locator.getAttribute(name);
-            return value == null ? "" : value.trim();
-        } catch (Exception e) {
-            return "";
-        }
-    }
 
-    /**
-     * 打开会话。定位规则见 spec 0002 §3.4 —— 这里是「把回复发给错误的人」的唯一防线。
-     *
-     * <p>三件事按顺序做：
-     * <ol>
-     *   <li><b>精确相等</b>：旧的 {@code setHasText} 是包含匹配，HR「张三」会命中「张三丰」。</li>
-     *   <li><b>多命中即放弃</b>：同名两个 HR 时没有稳定会话 id 可区分，一律不点。</li>
-     *   <li><b>摘要二次校验</b>（仅重试场景）：标题对上但最后一句话已经变了，
-     *       说明会话被新消息顶掉或换了人，同样不点。</li>
-     * </ol>
-     * 后两条抛 {@link ThreadTargetUnsafeException}：上层必须转成 GAVE_UP，而不是重试三次
-     * 后「大概就对了」。
-     *
-     * @return 是否打开了会话；{@code false} 只表示「列表里没找到或点不开」，可重试
-     */
-    private boolean openThread(Page page, UnreadThread thread) {
-        try {
-            // 先用平台侧过滤把候选缩到个位数，再逐个做精确比对：直接遍历整列表
-            // 每个条目要读两次文本，35 条会话就是 70 次跨进程调用，没必要。
-            Locator candidates = page.locator(BossSelectors.CHAT_LIST_ITEM)
-                    .filter(new Locator.FilterOptions().setHasText(thread.title()));
-            int count = Math.min(candidates.count(), 10);
-            Locator matched = null;
-            int hits = 0;
-            for (int i = 0; i < count; i++) {
-                Locator item = candidates.nth(i);
-                if (!thread.title().equals(nameOf(item))) {
-                    continue;
-                }
-                matched = item;
-                if (++hits > 1) {
-                    throw new ThreadTargetUnsafeException(
-                            ThreadTargetUnsafeException.AMBIGUOUS_TITLE,
-                            "列表里有 " + hits + " 个同名会话「" + thread.title() + "」");
-                }
-            }
-            if (matched == null) {
-                log.debug("聊天列表里找不到会话: {}", thread.title());
-                return false;
-            }
-            verifyDigest(matched, thread);
-            human.click(matched, new Locator.ClickOptions().setTimeout(8_000));
-            pause(1_200, 2_000);
-            return true;
-        } catch (ThreadTargetUnsafeException e) {
-            throw e;
-        } catch (Exception e) {
-            log.debug("打开会话失败 {}: {}", thread.title(), e.getMessage());
-            return false;
-        }
-    }
 
-    /**
-     * 会话标题文本。{@code \u00A0} 是页面里真实存在的不可见字符，{@code trim()} 删不掉它，
-     * 不换掉就会让「看起来一样」的两个标题精确匹配失败 —— 宁可在这里多一行，
-     * 也不要让整条值守因为一个空格静默停在「找不到会话」。
-     */
-    private String nameOf(Locator item) {
-        return firstText(item, BossSelectors.CHAT_LIST_TITLE).replace('\u00A0', ' ').trim();
-    }
 
-    /**
-     * 重试前的二次校验：列表里的最后一句话必须还是快照里的那一句。
-     *
-     * <p>读不到摘要（最后一条是卡片之类）时只放行标题匹配并留一条 debug ——
-     * 这种情况下没有可比的指纹，硬拦会让所有只发卡片开场白的会话永远回不出去。
-     */
-    private void verifyDigest(Locator item, UnreadThread thread) {
-        String expected = thread.expectedDigest();
-        if (expected == null || expected.isBlank()) {
-            return;
-        }
-        String actual = Digest.of(firstText(item, BossSelectors.CHAT_LIST_LAST_MSG));
-        if (actual == null) {
-            log.debug("会话「{}」没有可校验的列表摘要，仅按标题精确匹配定位", thread.title());
-            return;
-        }
-        if (!actual.equals(expected)) {
-            throw new ThreadTargetUnsafeException(
-                    ThreadTargetUnsafeException.DIGEST_MISMATCH,
-                    "会话「" + thread.title() + "」的最后一条消息已变化");
-        }
-    }
 
     @Override
     public void closeThread() {
@@ -1135,92 +988,6 @@ public class BossAdapter implements PlatformAdapter {
         return threadPage;
     }
 
-    private void navigateWithRetry(Page page, String url, int timeoutMs, int extraRetries) {
-        int attempts = 1 + Math.max(0, extraRetries);
-        for (int i = 0; i < attempts; i++) {
-            try {
-                page.navigate(url, new Page.NavigateOptions()
-                        .setTimeout(timeoutMs)
-                        .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-                return;
-            } catch (Exception e) {
-                // 并发导航时会抛 "Object doesn't exist"，但页面实际上已经到位
-                if (landedOn(page, url)) {
-                    log.debug("导航抛异常但页面已到位: {}", e.getMessage());
-                    return;
-                }
-                if (i == attempts - 1) {
-                    throw new IllegalStateException("导航失败: " + url + " — " + e.getMessage(), e);
-                }
-                log.warn("导航失败，重试一次: {}", e.getMessage());
-                pause(1_500, 2_500);
-            }
-        }
-    }
 
-    private boolean landedOn(Page page, String url) {
-        try {
-            String current = page.url();
-            if (current == null || !current.contains("zhipin.com")) {
-                return false;
-            }
-            int query = url.indexOf('?');
-            String path = query < 0 ? url : url.substring(0, query);
-            String tail = path.substring(path.lastIndexOf('/'));
-            return current.contains(tail);
-        } catch (Exception e) {
-            return false;
-        }
-    }
 
-    private void waitForList(Page page) {
-        try {
-            page.waitForSelector(BossSelectors.LIST_CONTAINER,
-                    new Page.WaitForSelectorOptions().setTimeout(20_000));
-        } catch (Exception e) {
-            log.warn("等待岗位列表渲染超时（可能被风控或改版）: {}", e.getMessage());
-        }
-    }
-
-    private boolean isSecurityVerify(Page page) {
-        String url = safeUrl(page);
-        if (url.contains("/web/user/") || url.contains("safe/verify") || url.contains("security-check")) {
-            return true;
-        }
-        try {
-            return page.locator(BossSelectors.SECURITY_VERIFY_MARK).count() > 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private static String safeUrl(Page page) {
-        try {
-            return page.url() == null ? "" : page.url();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private static boolean isStaleError(Throwable e) {
-        String message = e.getMessage();
-        if (message == null) {
-            return false;
-        }
-        return message.contains("Object doesn't exist")
-                || message.contains("Execution context was destroyed")
-                || message.contains("Cannot find context");
-    }
-
-    /**
-     * 等一会儿。区间语义与改造前的 {@code pause(min, max)} 一致，<b>数值一个都没改</b>。
-     *
-     * <p>原来这里有一份 {@code ThreadLocalRandom.nextInt} 的实现，与 {@code ZhaopinAdapter}
-     * 里那份逐字相同（两份副本，26 个调用点）。现在只剩这一个转发：真正的随机源在
-     * {@code Humanize.pacing()} 里，与鼠标、滚动共用一条序列，种子非 0 时整轮可复现。
-     * 保留这个同名私有方法只是让 26 个调用点不必逐条改字，它已经不再自己产生随机数。
-     */
-    private void pause(int minMs, int maxMs) {
-        human.pacing().sleep(minMs, maxMs);
-    }
 }

@@ -1,0 +1,67 @@
+# 两个适配器的页面动作收进一个 kit，选择器留在适配器
+
+## Status
+
+accepted（2026-11-04，架构审查第 5 步）。
+实现：`com.chatjob.platform.page.PageKit`；
+守卫：`HumanizeSourceGuardTest` 的两条新断言。
+
+## Context
+
+Boss 与智联的页面形状完全不同，但「怎么等它渲染完、导航抛异常时怎么判断页面其实已经到位、
+同名会话怎么不被点错、未读数怎么区分『没有』与『读不到』」这些判据与页面形状无关。
+改造前它们在两个适配器里各有一份手抄副本，共约 230 行：
+
+| 方法 | 两侧关系 |
+|---|---|
+| `navigateWithRetry` / `readUnread` | 除选择器外逐字相同 |
+| `isStaleError` / `safeUrl` / `firstText` | 零差异 |
+| `openThread` / `verifyDigest` / `nameOf` | 只有选择器与点击方式不同 |
+| `fillInput` / `closeQuietly` / `waitForList` / `isSecurityVerify` / `landedOn` | 只有选择器与两个取值不同 |
+
+代价不是行数，而是**改一次重试策略要改两处，只改一处不会被任何测试发现** ——
+`grep -rl "BossAdapter\|ZhaopinAdapter" server/src/test` 在这之前零命中。
+
+另有一份报告没数到的第三份副本：`BossChatNavigator.closeQuietly`。它是被新守卫扫出来的。
+
+## Decision
+
+1. **行为收进 `PageKit`，结构留在适配器。** 构造参数三个：`Profile`（选择器 + 少量取值）、
+   `Humanize`、`ThreadOpener`。`Profile` 里的东西都是「这个平台长什么样」：
+   列表容器、会话项/标题/摘要/正文/未读徽标、输入框、安全验证标记与地址片段、站点 host、
+   填字后的停顿区间、日志里的主语。「同名两个就放弃」这类规定则只存在于 `PageKit`。
+
+2. **点击不是 kit 的，是注入的。** 智联的会话项里嵌着 `target=_blank` 链接，人类化点击的落点
+   有概率正中链接，点完必须收掉多开的标签（`ZhaopinAdapter#clickThenCloseExtraTabs`）；
+   Boss 不需要。`ThreadOpener` 让这条差异留在各自的适配器里，kit 只负责「点哪个、什么时候点」。
+
+3. **两处小差异按更强的那个统一。**
+   - `closeQuietly`：Boss 原来是静默的，智联与 ADR 的文字都主张「关不掉要留一条 WARN」——
+     投递页残留会让浏览器累积十几个标签而 `run_log` 一个字都没有。统一为 WARN。
+   - `landedOn`：智联多一句 `tail.isBlank() ||`，它实际是死分支（`tail` 至少是 `"/"`），
+     但保留它当防御，代价为零。
+
+4. **守卫加两条断言**：搬走的 15 个助手名不得再以私有方法出现在任何一个平台目录里；
+   `platform/page` 自身也要通过「不得裸调用」的扫描 —— 否则最该守的那段恰好在栅栏外面。
+
+## Consequences
+
+- **Boss 关页失败现在会打一条 WARN**（原来静默）。这是本步唯一的行为变化，方向与智联一致。
+- **日志措辞统一**：会话定位的两处日志改成用 `Profile.listName`（「聊天列表」/「消息列表」），
+  摘要校验那句从「仅按名称精确匹配」改成「仅按标题精确匹配」。都是措辞，判断不变。
+- **填字后的停顿仍是各平台原值**（Boss 400–800ms、智联 300–600ms），一个都没改。
+- **两个 `ensure*Page` 仍然同名留在适配器里**（各 6 行）。它们的状态是两个 `Page` 字段，
+  而智联还要拿 `page == listPage` 做身份比较；搬进 kit 会让它从无状态变成有状态、并多出四个
+  访问器，为 12 行不划算。守卫因此按「名单」判定而不是「所有同名」——
+  一条立刻需要五个例外的规则，最后一定会被整条关掉。
+- **门 ③（真实一轮卡片数 Boss 255–300 / 智联 192–195）没有跑。** 它必须开真浏览器、
+  真登录态、真网络，一轮约 40 分钟起。代码层面的证据是：判断逻辑逐字搬运、停顿与选择器取值未改、
+  413 例测试全绿。剩下的只有「跑一轮看卡片数」这一件事。
+
+## Open Questions
+
+| # | 问题 | 现状 |
+|---|---|---|
+| 1 | 真实一轮的卡片数是否仍在区间 | 未取证。这是本步唯一没跑的门 |
+| 2 | `clickThenCloseExtraTabs` 要不要进 kit | 不进。它处理的是「智联的卡片里嵌着链接」，属于页面形状；Boss 没有这个问题 |
+| 3 | `openDetailPage` / `messageId` / `countSelfMessages` 仍同名 | 两份实现不同：详情页一个是两跳导航、一个是点卡片读右侧面板；数本人消息一个数 DOM、一个读 JS 面板。不是副本，不动 |

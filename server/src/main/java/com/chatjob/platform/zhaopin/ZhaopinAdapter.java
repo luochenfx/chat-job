@@ -7,7 +7,6 @@ import com.chatjob.driver.PlatformBrowser;
 import com.chatjob.driver.PlaywrightExecutor;
 import com.chatjob.driver.human.HumanBatchPacer;
 import com.chatjob.driver.human.Humanize;
-import com.chatjob.platform.Digest;
 import com.chatjob.platform.ListFirstEntry;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.DeliveryOptions;
@@ -19,15 +18,14 @@ import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
-import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.platform.UnreadScanLimit;
+import com.chatjob.platform.page.PageKit;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
-import com.microsoft.playwright.options.WaitUntilState;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -116,6 +114,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
      */
     private final HumanBatchPacer detailPacer;
 
+    /**
+     * 与页面形状无关的那一半动作（导航重试、会话定位、读未读、填输入框、关标签）。
+     * 选择器留在 {@link ZhaopinSelectors}，行为在 {@link PageKit}，本类只提供两者之间的取值。
+     */
+    private final PageKit kit;
+
     private Page listPage;
     private Page threadPage;
 
@@ -139,6 +143,24 @@ public class ZhaopinAdapter implements PlatformAdapter {
         this.executor = browser.executor();
         this.human = browser.humanize();
         this.detailPacer = new HumanBatchPacer(human.pacing());
+        // 点会话这一下必须走本类收标签那条路：智联的会话项里也嵌着 target=_blank 链接，
+        // 人类化点击的落点有概率正中链接（见 clickThenCloseExtraTabs 的注释）
+        this.kit = new PageKit(
+                new PageKit.Profile("zhaopin.com", new PageKit.Selectors(
+                        "消息列表",
+                        ZhaopinSelectors.CARD,
+                        ZhaopinSelectors.SECURITY_VERIFY_MARK,
+                        List.of("captcha", "verify", "security-check"),
+                        ZhaopinSelectors.IM_SESSION_ITEM,
+                        ZhaopinSelectors.IM_SESSION_NAME,
+                        ZhaopinSelectors.IM_SESSION_PREVIEW,
+                        ZhaopinSelectors.IM_SESSION_BODY,
+                        ZhaopinSelectors.IM_SESSION_BADGE,
+                        ZhaopinSelectors.IM_CHAT_PANEL,
+                        ZhaopinSelectors.IM_INPUT),
+                        300, 600, "填入消息失败"),
+                human,
+                this::clickThenCloseExtraTabs);
         this.configStore = configStore;
         this.urlBuilder = urlBuilder;
         this.json = json;
@@ -163,11 +185,11 @@ public class ZhaopinAdapter implements PlatformAdapter {
         return executor.call(() -> {
             Page page = ensureThreadPage();
             try {
-                navigateWithRetry(page, ZhaopinEndpoints.IM_URL, DEFAULT_COMMAND_TIMEOUT_MS, 0);
+                kit.navigateWithRetry(page, ZhaopinEndpoints.IM_URL, DEFAULT_COMMAND_TIMEOUT_MS, 0);
             } catch (Exception e) {
                 return LoginState.lost("打不开消息页：" + e.getMessage());
             }
-            String url = safeUrl(page);
+            String url = PageKit.safeUrl(page);
             if (url.contains(ZhaopinSelectors.LOGIN_HOST_MARK) || url.contains("/login")) {
                 return LoginState.lost("消息页跳到了登录页：" + url);
             }
@@ -183,8 +205,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
         executor.run(() -> {
             Page page = ensureListPage();
             log.info("打开智联首页，请在浏览器窗口里扫码登录: {}", ZhaopinEndpoints.LOGIN_URL);
-            navigateWithRetry(page, ZhaopinEndpoints.LOGIN_URL, DEFAULT_COMMAND_TIMEOUT_MS, 1);
-            pause(1_500, 2_500);
+            kit.navigateWithRetry(page, ZhaopinEndpoints.LOGIN_URL, DEFAULT_COMMAND_TIMEOUT_MS, 1);
+            kit.pause(1_500, 2_500);
             if (!clickLoginEntry(page)) {
                 log.info("首页上没找到「登录」入口 —— 大概率已经登录过了；"
                         + "若仍是未登录状态，页面上直接扫码即可");
@@ -209,7 +231,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                     continue;
                 }
                 clickThenCloseExtraTabs(item, new Locator.ClickOptions().setTimeout(8_000), "点「登录」入口");
-                pause(1_200, 2_000);
+                kit.pause(1_200, 2_000);
                 return true;
             }
         } catch (Exception e) {
@@ -227,11 +249,11 @@ public class ZhaopinAdapter implements PlatformAdapter {
             String url = urlBuilder.build(cfg, query.city(), query.keyword());
             Page page = ensureListPage();
             log.info("打开搜索页: 城市={} 关键词={} → {}", query.city(), query.keyword(), url);
-            navigateWithRetry(page, url, DEFAULT_COMMAND_TIMEOUT_MS, 1);
-            waitForList(page);
-            if (isSecurityVerify(page)) {
+            kit.navigateWithRetry(page, url, DEFAULT_COMMAND_TIMEOUT_MS, 1);
+            kit.waitForList(page);
+            if (kit.isSecurityVerify(page)) {
                 throw new BlockedException(BlockedException.Kind.SECURITY_CHECK,
-                        "搜索页被重定向到安全验证页: " + safeUrl(page));
+                        "搜索页被重定向到安全验证页: " + PageKit.safeUrl(page));
             }
             List<JsonNode> first = readInitialRecords(page);
             listRecords.clear();
@@ -314,7 +336,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 }
                 try {
                     human.scrollPageToBottom(page, null);
-                    pause(800, 1_300);
+                    kit.pause(800, 1_300);
                     int current = cardCountOf(page);
                     long height = contentHeight(page);
                     // 读不到高度时（导航中、上下文被销毁）不用这一条判据：把"未知"当成"没变高"
@@ -350,10 +372,10 @@ public class ZhaopinAdapter implements PlatformAdapter {
                         break;
                     }
                 } catch (Exception e) {
-                    if (!isStaleError(e)) {
+                    if (!PageKit.isStaleError(e)) {
                         throw e;
                     }
-                    pause(800, 1_200);
+                    kit.pause(800, 1_200);
                 }
             }
             human.scrollPageToTop(page, null);
@@ -375,7 +397,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
     private int confirmEnd(Page page, int current) {
         int count = current;
         for (int i = 0; i < CONFIRM_ROUNDS; i++) {
-            pause(CONFIRM_WAIT_MIN_MS, CONFIRM_WAIT_MAX_MS);
+            kit.pause(CONFIRM_WAIT_MIN_MS, CONFIRM_WAIT_MAX_MS);
             int now = cardCountOf(page);
             if (now > count) {
                 return now;
@@ -481,7 +503,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
             clickThenCloseExtraTabs(card, new Locator.ClickOptions().setTimeout(10_000),
                     "点第 " + (cardIndex + 1) + " 张岗位卡片");
             for (int i = 0; i < 8; i++) {
-                pause(300, 500);
+                kit.pause(300, 500);
                 ZhaopinRecord.PanelView view = readPanel(page);
                 if (view == null) {
                     continue;
@@ -615,10 +637,10 @@ public class ZhaopinAdapter implements PlatformAdapter {
             Page page = session.newPage();
             try {
                 openDetailPage(page, url, options);
-                pause(1_000, 1_600);
-                if (isSecurityVerify(page)) {
+                kit.pause(1_000, 1_600);
+                if (kit.isSecurityVerify(page)) {
                     throw new BlockedException(BlockedException.Kind.SECURITY_CHECK,
-                            "详情页落在安全验证页: " + safeUrl(page));
+                            "详情页落在安全验证页: " + PageKit.safeUrl(page));
                 }
                 String action = waitForActionText(page, stop);
                 if (action.isBlank()) {
@@ -657,7 +679,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 log.warn("投递异常 | {} @ {}: {}", job.jobName(), job.companyName(), e.getMessage());
                 return DeliveryResult.failed(e.getClass().getSimpleName() + ": " + e.getMessage());
             } finally {
-                closeQuietly(page);
+                PageKit.closeQuietly(page);
             }
         });
     }
@@ -744,7 +766,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
             }
             page.waitForTimeout(700);
         }
-        log.warn("{}s 内没等到投递成功弹窗（页面: {}）", DELIVER_CONFIRM_TIMEOUT_MS / 1000, safeUrl(page));
+        log.warn("{}s 内没等到投递成功弹窗（页面: {}）", DELIVER_CONFIRM_TIMEOUT_MS / 1000, PageKit.safeUrl(page));
         return false;
     }
 
@@ -754,9 +776,9 @@ public class ZhaopinAdapter implements PlatformAdapter {
     public List<UnreadThread> listUnreadThreads() {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!safeUrl(page).contains("i.zhaopin.com")) {
-                navigateWithRetry(page, ZhaopinEndpoints.IM_URL, DEFAULT_COMMAND_TIMEOUT_MS, 0);
-                pause(1_500, 2_500);
+            if (!PageKit.safeUrl(page).contains("i.zhaopin.com")) {
+                kit.navigateWithRetry(page, ZhaopinEndpoints.IM_URL, DEFAULT_COMMAND_TIMEOUT_MS, 0);
+                kit.pause(1_500, 2_500);
             }
             Locator items = page.locator(ZhaopinSelectors.IM_SESSION_ITEM);
             UnreadScanLimit.Plan plan = UnreadScanLimit.plan(
@@ -769,12 +791,12 @@ public class ZhaopinAdapter implements PlatformAdapter {
             for (int i = 0; i < plan.take(); i++) {
                 try {
                     Locator item = items.nth(i);
-                    String title = nameOf(item);
+                    String title = kit.nameOf(item);
                     if (title.isBlank()) {
                         continue;
                     }
-                    out.add(UnreadThread.of(title, title, firstText(item, ZhaopinSelectors.IM_SESSION_PREVIEW),
-                            readUnread(item)));
+                    out.add(UnreadThread.of(title, title, kit.firstText(item, ZhaopinSelectors.IM_SESSION_PREVIEW),
+                            kit.readUnread(item)));
                 } catch (Exception e) {
                     log.debug("读取第 {} 个会话项失败: {}", i, e.getMessage());
                 }
@@ -783,30 +805,6 @@ public class ZhaopinAdapter implements PlatformAdapter {
         });
     }
 
-    /**
-     * 未读数三态（与 Boss 同语义，混同就会静默失效）：
-     * {@code 0} 确定没未读 / {@code >0} 条数 / {@code -1} 读不到。
-     */
-    private int readUnread(Locator item) {
-        try {
-            if (item.locator(ZhaopinSelectors.IM_SESSION_BODY).count() == 0) {
-                return -1;
-            }
-            Locator badge = item.locator(ZhaopinSelectors.IM_SESSION_BADGE).first();
-            if (badge.count() == 0) {
-                return 0;
-            }
-            String text = badge.textContent();
-            if (text == null || text.isBlank()) {
-                return 1; // 纯红点没有数字
-            }
-            String digits = text.replaceAll("[^0-9]", "");
-            return digits.isEmpty() ? 1 : Integer.parseInt(digits);
-        } catch (Exception e) {
-            log.debug("读取未读数失败: {}", e.getMessage());
-            return -1;
-        }
-    }
 
     /**
      * 读一个会话的消息。
@@ -825,7 +823,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
     public List<ChatMessage> readMessages(UnreadThread thread) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return List.of();
             }
             return readMessagesFromPanel(page);
@@ -894,11 +892,11 @@ public class ZhaopinAdapter implements PlatformAdapter {
     public boolean sendText(UnreadThread thread, String text) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return false;
             }
             int before = countSelfMessages(page);
-            if (!fillInput(page, text)) {
+            if (!kit.fillInput(page, text)) {
                 return false;
             }
             Locator send = page.locator(ZhaopinSelectors.IM_SEND_BUTTON).first();
@@ -940,31 +938,6 @@ public class ZhaopinAdapter implements PlatformAdapter {
         return false;
     }
 
-    /**
-     * 把回复写进消息输入框。
-     *
-     * <p>原来是 {@code input.click()} 加 {@code input.fill(message)}：{@code fill} 直接赋予终态，
-     * 只有一次 {@code input} 事件，没有逐字的 {@code keydown}。现在交给
-     * {@link Humanize#type}：它用真实点击建立焦点、逐字输入、校验终态；
-     * 校验不过才退回 {@code fill} 并记一条 WARN（spec 0006 §3.4）。
-     *
-     * <p>智联的输入框是 {@code textarea.im-sender__input}，属于原生框，
-     * 所以走的是「Ctrl+A / Backspace 清空 + 逐字输入」那条路，不是富文本那条。
-     */
-    private boolean fillInput(Page page, String message) {
-        try {
-            Locator input = page.locator(ZhaopinSelectors.IM_INPUT).first();
-            if (!input.isVisible(new Locator.IsVisibleOptions().setTimeout(5_000))) {
-                return false;
-            }
-            boolean written = human.type(input, message);
-            pause(300, 600);
-            return written;
-        } catch (Exception e) {
-            log.warn("填入消息失败: {}", e.getMessage());
-            return false;
-        }
-    }
 
     /**
      * 发简历：点工具栏「发简历」→（可选）确认 → 等「附件简历已发送」。
@@ -977,7 +950,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
     public ResumeResult sendResume(UnreadThread thread) {
         return executor.call(() -> {
             Page page = ensureThreadPage();
-            if (!openThread(page, thread)) {
+            if (!kit.openThread(page, thread)) {
                 return ResumeResult.failed("会话打不开，没法发简历");
             }
             Locator button = page.locator(ZhaopinSelectors.IM_RESUME_BUTTON).first();
@@ -985,7 +958,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 return ResumeResult.unavailable("工具栏上找不到「发简历」按钮（可能改版）");
             }
             if (isDisabled(button)) {
-                String why = attr(button, "aria-label");
+                String why = kit.attr(button, "aria-label");
                 return ResumeResult.unavailable(why.isBlank() ? "「发简历」按钮当前不可用" : why);
             }
 
@@ -995,7 +968,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
             } catch (Exception e) {
                 return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
             }
-            pause(800, 1_400);
+            kit.pause(800, 1_400);
             clickResumeConfirmIfPresent(page);
 
             if (waitForResumeTip(page, before, RESUME_CONFIRM_TIMEOUT_MS)) {
@@ -1023,7 +996,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                     clickThenCloseExtraTabs(confirm, new Locator.ClickOptions().setTimeout(5_000),
                             "点「发简历」的二次确认");
                     log.info("「发简历」弹出了二次确认，已点「确定」");
-                    pause(600, 1_000);
+                    kit.pause(600, 1_000);
                     return;
                 }
             }
@@ -1061,71 +1034,16 @@ public class ZhaopinAdapter implements PlatformAdapter {
     }
 
     private boolean isDisabled(Locator locator) {
-        String cls = attr(locator, "class");
+        String cls = kit.attr(locator, "class");
         if (cls.contains("disabled") || cls.contains("is-disabled")) {
             return true;
         }
-        String aria = attr(locator, "aria-disabled");
+        String aria = kit.attr(locator, "aria-disabled");
         return "true".equalsIgnoreCase(aria);
     }
 
-    /** 打开会话。精确定位规则与 Boss 一致：名称精确相等、多命中即放弃、重试时校验摘要。 */
-    private boolean openThread(Page page, UnreadThread thread) {
-        try {
-            Locator candidates = page.locator(ZhaopinSelectors.IM_SESSION_ITEM)
-                    .filter(new Locator.FilterOptions().setHasText(thread.title()));
-            int count = Math.min(candidates.count(), 10);
-            Locator matched = null;
-            int hits = 0;
-            for (int i = 0; i < count; i++) {
-                Locator item = candidates.nth(i);
-                if (!thread.title().equals(nameOf(item))) {
-                    continue;
-                }
-                matched = item;
-                if (++hits > 1) {
-                    throw new ThreadTargetUnsafeException(
-                            ThreadTargetUnsafeException.AMBIGUOUS_TITLE,
-                            "消息列表里有 " + hits + " 个同名会话「" + thread.title() + "」");
-                }
-            }
-            if (matched == null) {
-                log.debug("消息列表里找不到会话: {}", thread.title());
-                return false;
-            }
-            verifyDigest(matched, thread);
-            clickThenCloseExtraTabs(matched, new Locator.ClickOptions().setTimeout(8_000),
-                    "打开会话「" + thread.title() + "」");
-            pause(1_200, 2_000);
-            return page.locator(ZhaopinSelectors.IM_CHAT_PANEL).count() > 0;
-        } catch (ThreadTargetUnsafeException e) {
-            throw e;
-        } catch (Exception e) {
-            log.debug("打开会话失败 {}: {}", thread.title(), e.getMessage());
-            return false;
-        }
-    }
 
-    private String nameOf(Locator item) {
-        return firstText(item, ZhaopinSelectors.IM_SESSION_NAME).replace('\u00A0', ' ').trim();
-    }
 
-    private void verifyDigest(Locator item, UnreadThread thread) {
-        String expected = thread.expectedDigest();
-        if (expected == null || expected.isBlank()) {
-            return;
-        }
-        String actual = Digest.of(firstText(item, ZhaopinSelectors.IM_SESSION_PREVIEW));
-        if (actual == null) {
-            log.debug("会话「{}」没有可校验的列表摘要，仅按名称精确匹配定位", thread.title());
-            return;
-        }
-        if (!actual.equals(expected)) {
-            throw new ThreadTargetUnsafeException(
-                    ThreadTargetUnsafeException.DIGEST_MISMATCH,
-                    "会话「" + thread.title() + "」的最后一条消息已变化");
-        }
-    }
 
     @Override
     public void closeThread() {
@@ -1246,141 +1164,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
         return threadPage;
     }
 
-    private void navigateWithRetry(Page page, String url, int timeoutMs, int extraRetries) {
-        int attempts = 1 + Math.max(0, extraRetries);
-        for (int i = 0; i < attempts; i++) {
-            try {
-                page.navigate(url, new Page.NavigateOptions()
-                        .setTimeout(timeoutMs)
-                        .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-                return;
-            } catch (Exception e) {
-                if (landedOn(page, url)) {
-                    log.debug("导航抛异常但页面已到位: {}", e.getMessage());
-                    return;
-                }
-                if (i == attempts - 1) {
-                    throw new IllegalStateException("导航失败: " + url + " — " + e.getMessage(), e);
-                }
-                log.warn("导航失败，重试一次: {}", e.getMessage());
-                pause(1_500, 2_500);
-            }
-        }
-    }
 
-    private boolean landedOn(Page page, String url) {
-        try {
-            String current = page.url();
-            if (current == null || !(current.contains("zhaopin.com"))) {
-                return false;
-            }
-            int query = url.indexOf('?');
-            String path = query < 0 ? url : url.substring(0, query);
-            String tail = path.substring(path.lastIndexOf('/'));
-            return tail.isBlank() || current.contains(tail);
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private void waitForList(Page page) {
-        try {
-            page.waitForSelector(ZhaopinSelectors.CARD,
-                    new Page.WaitForSelectorOptions().setTimeout(20_000));
-        } catch (Exception e) {
-            log.warn("等待岗位列表渲染超时（可能被风控或改版）: {}", e.getMessage());
-        }
-    }
-
-    private boolean isSecurityVerify(Page page) {
-        String url = safeUrl(page);
-        if (url.contains("captcha") || url.contains("verify") || url.contains("security-check")) {
-            return true;
-        }
-        try {
-            return page.locator(ZhaopinSelectors.SECURITY_VERIFY_MARK).count() > 0;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    private String firstText(Locator root, String selector) {
-        try {
-            Locator node = root.locator(selector).first();
-            if (node.count() == 0) {
-                return "";
-            }
-            String text = node.textContent();
-            return text == null ? "" : text.trim();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private String attr(Locator locator, String name) {
-        try {
-            String value = locator.getAttribute(name);
-            return value == null ? "" : value.trim();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    /**
-     * 关闭一个用完的页面。
-     *
-     * <p>原来整段是静默的。静默的代价在 2026-11-03 暴露出来：投递页没关掉时，浏览器里会累积
-     * 十几个岗位详情页标签，而 {@code run_log} 里没有任何一行能解释它们从哪来 ——
-     * 唯一的线索是"任务结束后停在某个详情页"。所以关不掉要留一条 WARN，
-     * 关得掉就什么都不写。
-     */
-    private void closeQuietly(Page page) {
-        if (page == null) {
-            return;
-        }
-        try {
-            if (!page.isClosed()) {
-                page.close();
-            }
-        } catch (Exception e) {
-            String message = e.getMessage() == null ? "" : e.getMessage();
-            if (message.contains("has been closed") || message.contains("Target page, context or browser")) {
-                // 页面已经在导航或浏览器重建中自行关闭，不是残留
-                log.debug("页面已自行关闭，无需处理: {}", message);
-                return;
-            }
-            log.warn("关闭页面失败，这个标签可能仍留在浏览器里: {}", message);
-        }
-    }
-
-    private static String safeUrl(Page page) {
-        try {
-            return page.url() == null ? "" : page.url();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private static boolean isStaleError(Throwable e) {
-        String message = e.getMessage();
-        if (message == null) {
-            return false;
-        }
-        return message.contains("Object doesn't exist")
-                || message.contains("Execution context was destroyed")
-                || message.contains("Cannot find context");
-    }
-
-    /**
-     * 等一会儿。区间语义与改造前的 {@code pause(min, max)} 一致，<b>数值一个都没改</b>。
-     *
-     * <p>这份实现原来与 {@code BossAdapter} 里那份逐字相同。现在两边都只剩这一个转发，
-     * 随机源统一在 {@code Humanize.pacing()}：与本平台的鼠标轨迹、滚动间隔共用一条序列，
-     * 种子非 0 时整轮可复现（spec 0006 Q13）。
-     */
-    private void pause(int minMs, int maxMs) {
-        human.pacing().sleep(minMs, maxMs);
-    }
 
     /** 仅供诊断：首屏数据里已知的岗位编号 */
     List<String> snapshotNumbers() {

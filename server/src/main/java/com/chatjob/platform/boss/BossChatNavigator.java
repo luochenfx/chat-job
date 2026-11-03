@@ -1,6 +1,7 @@
 package com.chatjob.platform.boss;
 
 import com.chatjob.driver.human.Humanize;
+import com.chatjob.platform.page.PageKit;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.PlaywrightException;
@@ -158,18 +159,9 @@ public class BossChatNavigator implements AutoCloseable {
         origin.offPopup(popupListener);
         // 只清理由当前岗位点击产生的新窗口，不碰其他标签页
         for (Page popup : popups) {
-            closeQuietly(popup);
+            PageKit.closeQuietly(popup);
         }
-        closeQuietly(origin);
+        PageKit.closeQuietly(origin);
     }
 
-    private void closeQuietly(Page page) {
-        try {
-            if (page != null && !page.isClosed()) {
-                page.close();
-            }
-        } catch (PlaywrightException e) {
-            log.debug("关闭本轮聊天页失败: {}", e.getMessage());
-        }
-    }
 }

@@ -173,7 +173,93 @@ class HumanizeSourceGuardTest {
         }
     }
 
+    /**
+     * 已经搬进 {@code PageKit} 的那批助手，不得以私有方法的形式回到适配器里。
+     *
+     * <p>改造前两个适配器各有一份手抄副本：{@code navigateWithRetry} / {@code isStaleError} /
+     * {@code safeUrl} / {@code openThread} / {@code verifyDigest} / {@code readUnread} /
+     * {@code firstText} / {@code attr} / {@code fillInput} / {@code closeQuietly}。改一次重试策略
+     * 要改两处，只改一处不会被任何测试发现 —— 两个适配器本体在这之前零测试引用。
+     *
+     * <p><b>为什么列名单而不是断言「所有同名私有方法」</b>：{@code openDetailPage} /
+     * {@code messageId} / {@code countSelfMessages} / {@code ensureListPage} / {@code ensureThreadPage}
+     * 今天仍然同名，但它们不是副本 —— 前三个是同一件事在两套页面结构上的不同实现
+     * （Boss 数 DOM、智联读 JS 面板；详情页一个是两跳导航、一个是点卡片读右侧面板），
+     * 后两个是 6 行页面缓存判据，状态（两个 {@code Page} 字段，还要参与身份比较）属于适配器。
+     * 把它们也搬走会让 {@code PageKit} 从无状态变成有状态，为 12 行换来一个有状态的 module 不划算。
+     * 一条会立刻需要五个例外的规则，最后一定会被整条关掉。
+     */
+    @Test
+    void 搬进共享模块的助手没有回到适配器里() {
+        java.util.List<String> MOVED_TO_KIT = java.util.List.of(
+                "navigateWithRetry", "isStaleError", "safeUrl", "openThread", "verifyDigest",
+                "readUnread", "firstText", "attr", "fillInput", "closeQuietly", "nameOf",
+                "landedOn", "waitForList", "isSecurityVerify", "pause");
+
+        for (String platform : CONVERTED) {
+            Path dir = javaSourceRoot().resolve("com/chatjob/platform").resolve(platform);
+            java.util.Set<String> present = new java.util.TreeSet<>();
+            for (Path file : javaFiles(dir)) {
+                present.addAll(privateMethodNames(read(file)));
+            }
+            present.retainAll(MOVED_TO_KIT);
+            assertThat(present)
+                    .as("%s 的适配器里又出现了这些私有助手，它们已经在 PageKit 里", platform)
+                    .isEmpty();
+        }
+    }
+
+    /**
+     * 共享的页面动作自身也必须经 {@link Humanize}。
+     *
+     * <p>把交互搬进 {@code platform/page} 之后，那条「不得裸调用」的规则如果只扫
+     * {@code boss} / {@code zhaopin} 两个目录，就等于把最该守的那一段放到了栅栏外面。
+     */
+    @Test
+    void 共享的页面动作也经本层() {
+        Path dir = javaSourceRoot().resolve("com/chatjob/platform/page");
+        List<Path> files = javaFiles(dir);
+        assertThat(files).as("共享页面动作的目录必须存在且含 java 文件：%s", dir).isNotEmpty();
+
+        int layerCalls = 0;
+        for (Path file : files) {
+            String source = read(file);
+            assertThat(violations(source))
+                    .as("%s 里还有裸的交互调用，应改为经 Humanize", file.getFileName())
+                    .isEmpty();
+            layerCalls += countLayerCalls(stripComments(source));
+        }
+        assertThat(layerCalls).as("共享页面动作里应有经 human.* 的交互调用").isPositive();
+    }
+
     // ---------------------------------------------------------------- 实现
+
+    /**
+     * 私有方法名。
+     *
+     * <p>逐行判断，不做跨行匹配：方法声明在本仓库里都是单行，而跨行匹配会出真问题 ——
+     * 上一版用 {@code \s} 让某个 {@code private} 行跟下面几行拼成一次匹配，把
+     * {@code kit.closeQuietly(page)} 误报成了私有方法。
+     *
+     * <p>{@code [^=;]*?} 是为了跳过字段声明：{@code private static final Pattern P = Pattern.compile(...)}
+     * 里第一个括号属于 {@code compile}，不是本行声明的方法。
+     */
+    private static java.util.Set<String> privateMethodNames(String source) {
+        Pattern pattern = Pattern.compile("^private\\b[^=;]{0,200}?\\b(\\w+)[ \\t]*\\(");
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        for (String line : source.split("\n")) {
+            String trimmed = line.trim();
+            if (!trimmed.startsWith("private ")) {
+                continue;
+            }
+            Matcher matcher = pattern.matcher(trimmed);
+            if (matcher.find()) {
+                names.add(matcher.group(1));
+            }
+        }
+        return names;
+    }
+
 
     private static int countLayerCalls(String source) {
         Matcher matcher = THROUGH_LAYER.matcher(source);
