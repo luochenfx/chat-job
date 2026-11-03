@@ -21,6 +21,9 @@ import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.PlatformAdapters;
 import com.chatjob.platform.PlatformInfo;
 import com.chatjob.platform.PlatformSwitches;
+import com.chatjob.runlog.RunLog;
+import com.chatjob.runlog.RunLogLevel;
+import com.chatjob.runlog.RunLogs;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.DeliveryEntity;
@@ -29,7 +32,6 @@ import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
 import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.UnreadWatcher;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Service;
@@ -66,8 +68,11 @@ import java.util.concurrent.ThreadLocalRandom;
  * 只要每个平台各有一份这个对象（ADR-0003 Consequences）。实例由
  * {@link RunServices} 按平台创建并绑定适配器；<b>本类不做任何 {@code if (platform == ...)}</b>，
  * 平台差异全部在 {@link PlatformAdapter} 的实现里。
+ *
+ * <p><b>本类不直接打文件日志</b>：运行日志的唯一出口是 {@link RunLog}（ADR-0008）。
+ * 改造前这里另有一个 slf4j 的 logger，它同时写库和写文件，于是「同一件事两个出口」；
+ * 现在连带堆栈的那两处也经 RunLog：异常只进文件，那句话进库。
  */
-@Slf4j
 @Service
 @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
 public class RunService {
@@ -94,6 +99,9 @@ public class RunService {
      * 所以这里只用它取计数快照与注册降级回调，不持有它。
      */
     private final BrowserSessions sessions;
+
+    /** 运行日志出口的装配点。每处写日志用 {@code runLogs.of(run)} 现取，不缓存（见 ADR-0008） */
+    private final RunLogs runLogs;
 
     /** 业务时间的唯一来源：时段判断、跨日、时间戳落库。页面等待超时不走这里 */
     private final TimeSource time;
@@ -140,6 +148,7 @@ public class RunService {
                       com.chatjob.web.SseHub sse,
                       PlatformSwitches switches,
                       BrowserSessions sessions,
+                      RunLogs runLogs,
                       TimeSource time) {
         this.runStore = runStore;
         this.jobStore = jobStore;
@@ -153,6 +162,7 @@ public class RunService {
         this.sse = sse;
         this.switches = switches;
         this.sessions = sessions;
+        this.runLogs = runLogs;
         this.time = time;
     }
 
@@ -309,6 +319,7 @@ public class RunService {
 
     private void runLoop(RunEntity run) {
         String platform = run.getPlatform();
+        RunLog runLog = runLogs.of(run);
         long startedAt = System.currentTimeMillis();
         // 交互计数的起点。为 null 表示这条 Run 还没走到"真的开始干活"（时段外挂起、
         // driver 不可用、自检失败、登录态失效都会在此之前返回），那种情况下不该写汇总行
@@ -347,7 +358,7 @@ public class RunService {
                     "runId", run.getId(),
                     "platform", platform,
                     "mode", run.getMode()));
-            log(run, "INFO", "任务启动，模式 " + modeLabel(run.getMode()));
+            runLog.info("任务启动，模式 " + modeLabel(run.getMode()));
             logDutyDeadline(run);
             interactionsAtStart = beginInteractionTracking(run, platform);
 
@@ -359,7 +370,7 @@ public class RunService {
             // COMPLETED / SCAN_DONE 会被读成任务提前退出 —— 这一轮的 unread.detected 事件
             // 本来就一条都不会有，日志里没有别的痕迹能解释它为什么结束。
             if (!configStore.platformWatchEnabled(platform)) {
-                log(run, "INFO", "该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命");
+                runLog.info("该平台未启用值守：本轮只扫描，扫描结束后收尾，不进入值守待命");
             }
             if (!scanEnabled) {
                 // 只值守：不建组合、不开搜索页，日志里也不出现「开始扫描」「开始组合」
@@ -444,7 +455,7 @@ public class RunService {
             publish(run, "circuit.opened", Map.of("kind", e.kind().name(), "message", e.getMessage()));
             notify(run, "circuit", "任务已熔断：" + e.kind().name(), e.getMessage());
         } catch (Exception e) {
-            log.error("任务执行失败", e);
+            runLog.error("任务执行失败：" + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             finish(run, RunStatus.FAILED, "EXCEPTION", e.getClass().getSimpleName() + ": " + e.getMessage());
             notify(run, "run-failed", "任务异常终止", String.valueOf(e.getMessage()));
         } finally {
@@ -500,6 +511,7 @@ public class RunService {
     private StandbyExit standbyLoop(RunEntity run, StandbyGate.StopReason reason, boolean scanEnabled) {
         int round = 0;
         long enteredAt = System.currentTimeMillis();
+        RunLog runLog = runLogs.of(run);
         boolean collectMetrics = configStore.aiConfig().getCollectEffectMetrics() != null
                 && configStore.aiConfig().getCollectEffectMetrics() == 1;
 
@@ -523,7 +535,7 @@ public class RunService {
             // 走 ConfigStore 的读法而不复用上面那份 cfg：「缺省按开」的规则只有那一处，
             // 在调用点照抄一遍 `== null || != 0` 就等于第二份默认值。
             if (!configStore.platformWatchEnabled(run.getPlatform())) {
-                log(run, "INFO", "该平台已关闭值守，本轮不再巡检，任务结束");
+                runLog.info("该平台已关闭值守，本轮不再巡检，任务结束");
                 return StandbyExit.ENDED;
             }
             DutyWindow window = DutyWindow.of(cfg);
@@ -546,7 +558,7 @@ public class RunService {
                         : reason == StandbyGate.StopReason.EVAL_LIMIT
                         ? "评估上限已回升（" + evaluated + "/" + evalLimit(cfg) + "），恢复扫描"
                         : "主动投递配额已回升（" + delivered + "/" + quota(cfg) + "），恢复扫描";
-                log(run, "INFO", why);
+                runLog.info(why);
                 Map<String, Object> data = new LinkedHashMap<>();
                 data.put("reason", code);
                 data.put("at", DutyWindow.format(now));
@@ -562,13 +574,14 @@ public class RunService {
             round++;
             act(run, "检查未读消息：读取消息列表");
             UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
-                    adapter, run.getPlatform(), collectMetrics, false);
+                    adapter, run.getPlatform(), collectMetrics, false, runLog);
             publishUnread(run, sweep);
             // 抖动：每 120 秒整刷一次列表是个太像机器的特征
             int jittered = jitterSeconds(interval);
             long standbyMinutes = (System.currentTimeMillis() - enteredAt) / 60_000;
-            // 0 未读也要有一行：等待期间完全静默时，人无法区分「在等」和「卡死」
-            log(run, "INFO", "值守待命第 " + round + " 轮：会话 " + sweep.threads()
+            // 0 未读也要有一行：等待期间完全静默时，人无法区分「在等」和「卡死」。
+            // 这一行现在会落进 run_log —— 值守期的每一轮都留痕，是「不产生疑惑」的代价。
+            runLog.info("值守待命第 " + round + " 轮：会话 " + sweep.threads()
                     + "，回复 " + sweep.replied() + "，未命中 " + sweep.unmatched()
                     + (sweep.retried() > 0 ? "，重试 " + sweep.retried() : "")
                     + (sweep.failed() > 0 ? "，失败 " + sweep.failed() : "")
@@ -587,6 +600,7 @@ public class RunService {
      * 沿用「扫描已结束（…）」会与实际不符，读日志的人会去翻组合表，而那张表是空的。
      */
     private void enterStandby(RunEntity run, StandbyGate.StopReason reason) {
+        RunLog runLog = runLogs.of(run);
         PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
         DutyWindow window = DutyWindow.of(cfg);
         int delivered = runStore.deliveredToday(run.getPlatform());
@@ -610,7 +624,7 @@ public class RunService {
 
         runStore.markStandby(run, message);
         act(run, neverScanned ? "正在盯着消息：没有开启「搜索岗位」，只检查消息" : "正在盯着消息：等下一次检查");
-        log(run, "INFO", message);
+        runLog.info(message);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("reason", why0.name());
         data.put("delivered", delivered);
@@ -702,7 +716,7 @@ public class RunService {
                 + "已停止操作；" + window.nextOpenHint(now) + "，这一轮还没有结束，不需要重新启动";
         runStore.markWaiting(run, message);
         act(run, "已排队，等 " + window.describe() + " 这个时段开始");
-        log(run, "INFO", message);
+        runLogs.of(run).info(message);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("reason", reason);
         data.put("window", window.describe());
@@ -730,7 +744,7 @@ public class RunService {
             run.setScrollRound(0);
             run.setLastCardIndex(0);
             runStore.resetCombinations(run.getId());
-            log(run, "INFO", "进入新的一天（" + today + "），组合队列复位，从第 1 个组合重新扫描");
+            runLogs.of(run).info("进入新的一天（" + today + "），组合队列复位，从第 1 个组合重新扫描");
         }
         runStore.update(run);
     }
@@ -817,6 +831,7 @@ public class RunService {
      * @return 扫描为什么停；{@code null} 表示被人停 / 到点 / 组合超时这类「不需要待命理由」的退出
      */
     private StandbyGate.StopReason executeCombinations(RunEntity run) {
+        RunLog runLog = runLogs.of(run);
         PlatformConfigEntity cfg = configStore.platformConfig(run.getPlatform());
         List<CombinationRunEntity> combos = runStore.combinations(run.getId());
         int startIndex = run.getCombinationIndex() == null ? 0 : run.getCombinationIndex();
@@ -831,7 +846,7 @@ public class RunService {
             // 关掉扫描之后不得再有任何搜索页导航（spec 0005 §3.5）。放在「开始组合」之前，
             // 所以关掉之后日志里不会再出现这一行 —— 验收时正是看它。
             if (!configStore.platformScanEnabled(run.getPlatform())) {
-                log(run, "INFO", "该平台已关闭扫描，停止扫描；组合 #" + combo.getSeq() + " 未开始");
+                runLog.info("该平台已关闭扫描，停止扫描；组合 #" + combo.getSeq() + " 未开始");
                 return StandbyGate.StopReason.SCAN_DISABLED;
             }
             long comboStartedAt = System.currentTimeMillis();
@@ -842,7 +857,7 @@ public class RunService {
                     "seq", combo.getSeq(),
                     "city", combo.getCity(),
                     "keyword", combo.getKeyword()));
-            log(run, "INFO", "开始组合 #" + combo.getSeq() + " " + combo.getCity() + " / " + combo.getKeyword());
+            runLog.info("开始组合 #" + combo.getSeq() + " " + combo.getCity() + " / " + combo.getKeyword());
 
             int resumeCard = (i == startIndex && run.getLastCardIndex() != null) ? run.getLastCardIndex() : 0;
             try {
@@ -856,7 +871,7 @@ public class RunService {
                                 cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds()),
                         this::shouldStop);
                 combo.setCardsSeen(scroll.cards());
-                log(run, "INFO", "组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
+                runLog.info("组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
                         + scroll.rounds() + " 轮，" + (scroll.loadedAll() ? "确认到底" : "撞到轮数上限") + "）");
 
                 StandbyGate.StopReason stop = processCards(run, cfg, combo, scroll.cards(), resumeCard,
@@ -871,7 +886,7 @@ public class RunService {
                         // 断点语义分两种：同日回扫（配额被调高）从这张卡继续；跨日会复位组合队列
                         // （ensureScanDay），从头重扫。两句都写出来，否则「保留断点」会被当成
                         // 「明天从第 19 张开始」，而实际上明天是第 1 张。
-                        log(run, "INFO", "组合 #" + combo.getSeq() + " 未跑完：已处理到第 "
+                        runLog.info("组合 #" + combo.getSeq() + " 未跑完：已处理到第 "
                                 + count(run.getLastCardIndex()) + "/" + count(combo.getCardsSeen())
                                 + " 张；同日回扫从这里继续，跨日会从第 1 张重扫");
                     } else {
@@ -879,9 +894,9 @@ public class RunService {
                     }
                     if (stop == StandbyGate.StopReason.SCAN_DISABLED) {
                         // 「留待回扫时继续」在这里不成立：关掉扫描的 Run 不会被 StandbyGate 送回扫描
-                        log(run, "INFO", "组合 #" + combo.getSeq() + " 中止：该平台已关闭扫描，剩余卡片不再处理");
+                        runLog.info("组合 #" + combo.getSeq() + " 中止：该平台已关闭扫描，剩余卡片不再处理");
                     } else if (stop != StandbyGate.StopReason.COMBINATION_TIMEOUT) {
-                        log(run, "INFO", "组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
+                        runLog.info("组合 #" + combo.getSeq() + " 在「" + stopLabel(stop)
                                 + "」处中止，剩余卡片留待回扫时继续");
                     }
                     return stop;
@@ -897,8 +912,9 @@ public class RunService {
                 throw e;
             } catch (Exception e) {
                 combo.setStatus("FAILED");
-                log(run, "WARN", "组合 #" + combo.getSeq() + " 失败已跳过：" + e.getMessage());
-                log.warn("组合 {} 失败", combo.getSeq(), e);
+                // 一句话 + 堆栈走同一个出口：库里的行只有这句话，堆栈进文件。
+                // 原来这里分两条（一行写库、一行只写文件），库里一行、文件里两行，且两行的措辞不一致。
+                runLog.warn("组合 #" + combo.getSeq() + " 失败已跳过：" + e.getMessage(), e);
             } finally {
                 combo.setFinishedAt(time.stamp());
                 runStore.updateCombination(combo);
@@ -918,6 +934,7 @@ public class RunService {
     private StandbyGate.StopReason processCards(RunEntity run, PlatformConfigEntity cfg, CombinationRunEntity combo,
                                                 int cardCount, int startCard, long comboStartedAt,
                                                 SearchQuery query) {
+        RunLog runLog = runLogs.of(run);
         int cardsSinceWatch = 0;
         long lastWatchAt = System.currentTimeMillis();
         // <=0 表示不限时间（配置页可填 0 或 -1）：此时只有配额、评估上限、
@@ -943,19 +960,19 @@ public class RunService {
             // executeCombinations 把 null 当作「这个组合超时」，会推进到下一个组合继续导航。
             // 读配置而不读 runLoop 里的局部变量：那个值只在启动时读一次，运行中关掉不会变。
             if (!configStore.platformScanEnabled(run.getPlatform())) {
-                log(run, "INFO", "该平台已关闭扫描，在第 " + (card + 1) + " 张卡前停止；值守继续");
+                runLog.info("该平台已关闭扫描，在第 " + (card + 1) + " 张卡前停止；值守继续");
                 return StandbyGate.StopReason.SCAN_DISABLED;
             }
             // 配额与评估上限的检查位置不变（卡片边界）—— 那里之前的所有动作要么不发消息，
             // 要么已经发完，是唯一可靠的断点。命中后只中止扫描：值守照旧（spec 0003 3.2）。
             int delivered = runStore.deliveredToday(run.getPlatform());
             if (delivered >= quota(cfg)) {
-                log(run, "INFO", "今日主动投递已达配额 " + quota(cfg) + "（" + delivered + "），中止扫描；值守继续");
+                runLog.info("今日主动投递已达配额 " + quota(cfg) + "（" + delivered + "），中止扫描；值守继续");
                 return StandbyGate.StopReason.QUOTA;
             }
             int evaluated = runStore.evaluatedToday(run.getPlatform());
             if (evaluated >= evalLimit(cfg)) {
-                log(run, "INFO", "今日评估已达上限 " + evalLimit(cfg) + "（" + evaluated + "），中止扫描；值守继续");
+                runLog.info("今日评估已达上限 " + evalLimit(cfg) + "（" + evaluated + "），中止扫描；值守继续");
                 return StandbyGate.StopReason.EVAL_LIMIT;
             }
             long usedSeconds = (System.currentTimeMillis() - comboStartedAt) / 1000;
@@ -963,7 +980,7 @@ public class RunService {
                 // 超时点在卡片边界：上一张卡的动作已经做完，这里停下不会留下半条招呼语。
                 // 文案必须带进度：只说「超时（Ns）」时，界面上唯一的痕迹是一句 WARN，
                 // 而进度行已经被断点归零，看不出是扫到一半停的还是根本没扫。
-                log(run, "WARN", "组合 #" + combo.getSeq() + " 到达时间上限（" + limitSeconds + "s，实际 "
+                runLog.warn("组合 #" + combo.getSeq() + " 到达时间上限（" + limitSeconds + "s，实际 "
                         + usedSeconds + "s）：已处理 " + card + "/" + cardCount + " 张卡，评估 "
                         + count(combo.getEvaluated()) + "、投递 " + count(combo.getDelivered())
                         + "；剩余 " + (cardCount - card) + " 张留待下次扫描继续");
@@ -973,7 +990,7 @@ public class RunService {
             act(run, "查看第 " + (card + 1) + " 个岗位的详情");
             JobDetail detail = adapter().fetchDetail(card);
             if (detail == null) {
-                log(run, "WARN", "第 " + (card + 1) + " 张卡片没抓到详情，跳过");
+                runLog.warn("第 " + (card + 1) + " 张卡片没抓到详情，跳过");
                 continue;
             }
 
@@ -1007,7 +1024,7 @@ public class RunService {
                 // 本身就是可核对的事实。
                 if (configStore.platformWatchEnabled(run.getPlatform())) {
                     UnreadWatcher.SweepResult sweep = unreadWatcher.sweep(
-                            adapter, run.getPlatform(), collectMetrics, dryRun);
+                            adapter, run.getPlatform(), collectMetrics, dryRun, runLog);
                     publishUnread(run, sweep);
                 }
             }
@@ -1050,11 +1067,12 @@ public class RunService {
      *              用来拼"详情页的第 1 跳"那个列表页地址（spec 0006 §3.5）
      */
     private void processOneJob(RunEntity run, PlatformConfigEntity cfg, JobDetail detail, SearchQuery query) {
+        RunLog runLog = runLogs.of(run);
         BlacklistMatcher blacklist = new BlacklistMatcher(configStore.blacklist());
         var hit = blacklist.match(detail.companyName(), detail.jobName());
         if (hit.isPresent()) {
             BlacklistMatcher.Hit h = hit.get();
-            log(run, "INFO", "丢弃（黑名单「" + h.keyword() + "」）：" + detail.companyName()
+            runLog.info("丢弃（黑名单「" + h.keyword() + "」）：" + detail.companyName()
                     + " / " + detail.jobName());
             return;
         }
@@ -1062,7 +1080,7 @@ public class RunService {
         ActiveLevel level = ActiveLevel.of(detail.activeRaw());
         ActiveLevel floor = ActiveLevel.fromLabel(cfg.getActiveLevelFloor());
         if (ActiveLevel.isBelowFloor(level, floor)) {
-            log(run, "INFO", "丢弃（HR 活跃度 " + level.label() + " 低于下限 "
+            runLog.info("丢弃（HR 活跃度 " + level.label() + " 低于下限 "
                     + cfg.getActiveLevelFloor() + "）：" + detail.jobName());
             return;
         }
@@ -1071,7 +1089,7 @@ public class RunService {
 
         JobStore.Decision decision = jobStore.decide(job.getId());
         if (decision.skip()) {
-            log(run, "INFO", "跳过（" + decision.reason() + "）：" + job.getJobName() + " @ " + job.getCompanyName());
+            runLog.info("跳过（" + decision.reason() + "）：" + job.getJobName() + " @ " + job.getCompanyName());
             return;
         }
 
@@ -1098,7 +1116,7 @@ public class RunService {
                 jobStore.finishDelivery(delivery, DeliveryResult.failed("AI 判定失败：" + verdict.error()),
                         null, verdict.error(), null);
                 publish(run, "job.evaluated", jobEvent(job, "AI_FAILED", 0, verdict.error()));
-                log(run, "WARN", "AI 判定失败，本轮不投（下轮重试）：" + job.getJobName() + " — " + verdict.error());
+                runLog.warn("AI 判定失败，本轮不投（下轮重试）：" + job.getJobName() + " — " + verdict.error());
                 return;
             }
             score = verdict.score();
@@ -1109,7 +1127,7 @@ public class RunService {
                 jobStore.finishDelivery(delivery, DeliveryResult.skipped("AI 判定不投：" + verdict.reason()),
                         score, aiReason, aiRaw);
                 publish(run, "job.evaluated", jobEvent(job, "AI_REJECT", score, verdict.reason()));
-                log(run, "INFO", "AI 判定不投（" + score + " 分）：" + job.getJobName() + " — " + verdict.reason());
+                runLog.info("AI 判定不投（" + score + " 分）：" + job.getJobName() + " — " + verdict.reason());
                 return;
             }
             greeting = verdict.greeting();
@@ -1118,7 +1136,7 @@ public class RunService {
             greeting = configStore.aiConfig().getTemplateGreeting();
             decidedBy = "TEMPLATE";
             if (greeting == null || greeting.isBlank()) {
-                log(run, "WARN", "质量开关已关闭但模板招呼语为空，跳过");
+                runLog.warn("质量开关已关闭但模板招呼语为空，跳过");
                 return;
             }
         }
@@ -1129,7 +1147,7 @@ public class RunService {
             DeliveryEntity delivery = jobStore.startDelivery(job.getId(), run.getId(), decidedBy);
             jobStore.finishDelivery(delivery, DeliveryResult.skipped("演练模式，未实际投递"),
                     score, aiReason, aiRaw);
-            log(run, "INFO", "演练模式：本会投递 " + job.getJobName() + " @ " + job.getCompanyName());
+            runLog.info("演练模式：本会投递 " + job.getJobName() + " @ " + job.getCompanyName());
             return;
         }
 
@@ -1150,12 +1168,12 @@ public class RunService {
         if (result.status() == DeliveryResult.Status.DELIVERED) {
             runStore.incrementDelivered(run.getPlatform());
             run.setDeliveredCount((run.getDeliveredCount() == null ? 0 : run.getDeliveredCount()) + 1);
-            log(run, "INFO", "已投递（" + run.getDeliveredCount() + "/" + quota(cfg) + "）："
+            runLog.info("已投递（" + run.getDeliveredCount() + "/" + quota(cfg) + "）："
                     + job.getJobName() + " @ " + job.getCompanyName());
         } else if (result.status() == DeliveryResult.Status.SKIPPED) {
-            log(run, "INFO", "未投递（" + result.failureReason() + "）：" + job.getJobName());
+            runLog.info("未投递（" + result.failureReason() + "）：" + job.getJobName());
         } else {
-            log(run, "WARN", "投递失败（" + result.failureReason() + "）：" + job.getJobName());
+            runLog.warn("投递失败（" + result.failureReason() + "）：" + job.getJobName());
         }
     }
 
@@ -1202,7 +1220,7 @@ public class RunService {
                 + " 内，任务先排队；" + window.nextOpenHint(now);
         runStore.markWaiting(run, message);
         act(run, "已排队，等 " + window.describe() + " 这个时段开始");
-        log(run, "INFO", message);
+        runLogs.of(run).info(message);
         Map<String, Object> data = new LinkedHashMap<>();
         // reason 与 park() 的 DUTY_END 区分开：这里是「启动时就不在窗口内」，
         // 那边是「跑着跑着到点了」。界面文案不同，混用会让人以为任务是被中断的。
@@ -1243,7 +1261,7 @@ public class RunService {
             return;
         }
         parkedHeartbeatRunId = null;
-        log(waiting, "INFO", "值守时段已到（现在 " + DutyWindow.format(now) + "），开始执行挂起的任务");
+        runLogs.of(waiting).info("值守时段已到（现在 " + DutyWindow.format(now) + "），开始执行挂起的任务");
         publish(waiting, "run.awakened", Map.of(
                 "runId", waiting.getId(),
                 "at", DutyWindow.format(now),
@@ -1279,7 +1297,7 @@ public class RunService {
             // 界面上出现与事实不符的状态（Run 已结束，组合仍显示「进行中」），所以在 finish 之前先更新
             int abandoned = runStore.abandonRunningCombinations(run.getId());
             if (abandoned > 0) {
-                log(run, "WARN", "上一轮中断时有 " + abandoned + " 个组合停在扫描中间，已记为「已中断」");
+                runLogs.of(run).warn("上一轮中断时有 " + abandoned + " 个组合停在扫描中间，已记为「已中断」");
             }
             finish(run, RunStatus.FAILED, "SERVICE_RESTART", "服务重启，上一轮中断；如需继续请重新启动");
             publish(run, "run.finished", Map.of(
@@ -1306,25 +1324,26 @@ public class RunService {
         }
         parkedHeartbeatRunId = waiting.getId();
         parkedHeartbeatAt = nowMs;
-        log(waiting, "INFO", "仍挂起：现在 " + DutyWindow.format(now) + "，值守时段 "
+        runLogs.of(waiting).info("仍挂起：现在 " + DutyWindow.format(now) + "，值守时段 "
                 + window.describe() + "，" + window.nextOpenHint(now)
                 + "（值守期 #" + waiting.getId() + " 仍在）");
     }
 
     /** 启动后立刻把「这一轮能跑多久」写进日志——时段是运行时长上限，不是启动门槛 */
     private void logDutyDeadline(RunEntity run) {
+        RunLog runLog = runLogs.of(run);
         if ("DRY_RUN".equals(run.getMode())) {
-            log(run, "INFO", "演练模式不受值守时段约束，本轮跑到组合队列耗尽为止");
+            runLog.info("演练模式不受值守时段约束，本轮跑到组合队列耗尽为止");
             return;
         }
         DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
         if (window.alwaysOn()) {
-            log(run, "INFO", "值守时段为全天，本轮不会因时段收工");
+            runLog.info("值守时段为全天，本轮不会因时段收工");
             return;
         }
         long minutes = window.closesInMinutes(time.now().toLocalTime());
         String left = minutes < 0 ? "" : "（还能跑约 " + minutes + " 分钟）";
-        log(run, "INFO", "值守时段 " + window.describe() + "，到 " + DutyWindow.format(window.end())
+        runLog.info("值守时段 " + window.describe() + "，到 " + DutyWindow.format(window.end())
                 + " 停止操作页面并挂起" + left);
     }
 
@@ -1433,21 +1452,8 @@ public class RunService {
         runStore.finish(run, status, reason, message);
         run.setStatus(status.name());
         run.setTerminalReason(reason);
-        log(run, status == RunStatus.COMPLETED || status == RunStatus.QUOTA_REACHED ? "INFO" : "WARN",
-                status + " / " + reason + " / " + message);
-    }
-
-    /**
-     * 唯一的运行日志出口。
-     *
-     * <p>并发之后两条时间线会在同一个文件里交错（spec 0004 §5.1 把「日志交错难以排查」
-     * 列为 2b 的上线前提之一），所以每条都带平台前缀：{@code [zhaopin] [run 12] ...}。
-     * 用 {@code run.getPlatform()} 而不是本实例绑定的平台 —— 两者理论上相同，
-     * 但日志的读者只有 Run 这一张脸，写它自己的来源最不容易错。
-     */
-    private void log(RunEntity run, String level, String message) {
-        runStore.log(run.getId(), level, message);
-        log.info("[{}] [run {}] {}", run.getPlatform(), run.getId(), message);
+        runLogs.of(run).log(status == RunStatus.COMPLETED || status == RunStatus.QUOTA_REACHED
+                ? RunLogLevel.INFO : RunLogLevel.WARN, status + " / " + reason + " / " + message);
     }
 
     // ---------------------------------------------------------------- 人类化交互的观测
@@ -1464,11 +1470,12 @@ public class RunService {
      */
     private HumanCounters.Snapshot beginInteractionTracking(RunEntity run, String platform) {
         Humanize human = sessions.of(platform).humanize();
-        human.onFallback((kind, reason) -> log(run, "WARN", "交互降级[" + kindLabel(kind) + "] " + reason));
+        RunLog runLog = runLogs.of(run);
+        human.onFallback((kind, reason) -> runLog.warn("交互降级[" + kindLabel(kind) + "] " + reason));
         // 页面自己打开的标签页（点到 target=_blank 的链接）。记 INFO 而不是 WARN：
         // 它不是故障，但必须留下痕迹 —— 否则「任务结束后浏览器里多了一堆详情页标签」
         // 只能靠人去数标签，日志里一句话都没有。
-        human.onNewTab((url, note) -> log(run, "INFO",
+        human.onNewTab((url, note) -> runLog.info(
                 "多出一个标签页（" + note + "）：" + (url == null || url.isBlank() ? "地址未知" : url)
                         + "，已关闭"));
         return human.counters().snapshot();
@@ -1493,7 +1500,7 @@ public class RunService {
         if (delta.interactions() == 0 && delta.fallbacks() == 0) {
             return;
         }
-        log(run, "INFO", HumanCounters.format(delta)
+        runLogs.of(run).info(HumanCounters.format(delta)
                 + " / 降级率 " + (Math.round(delta.fallbackRate() * 1000) / 10.0) + "%");
     }
 

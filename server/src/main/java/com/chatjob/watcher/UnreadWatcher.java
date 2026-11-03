@@ -6,11 +6,11 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
+import com.chatjob.runlog.RunLog;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.ConversationEntity;
 import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.UnreadTaskEntity;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -32,8 +32,12 @@ import java.util.List;
  *   <li>{@code ai_reply_enabled = 1} → {@link #sweepWithTasks}，先落任务再点开会话，
  *       失败按退避重试，AI 分支在 P3 接入。</li>
  * </ul>
+ *
+ * <p><b>日志走 {@link RunLog}，本类不再持有 slf4j 的 {@code Logger}（ADR-0008）。</b>
+ * 改之前这里的 41 条日志只进文件、一条都不进 {@code run_log}：控制台上「值守跑了但什么都没发生」
+ * 无法归因，而且这些行连平台前缀都没有 —— 两个平台并行时根本分不清是谁在回消息。
+ * 现在连 {@link #sweepDryRun} 的「本会回复」也落库：那是演练唯一的产出。
  */
-@Slf4j
 @Component
 public class UnreadWatcher {
 
@@ -105,19 +109,22 @@ public class UnreadWatcher {
      *
      * @param dryRun 演练模式：只走流程，不发消息、不写任何会改变真实状态的数据。
      *               语义见 {@link #sweepDryRun}。
+     * @param runLog 本轮的运行日志出口，由调用方（{@code RunService}）为当前 Run 创建。
+     *               做成参数而不是本类字段：本类是单例、值守本身无状态，而 RunLog 绑定的是
+     *               某一条 Run —— 存成字段就得回答「现在跑的是哪条」，那个答案只有编排层有。
      */
     public SweepResult sweep(PlatformAdapter adapter, String platform, boolean collectMetrics,
-                             boolean dryRun) {
+                             boolean dryRun, RunLog runLog) {
         // 演练支路必须排在开关判断之前：它与 ai_reply_enabled 无关 —— 开着 AI 回复时
         // 演练照样不能发。把它放进下面两个分支里，等于要求两处都记得判断。
         if (dryRun) {
-            return sweepDryRun(adapter);
+            return sweepDryRun(adapter, runLog);
         }
         // 关闭态必须与改造前逐行一致（spec 2.1 第 1 条）。这里不「顺手」做任何优化。
         if (!configStore.aiReplyEnabled()) {
-            return sweepLegacy(adapter, platform, collectMetrics);
+            return sweepLegacy(adapter, platform, collectMetrics, runLog);
         }
-        return sweepWithTasks(adapter, platform, collectMetrics);
+        return sweepWithTasks(adapter, platform, collectMetrics, runLog);
     }
 
     // ================================================================ 演练态：只走流程
@@ -152,7 +159,7 @@ public class UnreadWatcher {
      * 这条未读不会再出现在列表里。接受这个代价，是因为不验证 {@code openThread} 与消息区
      * 选择器就上线，代价更大 —— 这两个地方才是历史故障高发区。
      */
-    private SweepResult sweepDryRun(PlatformAdapter adapter) {
+    private SweepResult sweepDryRun(PlatformAdapter adapter, RunLog runLog) {
         int threads = 0;
         int wouldReply = 0;
         int unmatched = 0;
@@ -174,20 +181,20 @@ public class UnreadWatcher {
                     continue;
                 }
                 try {
-                    log.info("演练：进入会话 | 会话={} | 未读={} | 摘要=「{}」",
-                            thread.title(), thread.unread(), clipLog(thread.lastMessage()));
+                    runLog.info("演练：进入会话 | 会话=" + thread.title() + " | 未读=" + thread.unread()
+                            + " | 摘要=「" + clipLog(thread.lastMessage()) + "」");
                     List<ChatMessage> messages = adapter.readMessages(thread);
                     if (messages.isEmpty()) {
-                        log.warn("演练：会话「{}」消息区读不到任何消息", thread.title());
+                        runLog.warn("演练：会话「" + thread.title() + "」消息区读不到任何消息");
                         continue;
                     }
                     ChatMessage last = messages.get(messages.size() - 1);
                     // duplicate / throttled 一律传 false：见方法注释，它们读的是真实痕迹
                     ReplyRuleEngine.Decision decision =
                             engine.decide(last.text(), last.fromSelf(), false, false);
-                    log.info("演练判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
-                            thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
-                            nvl(decision.matchedKeyword()), decision.reason());
+                    runLog.info("演练判定 | 会话=" + thread.title() + " | 动作=" + decision.action()
+                            + " | 规则=" + ruleNameOf(engine, decision.ruleId())
+                            + " | 命中词=" + nvl(decision.matchedKeyword()) + " | 理由=" + decision.reason());
                     if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
                         sensitive++;
                         continue;
@@ -196,8 +203,8 @@ public class UnreadWatcher {
                     // 真实路径会点按钮发卡片，演练路径却只报「未命中」。
                     if (decision.action() == ReplyRuleEngine.Action.SEND_RESUME) {
                         wouldReply++;
-                        log.info("演练模式：本会发简历（不发文字）| 会话={} | 理由={}",
-                                thread.title(), decision.reason());
+                        runLog.info("演练模式：本会发简历（不发文字）| 会话=" + thread.title()
+                                + " | 理由=" + decision.reason());
                         continue;
                     }
                     if (decision.action() == ReplyRuleEngine.Action.UNMATCHED) {
@@ -207,7 +214,7 @@ public class UnreadWatcher {
                     // 这是 P3 之后演练的主要价值 —— 它是唯一能安全看到 AI 输出的地方。
                     String ruleText = decision.shouldReply() ? decision.replyText() : null;
                     if (!budget.tryUse()) {
-                        log.info("演练：AI 调用已达本轮上限 {} 次，其余会话不预演", budget.max());
+                        runLog.info("演练：AI 调用已达本轮上限 " + budget.max() + " 次，其余会话不预演");
                         break;
                     }
                     AiReplier.Reply preview = aiReplier.reply(new AiReplier.Input(
@@ -217,50 +224,52 @@ public class UnreadWatcher {
                     if (preview.isFailure()) {
                         if (ruleText != null && !ruleText.isBlank()) {
                             wouldReply++;
-                            log.info("演练模式：本会回复「{}」→ AI 失败，降级用模板「{}」",
-                                    thread.title(), ruleText);
+                            runLog.info("演练模式：本会回复「" + thread.title()
+                                    + "」→ AI 失败，降级用模板「" + ruleText + "」");
                         } else {
-                            log.info("演练模式：本不会回复「{}」→ AI 失败且无模板可降级", thread.title());
+                            runLog.info("演练模式：本不会回复「" + thread.title()
+                                    + "」→ AI 失败且无模板可降级");
                         }
                         continue;
                     }
                     if (preview.skip()) {
-                        log.info("演练模式：本不会回复「{}」→ AI 主动跳过（{}）：{}",
-                                thread.title(), preview.skipReason(), preview.note());
+                        runLog.info("演练模式：本不会回复「" + thread.title() + "」→ AI 主动跳过（"
+                                + preview.skipReason() + "）：" + preview.note());
                         continue;
                     }
                     ReplyGuard.Verdict verdict = ReplyGuard.check(preview.text(), last.text(), guard);
                     if (verdict.blocked()) {
-                        log.info("演练模式：本不会回复「{}」→ AI 草稿被出站校验拦下（{}）：{}",
-                                thread.title(), verdict.rejection(), verdict.detail());
+                        runLog.info("演练模式：本不会回复「" + thread.title() + "」→ AI 草稿被出站校验拦下（"
+                                + verdict.rejection() + "）：" + verdict.detail());
                         continue;
                     }
                     wouldReply++;
-                    log.info("演练模式：本会回复「{}」→ AI「{}」", thread.title(), verdict.text());
+                    runLog.info("演练模式：本会回复「" + thread.title() + "」→ AI「" + verdict.text() + "」");
                 } catch (ThreadTargetUnsafeException e) {
                     // 演练要把这类问题暴露出来 —— 会话定位不安全正是「半夜验证」最该验到的部分
-                    log.warn("演练：会话「{}」定位不安全（{}）：{}",
-                            thread.title(), e.code(), e.getMessage());
+                    runLog.warn("演练：会话「" + thread.title() + "」定位不安全（" + e.code() + "）："
+                            + e.getMessage());
                 } catch (Exception e) {
-                    log.warn("演练：处理会话「{}」失败: {}", thread.title(), e.getMessage());
+                    runLog.warn("演练：处理会话「" + thread.title() + "」失败: " + e.getMessage());
                 }
             }
-            warnIfUnreadUnreadable(unreadUnreadable, threads);
+            warnIfUnreadUnreadable(unreadUnreadable, threads, runLog);
         } catch (Exception e) {
-            log.warn("演练值守扫描失败（不影响扫描主链）: {}", e.getMessage());
+            runLog.warn("演练值守扫描失败（不影响扫描主链）: " + e.getMessage());
         } finally {
             closeThreadQuietly(adapter);
         }
         if (threads > 0) {
-            log.info("演练值守扫描完成（不发消息）: 会话 {}，本会回复 {}，未命中 {}，敏感跳过 {}",
-                    threads, wouldReply, unmatched, sensitive);
+            runLog.info("演练值守扫描完成（不发消息）: 会话 " + threads + "，本会回复 " + wouldReply
+                    + "，未命中 " + unmatched + "，敏感跳过 " + sensitive);
         }
         return new SweepResult(threads, 0, unmatched, sensitive, 0, 0, wouldReply);
     }
 
     // ================================================================ 关闭态：改造前路径
 
-    private SweepResult sweepLegacy(PlatformAdapter adapter, String platform, boolean collectMetrics) {
+    private SweepResult sweepLegacy(PlatformAdapter adapter, String platform, boolean collectMetrics,
+                                   RunLog runLog) {
         int threads = 0;
         int replied = 0;
         int unmatched = 0;
@@ -285,6 +294,8 @@ public class UnreadWatcher {
                             platform, thread.conversationId(), null);
                     List<ChatMessage> messages = adapter.readMessages(thread);
                     if (messages.isEmpty()) {
+                        // 「读不到」不是「没有新消息」：留一行，否则这条未读在日志里凭空消失
+                        runLog.warn("会话「" + thread.title() + "」消息区读不到任何消息，本轮跳过");
                         continue;
                     }
                     ChatMessage last = messages.get(messages.size() - 1);
@@ -293,11 +304,11 @@ public class UnreadWatcher {
                     ReplyRuleEngine.Decision decision = engine.decide(
                             last.text(), last.fromSelf(), duplicate, throttled);
 
-                    log.info("进入回复流程 | 会话={} | 未读={} | 摘要=「{}」",
-                            thread.title(), thread.unread(), clipLog(thread.lastMessage()));
-                    log.info("判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
-                            thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
-                            nvl(decision.matchedKeyword()), decision.reason());
+                    runLog.info("进入回复流程 | 会话=" + thread.title() + " | 未读=" + thread.unread()
+                            + " | 摘要=「" + clipLog(thread.lastMessage()) + "」");
+                    runLog.info("判定 | 会话=" + thread.title() + " | 动作=" + decision.action()
+                            + " | 规则=" + ruleNameOf(engine, decision.ruleId())
+                            + " | 命中词=" + nvl(decision.matchedKeyword()) + " | 理由=" + decision.reason());
 
                     if (decision.action() == ReplyRuleEngine.Action.SKIP_DUPLICATE) {
                         continue;
@@ -317,7 +328,7 @@ public class UnreadWatcher {
                             replied++;
                             logAction(conversation.getId(), last, ReplyLogEntity.ACTION_REPLY_RESUME,
                                     decision.ruleId(), null, null, ReplyLogEntity.SOURCE_RESUME, null, reason);
-                            log.info("已发出简历（未补文字）| 会话={} | 理由={}", thread.title(), reason);
+                            runLog.info("已发出简历（未补文字）| 会话=" + thread.title() + " | 理由=" + reason);
                             continue;
                         }
                         if (resume.status() == ResumeResult.Status.UNAVAILABLE
@@ -328,12 +339,12 @@ public class UnreadWatcher {
                             if (sent) {
                                 replyStore.markOwnReply(conversation);
                                 replied++;
-                                log.info("已发送（简历不可用降级）| 会话={} | 内容=「{}」",
-                                        thread.title(), decision.replyText());
+                                runLog.info("已发送（简历不可用降级）| 会话=" + thread.title()
+                                        + " | 内容=「" + decision.replyText() + "」");
                             }
                         } else {
-                            log.warn("发简历失败 | 会话={} | {} | {}", thread.title(),
-                                    resume.status(), resume.detail());
+                            runLog.warn("发简历失败 | 会话=" + thread.title() + " | " + resume.status()
+                                    + " | " + resume.detail());
                         }
                         logAction(conversation.getId(), last, sent
                                         ? ReplyRuleEngine.Action.REPLY.name()
@@ -349,10 +360,12 @@ public class UnreadWatcher {
                         if (sent) {
                             replyStore.markOwnReply(conversation);
                             replied++;
-                            log.info("已发送 | 会话={} | 来源=模板 | 规则={} | 内容=「{}」",
-                                    thread.title(), ruleNameOf(engine, decision.ruleId()), decision.replyText());
+                            runLog.info("已发送 | 会话=" + thread.title() + " | 来源=模板"
+                                    + " | 规则=" + ruleNameOf(engine, decision.ruleId())
+                                    + " | 内容=「" + decision.replyText() + "」");
                         } else {
-                            log.warn("值守回复发送失败 | 会话={} | 规则={}", thread.title(), decision.ruleId());
+                            runLog.warn("值守回复发送失败 | 会话=" + thread.title()
+                                    + " | 规则=" + decision.ruleId());
                         }
                     } else if (decision.action() == ReplyRuleEngine.Action.UNMATCHED) {
                         unmatched++;
@@ -367,16 +380,16 @@ public class UnreadWatcher {
                             decision.sensitive(), decision.replyText(),
                             ReplyLogEntity.SOURCE_TEMPLATE, null, reason);
                 } catch (Exception e) {
-                    log.warn("处理会话 {} 失败: {}", thread.title(), e.getMessage());
+                    runLog.warn("处理会话 " + thread.title() + " 失败: " + e.getMessage());
                 }
             }
-            warnIfUnreadUnreadable(unreadUnreadable, threads);
+            warnIfUnreadUnreadable(unreadUnreadable, threads, runLog);
             if (threads > 0) {
-                log.info("值守扫描完成: 会话 {}，回复 {}，未命中 {}，敏感跳过 {}",
-                        threads, replied, unmatched, sensitive);
+                runLog.info("值守扫描完成: 会话 " + threads + "，回复 " + replied + "，未命中 " + unmatched
+                        + "，敏感跳过 " + sensitive);
             }
         } catch (Exception e) {
-            log.warn("值守扫描失败（不影响扫描主链）: {}", e.getMessage());
+            runLog.warn("值守扫描失败（不影响扫描主链）: " + e.getMessage());
         } finally {
             closeThreadQuietly(adapter);
         }
@@ -396,7 +409,8 @@ public class UnreadWatcher {
      * 顺序不能反过来：先扫新未读的话，一个失败的会话要等到下一轮才可能被重试，
      * 而下一轮可能因为配额/超时根本不会到来。
      */
-    private SweepResult sweepWithTasks(PlatformAdapter adapter, String platform, boolean collectMetrics) {
+    private SweepResult sweepWithTasks(PlatformAdapter adapter, String platform, boolean collectMetrics,
+                                       RunLog runLog) {
         int threads = 0;
         int replied = 0;
         int unmatched = 0;
@@ -415,7 +429,7 @@ public class UnreadWatcher {
                 retried++;
                 UnreadThread thread = UnreadThread.retry(
                         task.getPlatformConversationId(), task.getLastMessageDigest());
-                Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget);
+                Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget, runLog);
                 switch (outcome) {
                     case REPLIED -> replied++;
                     case SENSITIVE -> sensitive++;
@@ -444,10 +458,13 @@ public class UnreadWatcher {
                             platform, thread.conversationId(), conversation.getId(),
                             thread.unread(), Digest.of(thread.lastMessage()));
                     if (taskStore.waitingForRetry(task)) {
-                        // 还在退避窗口里：它已经排好下次重试时间，现在处理等于把退避废掉
+                        // 还在退避窗口里：它已经排好下次重试时间，现在处理等于把退避废掉。
+                        // 但要留一行：否则「这条未读一直没回」在日志里找不到任何解释（ADR-0008 第 3 条）
+                        runLog.info("跳过（重试退避中，下次重试 " + task.getNextRetryAt() + "）| 会话="
+                                + thread.title());
                         continue;
                     }
-                    Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget);
+                    Outcome outcome = process(adapter, engine, thread, task, collectMetrics, guard, budget, runLog);
                     switch (outcome) {
                         case REPLIED -> replied++;
                         case SENSITIVE -> sensitive++;
@@ -456,17 +473,18 @@ public class UnreadWatcher {
                         }
                     }
                 } catch (Exception e) {
-                    log.warn("处理会话 {} 失败: {}", thread.title(), e.getMessage());
+                    runLog.warn("处理会话 " + thread.title() + " 失败: " + e.getMessage());
                 }
             }
 
-            warnIfUnreadUnreadable(unreadUnreadable, threads);
+            warnIfUnreadUnreadable(unreadUnreadable, threads, runLog);
             if (threads > 0 || retried > 0) {
-                log.info("值守扫描完成（AI 模式）: 会话 {}，重试 {}（失败 {}），回复 {}，未命中 {}，敏感跳过 {}",
-                        threads, retried, failed, replied, unmatched, sensitive);
+                runLog.info("值守扫描完成（AI 模式）: 会话 " + threads + "，重试 " + retried
+                        + "（失败 " + failed + "），回复 " + replied + "，未命中 " + unmatched
+                        + "，敏感跳过 " + sensitive);
             }
         } catch (Exception e) {
-            log.warn("值守扫描失败（不影响扫描主链）: {}", e.getMessage());
+            runLog.warn("值守扫描失败（不影响扫描主链）: " + e.getMessage());
         } finally {
             closeThreadQuietly(adapter);
         }
@@ -486,31 +504,31 @@ public class UnreadWatcher {
      */
     private Outcome process(PlatformAdapter adapter, ReplyRuleEngine engine, UnreadThread thread,
                             UnreadTaskEntity task, boolean collectMetrics,
-                            ReplyGuard.GuardOptions guard, AiBudget budget) {
+                            ReplyGuard.GuardOptions guard, AiBudget budget, RunLog runLog) {
         Long conversationId = task.getConversationId();
         ConversationEntity conversation = replyStore.findById(conversationId);
         taskStore.claim(task);
 
         // 每个会话一条入口日志。改造前这里一条都不打，成功路径全程静默 ——
         // 真发了消息的人在日志里找不到任何痕迹，只能靠「轮末那行汇总里 replied=1」反推。
-        log.info("进入回复流程 | 会话={} | 未读={} | 摘要=「{}」",
-                thread.title(), thread.unread(), clipLog(thread.lastMessage()));
+        runLog.info("进入回复流程 | 会话=" + thread.title() + " | 未读=" + thread.unread()
+                + " | 摘要=「" + clipLog(thread.lastMessage()) + "」");
 
         List<ChatMessage> messages;
         try {
             messages = adapter.readMessages(thread);
         } catch (ThreadTargetUnsafeException e) {
             // 同名多条 / 摘要已变：重试一万次也不会变好，直接放弃（spec 3.4）
-            log.warn("会话定位不安全，放弃这条未读 | 会话={} | {} | {}",
-                    thread.title(), e.code(), e.getMessage());
+            runLog.warn("会话定位不安全，放弃这条未读 | 会话=" + thread.title() + " | " + e.code()
+                    + " | " + e.getMessage());
             taskStore.giveUp(task, e.code(), e.getMessage());
             return Outcome.ABANDONED;
         } catch (Exception e) {
-            return fail(task, UnreadTaskStore.Action.READ_FAILED, null, e.getMessage());
+            return fail(thread, task, UnreadTaskStore.Action.READ_FAILED, null, e.getMessage(), runLog);
         }
         if (messages.isEmpty()) {
             // 「读不到」和「没有消息」在这里无法区分，交重试：3 次都空就 GAVE_UP，控制台可见
-            return fail(task, UnreadTaskStore.Action.READ_FAILED, null, "消息区读不到任何消息");
+            return fail(thread, task, UnreadTaskStore.Action.READ_FAILED, null, "消息区读不到任何消息", runLog);
         }
 
         ChatMessage last = messages.get(messages.size() - 1);
@@ -519,13 +537,13 @@ public class UnreadWatcher {
             // 这里靠消息归属自然收敛，不会重复发。
             taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_SELF.name(), null,
                     "最后一条是我方消息「" + clipLog(last.text()) + "」，等对方先回");
-            log.info("跳过（最后一条是我方消息）| 会话={}", thread.title());
+            runLog.info("跳过（最后一条是我方消息）| 会话=" + thread.title());
             return Outcome.SKIPPED;
         }
         if (replyStore.wasProcessed(conversationId, last.id())) {
             taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_DUPLICATE.name(), null,
                     "消息 " + last.id() + " 上一轮已处理过");
-            log.info("跳过（这条消息已处理过）| 会话={} | mid={}", thread.title(), last.id());
+            runLog.info("跳过（这条消息已处理过）| 会话=" + thread.title() + " | mid=" + last.id());
             return Outcome.SKIPPED;
         }
         if (conversation != null && replyStore.inCooldown(conversation)) {
@@ -534,7 +552,7 @@ public class UnreadWatcher {
                     "同会话 " + ReplyStore.REPLY_COOLDOWN_MINUTES + " 分钟冷却期内");
             taskStore.markDone(task, last.id(), ReplyRuleEngine.Action.SKIP_THROTTLED.name(),
                     null, "同会话 " + ReplyStore.REPLY_COOLDOWN_MINUTES + " 分钟冷却期内");
-            log.info("跳过（{} 分钟冷却期内）| 会话={}", ReplyStore.REPLY_COOLDOWN_MINUTES, thread.title());
+            runLog.info("跳过（" + ReplyStore.REPLY_COOLDOWN_MINUTES + " 分钟冷却期内）| 会话=" + thread.title());
             return Outcome.SKIPPED;
         }
         if (collectMetrics && conversation != null) {
@@ -545,9 +563,9 @@ public class UnreadWatcher {
         ReplyRuleEngine.Decision decision = engine.decide(last.text(), false, false, false);
 
         // 「为什么这么回」必须在日志里能直接读到，不能只落库：出事的时候人是先翻日志的。
-        log.info("判定 | 会话={} | 动作={} | 规则={} | 命中词={} | 理由={}",
-                thread.title(), decision.action(), ruleNameOf(engine, decision.ruleId()),
-                nvl(decision.matchedKeyword()), decision.reason());
+        runLog.info("判定 | 会话=" + thread.title() + " | 动作=" + decision.action()
+                + " | 规则=" + ruleNameOf(engine, decision.ruleId())
+                + " | 命中词=" + nvl(decision.matchedKeyword()) + " | 理由=" + decision.reason());
 
         if (decision.action() == ReplyRuleEngine.Action.SKIP_SENSITIVE) {
             // 敏感话题连 AI 都不问：问了也没用，还白白把薪资这类内容送进模型
@@ -560,7 +578,7 @@ public class UnreadWatcher {
         // 命中「发简历」类规则：动作是发，不是回。这里不调 AI ——
         // 一旦让模型决定「要不要发简历」，它就有能力把简历发给说「简历收到了吗」的人。
         if (decision.action() == ReplyRuleEngine.Action.SEND_RESUME) {
-            return sendResumeOutcome(adapter, thread, task, last, conversation, conversationId, decision);
+            return sendResumeOutcome(adapter, thread, task, last, conversation, conversationId, decision, runLog);
         }
 
         // 命中与未命中都走 AI，差别只在「带不带参考素材」
@@ -568,6 +586,9 @@ public class UnreadWatcher {
         String ruleName = ruleNameOf(engine, decision.ruleId());
 
         if (!budget.tryUse()) {
+            // 「什么都没发生」也要有一行：用户看到的是「这条未读一直没回」，
+            // 而真实原因是本轮的 AI 配额用完了、它被排到下一轮（ADR-0008 第 3 条）
+            runLog.info("本轮 AI 调用已达上限 " + budget.max() + " 次，这条留到下一轮 | 会话=" + thread.title());
             taskStore.release(task, "本轮 AI 调用已达上限 " + budget.max() + " 次，留到下一轮");
             return Outcome.SKIPPED;
         }
@@ -578,7 +599,7 @@ public class UnreadWatcher {
 
         if (draft.isFailure()) {
             return degradeToTemplate(adapter, thread, task, last, conversation, conversationId,
-                    decision, ruleText, draft.error());
+                    decision, ruleText, draft.error(), runLog);
         }
 
         if (draft.skip()) {
@@ -587,12 +608,14 @@ public class UnreadWatcher {
                     null, null, ReplyLogEntity.SOURCE_AI, draft.skipReason(), draft.note());
             taskStore.markDone(task, last.id(), UnreadTaskStore.Action.AI_SKIPPED,
                     draft.skipReason(), draft.note());
+            runLog.info("AI 主动不回 | 会话=" + thread.title() + " | 原因=" + draft.skipReason()
+                    + " | " + nvl(draft.note()));
             return Outcome.SKIPPED;
         }
 
         ReplyGuard.Verdict verdict = ReplyGuard.check(draft.text(), last.text(), guard);
         if (verdict.rejection() == ReplyGuard.Rejection.EMPTY) {
-            return fail(task, UnreadTaskStore.Action.AI_FAILED, null, "AI 给出空回复");
+            return fail(thread, task, UnreadTaskStore.Action.AI_FAILED, null, "AI 给出空回复", runLog);
         }
         if (verdict.blocked()) {
             String action = blockedAction(verdict.rejection());
@@ -601,8 +624,8 @@ public class UnreadWatcher {
             // 不重试：同一 prompt 再问一次大概率给同样的东西，四检又是确定性规则，
             // 重试只会多花一次调用、把同样的结果再拦一次
             taskStore.markDone(task, last.id(), action, null, verdict.detail());
-            log.warn("AI 回复被出站校验拦下（整条不发）| 会话={} | {} | {}",
-                    thread.title(), verdict.rejection(), verdict.detail());
+            runLog.warn("AI 回复被出站校验拦下（整条不发）| 会话=" + thread.title()
+                    + " | " + verdict.rejection() + " | " + verdict.detail());
             return Outcome.SKIPPED;
         }
 
@@ -615,11 +638,11 @@ public class UnreadWatcher {
             logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(),
                     decision.ruleId(), null, verdict.text(), ReplyLogEntity.SOURCE_AI, null, reason);
             taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, reason);
-            log.info("已发送 | 会话={} | 来源=AI | 内容=「{}」 | 理由={}",
-                    thread.title(), verdict.text(), reason);
+            runLog.info("已发送 | 会话=" + thread.title() + " | 来源=AI | 内容=「" + verdict.text()
+                    + "」 | 理由=" + reason);
             return Outcome.REPLIED;
         }
-        return fail(task, UnreadTaskStore.Action.SEND_FAILED, null, "发送未确认送达（AI 回复）");
+        return fail(thread, task, UnreadTaskStore.Action.SEND_FAILED, null, "发送未确认送达（AI 回复）", runLog);
     }
 
     /**
@@ -636,7 +659,7 @@ public class UnreadWatcher {
      */
     private Outcome sendResumeOutcome(PlatformAdapter adapter, UnreadThread thread, UnreadTaskEntity task,
                                       ChatMessage last, ConversationEntity conversation, Long conversationId,
-                                      ReplyRuleEngine.Decision decision) {
+                                      ReplyRuleEngine.Decision decision, RunLog runLog) {
         ResumeResult result = adapter.sendResume(thread);
         String reason = decision.reason();
 
@@ -647,15 +670,15 @@ public class UnreadWatcher {
             logAction(conversationId, last, ReplyLogEntity.ACTION_REPLY_RESUME, decision.ruleId(),
                     null, null, ReplyLogEntity.SOURCE_RESUME, null, reason);
             taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, reason);
-            log.info("已发出简历（未补文字）| 会话={} | 理由={} | 凭据={}",
-                    thread.title(), reason, result.detail());
+            runLog.info("已发出简历（未补文字）| 会话=" + thread.title() + " | 理由=" + reason
+                    + " | 凭据=" + result.detail());
             return Outcome.REPLIED;
         }
 
         if (result.status() == ResumeResult.Status.UNAVAILABLE) {
             String fallback = decision.replyText();
-            log.warn("简历按钮不可用，降级成文字 | 会话={} | 平台原因={} | 兜底文案={}",
-                    thread.title(), result.detail(), fallback == null ? "（无）" : "「" + fallback + "」");
+            runLog.warn("简历按钮不可用，降级成文字 | 会话=" + thread.title() + " | 平台原因="
+                    + result.detail() + " | 兜底文案=" + (fallback == null ? "（无）" : "「" + fallback + "」"));
             if (fallback == null || fallback.isBlank()) {
                 logAction(conversationId, last, UnreadTaskStore.Action.AI_SKIPPED, decision.ruleId(),
                         null, null, ReplyLogEntity.SOURCE_RESUME, "RESUME_UNAVAILABLE",
@@ -666,8 +689,8 @@ public class UnreadWatcher {
             }
             boolean sent = adapter.sendText(thread, fallback);
             if (!sent) {
-                return fail(task, UnreadTaskStore.Action.SEND_FAILED, null,
-                        "简历按钮不可用，兜底文字也没发出去");
+                return fail(thread, task, UnreadTaskStore.Action.SEND_FAILED, null,
+                        "简历按钮不可用，兜底文字也没发出去", runLog);
             }
             if (conversation != null) {
                 replyStore.markOwnReply(conversation);
@@ -676,13 +699,13 @@ public class UnreadWatcher {
             logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(), decision.ruleId(),
                     null, fallback, ReplyLogEntity.SOURCE_TEMPLATE, "RESUME_UNAVAILABLE", note);
             taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, note);
-            log.info("已发送（简历不可用降级）| 会话={} | 内容=「{}」 | 理由={}",
-                    thread.title(), fallback, note);
+            runLog.info("已发送（简历不可用降级）| 会话=" + thread.title() + " | 内容=「" + fallback
+                    + "」 | 理由=" + note);
             return Outcome.REPLIED;
         }
 
-        log.warn("发简历失败 | 会话={} | 理由={} | {}", thread.title(), reason, result.detail());
-        return fail(task, UnreadTaskStore.Action.SEND_FAILED, null, "发简历失败：" + result.detail());
+        return fail(thread, task, UnreadTaskStore.Action.SEND_FAILED, null,
+                "发简历失败：" + reason + " | " + result.detail(), runLog);
     }
 
     /** 把「为什么这么回」拼成一句话：规则命中与 AI 自主判断必须能一眼区分。 */
@@ -721,14 +744,15 @@ public class UnreadWatcher {
      */
     private Outcome degradeToTemplate(PlatformAdapter adapter, UnreadThread thread, UnreadTaskEntity task,
                                       ChatMessage last, ConversationEntity conversation, Long conversationId,
-                                      ReplyRuleEngine.Decision decision, String ruleText, String error) {
+                                      ReplyRuleEngine.Decision decision, String ruleText, String error,
+                                      RunLog runLog) {
         if (ruleText == null || ruleText.isBlank()) {
-            return fail(task, UnreadTaskStore.Action.AI_FAILED, null, error);
+            return fail(thread, task, UnreadTaskStore.Action.AI_FAILED, null, error, runLog);
         }
         boolean sent = adapter.sendText(thread, ruleText);
         if (!sent) {
-            return fail(task, UnreadTaskStore.Action.SEND_FAILED, null,
-                    "AI 失败（" + error + "）后降级模板也发送失败");
+            return fail(thread, task, UnreadTaskStore.Action.SEND_FAILED, null,
+                    "AI 失败（" + error + "）后降级模板也发送失败", runLog);
         }
         if (conversation != null) {
             replyStore.markOwnReply(conversation);
@@ -736,7 +760,7 @@ public class UnreadWatcher {
         logAction(conversationId, last, ReplyRuleEngine.Action.REPLY.name(), decision.ruleId(),
                 null, ruleText, ReplyLogEntity.SOURCE_TEMPLATE, null, "AI 失败，降级用模板");
         taskStore.markDone(task, last.id(), UnreadTaskStore.Action.REPLIED, null, "AI 失败，降级用模板");
-        log.info("AI 失败，已降级用模板文案 | 会话={} | {}", thread.title(), error);
+        runLog.info("AI 失败，已降级用模板文案 | 会话=" + thread.title() + " | " + error);
         return Outcome.REPLIED;
     }
 
@@ -768,7 +792,16 @@ public class UnreadWatcher {
         return null;
     }
 
-    private Outcome fail(UnreadTaskEntity task, String action, String reasonCode, String error) {
+    /**
+     * 记一次失败并排进重试。
+     *
+     * <p>日志在这里统一写：失败有八条来源（读不到、定位不安全之外的读异常、空回复、
+     * 发送未确认、简历按钮不可用且无兜底、降级也发不出去……），逐处补一行必然漏；
+     * 而「发了没成功」正是用户最需要看见的那一类（ADR-0008 第 3 条）。
+     */
+    private Outcome fail(UnreadThread thread, UnreadTaskEntity task, String action,
+                         String reasonCode, String error, RunLog runLog) {
+        runLog.warn("未读处理失败（" + action + "），已排下次重试 | 会话=" + thread.title() + " | " + error);
         taskStore.markFailed(task, action, reasonCode, error);
         return Outcome.FAILED;
     }
@@ -781,12 +814,12 @@ public class UnreadWatcher {
         }
     }
 
-    private static void warnIfUnreadUnreadable(int unreadUnreadable, int threads) {
+    private static void warnIfUnreadUnreadable(int unreadUnreadable, int threads, RunLog runLog) {
         if (unreadUnreadable > 0) {
-            log.warn("值守未读数为「读不到」: {} / {} 个会话。这不是「没有新消息」，"
+            runLog.warn("值守未读数为「读不到」: " + unreadUnreadable + " / " + threads
+                            + " 个会话。这不是「没有新消息」，"
                             + "而是选择器或页面结构对不上，这些会话本轮被跳过 —— "
-                            + "先核对 BossSelectors.CHAT_LIST_UNREAD 与 CHAT_LIST_ITEM_BODY",
-                    unreadUnreadable, threads);
+                            + "先核对 BossSelectors.CHAT_LIST_UNREAD 与 CHAT_LIST_ITEM_BODY");
         }
     }
 

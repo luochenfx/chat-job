@@ -286,15 +286,14 @@ public class RunStore {
 
     // ---------------------------------------------------------------- 日志
 
-    public void log(Long runId, String level, String message) {
-        RunLogEntity entity = new RunLogEntity();
-        entity.setRunId(runId);
-        entity.setLevel(level);
-        entity.setMessage(message);
-        entity.setCreatedAt(time.stamp());
-        runLogMapper.insert(entity);
-    }
-
+    /**
+     * 读运行日志。
+     *
+     * <p>写不在这里：唯一写入口是 {@code com.chatjob.runlog.RunLogs}。曾经有一个
+     * {@code log(runId, level, message)} 与它并存，结果值守那一路的 41 条日志全落在文件里、
+     * 一条都没进库 —— 界面上「值守跑了但什么都没发生」无法归因。要写日志请拿 RunLog，
+     * 不要再给这里加回写方法（{@code RunLogSingleExitTest} 守着这条）。
+     */
     public List<RunLogEntity> logs(Long runId, long afterId, int limit) {
         return runLogMapper.selectList(Wrappers.<RunLogEntity>lambdaQuery()
                 .eq(RunLogEntity::getRunId, runId)

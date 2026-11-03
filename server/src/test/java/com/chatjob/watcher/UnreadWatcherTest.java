@@ -5,6 +5,8 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
+import com.chatjob.runlog.RunLog;
+import com.chatjob.runlog.RunLogLevel;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.time.FixedTimeSource;
 import com.chatjob.store.entity.ConversationEntity;
@@ -12,11 +14,7 @@ import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.UnreadTaskMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.Test;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.lang.Nullable;
 
@@ -59,7 +57,7 @@ class UnreadWatcherTest {
         Fixture f = new Fixture(false);
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你还在看机会吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 关闭态与改造前逐行一致：读完就发，不建任务
         assertThat(f.mapper.rows).isEmpty();
@@ -74,7 +72,7 @@ class UnreadWatcherTest {
         Fixture f = new Fixture(true);
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 2));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 点开之前任务必须已经在库里：点开即清红点，顺序错了这条消息就再也捞不回来
         assertThat(f.adapter.events).containsSubsequence("task→张三", "read:张三");
@@ -88,7 +86,7 @@ class UnreadWatcherTest {
         f.replier.reply = AiReplier.Reply.ok("还招的，您这边主要看哪块？", "");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.adapter.sendCalls).containsExactly("send:张三:还招的，您这边主要看哪块？");
         UnreadTaskEntity task = f.mapper.rows.get(0);
@@ -109,7 +107,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 打开态的关键差异：命中规则也不能直接甩模板，否则 40 个会话回的全是同一句
         assertThat(f.adapter.sendCalls).containsExactly("send:李四:可以的，我整理下就发您");
@@ -124,7 +122,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "[图片]", false, true));
         f.adapter.unread.add(UnreadThread.of("王五", "王五", "[图片]", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
@@ -144,7 +142,7 @@ class UnreadWatcherTest {
         f.replier.reply = AiReplier.Reply.fail("ReadTimeoutException: request timed out");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
@@ -162,7 +160,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 模板是人工审核过的，AI 挂了也不能比改造前更差
         assertThat(f.adapter.sendCalls).containsExactly("send:李四:方便发一份简历给您");
@@ -177,7 +175,7 @@ class UnreadWatcherTest {
         f.replier.reply = AiReplier.Reply.ok("可以加我微信 13800138000 详聊", "");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "方便聊聊吗", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.adapter.sendCalls).isEmpty();
         UnreadTaskEntity task = f.mapper.rows.get(0);
@@ -194,7 +192,7 @@ class UnreadWatcherTest {
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "第一个问题", 1));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "第二个问题", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.replier.inputs).hasSize(1);
         UnreadTaskEntity second = f.mapper.rows.stream()
@@ -213,7 +211,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
@@ -227,7 +225,7 @@ class UnreadWatcherTest {
                 ThreadTargetUnsafeException.AMBIGUOUS_TITLE, "列表里有 2 个同名会话");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         // 同名/摘要变了是确定性失败，重试一万次也不会变好 —— 必须 GAVE_UP 而不是排重试
@@ -245,11 +243,11 @@ class UnreadWatcherTest {
         f.replier.reply = AiReplier.Reply.fail("HTTP 500");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);   // 第一次：落任务 → 失败 → 排重试
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);   // 第一次：落任务 → 失败 → 排重试
         assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
 
         f.adapter.events.clear();
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);   // 第二次：还在 1 分钟退避窗口内
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);   // 第二次：还在 1 分钟退避窗口内
 
         // 红点已清，列表里本来就不该再出现；但即使出现，也不能立刻再点开 ——
         // 否则 3 分钟一轮的扫描会把「退避」退化成「一直重试」
@@ -269,7 +267,7 @@ class UnreadWatcherTest {
         f.adapter.unread.add(UnreadThread.of("乙", "乙", "你好", 1));
         f.adapter.unread.add(UnreadThread.of("丙", "丙", "你好", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         List<String> reads = f.adapter.events.stream().filter(e -> e.startsWith("read:")).toList();
         // 顺序不能反：先扫新的话，一个失败的会话要等下一轮才可能被重试，而下一轮可能不会来
@@ -286,7 +284,7 @@ class UnreadWatcherTest {
         f.mapper.row("甲").setMaxAttempts(3);
         f.mapper.row("甲").setNextRetryAt("2000-01-01T00:00:00");
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 重试路径只拿得到「会话 id + 摘要」，标题退化为会话 id；
         // 摘要必须原样带过去，否则 3.4 的二次校验形同虚设（重试会发给换了人的会话）
@@ -299,7 +297,7 @@ class UnreadWatcherTest {
         Fixture f = new Fixture(true);
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", -1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // -1 是「读不到」，不是「没有未读」：既不能落任务，也不能静默当 0
         assertThat(f.mapper.rows).isEmpty();
@@ -313,7 +311,7 @@ class UnreadWatcherTest {
         f.adapter.emptyMessages = true;
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
         assertThat(f.mapper.rows.get(0).getLastAction()).isEqualTo(UnreadTaskStore.Action.READ_FAILED);
@@ -325,7 +323,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-2", "方便发一份简历给您", true, false));
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
         assertThat(f.mapper.rows.get(0).getLastAction()).isEqualTo(ReplyRuleEngine.Action.SKIP_SELF.name());
@@ -346,7 +344,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
 
         // 1) 不发消息 —— 本用例存在的全部理由
         assertThat(f.adapter.sendCalls).isEmpty();
@@ -372,7 +370,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "可以发份简历吗", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "可以发份简历吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
 
         assertThat(f.adapter.sendCalls).isEmpty();
         assertThat(f.mapper.rows).isEmpty();
@@ -388,7 +386,7 @@ class UnreadWatcherTest {
         f.replier.reply = AiReplier.Reply.skip("NO_SUBSTANCE", "只是寒暄");
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
 
         // 真实路径这里会落一条 AI_FAILED 任务并排入重试；演练碰任务表就会留下一条
         // 永远等不到真实运行来收尾的僵尸任务
@@ -408,7 +406,7 @@ class UnreadWatcherTest {
         Long conversationId = f.replyStore.upsert(PLATFORM, "李四");
         f.replyStore.processed.add(conversationId + ":mid-1");
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
 
         // 演练要看的是「规则会怎么判」，不是「库里的旧痕迹怎么拦」——
         // 否则一条已经真实回过的会话在演练里永远显示「未命中」，掩盖规则本身的问题
@@ -433,7 +431,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.adapter.resumeCalls).containsExactly("resume:李四");
         // 发完简历什么都不要说：连发两条（卡片 + 一句话）在 HR 眼里很像机器人
@@ -458,7 +456,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.adapter.sendCalls).containsExactly("send:李四:好的，我把整理好的版本发您");
         assertThat(r.replied()).isEqualTo(1);
@@ -475,7 +473,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         // 灰按钮重试一万次还是灰的，不能进重试链
         assertThat(f.adapter.sendCalls).isEmpty();
@@ -491,7 +489,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         // 失败先置 FAILED 并排好下次重试时间（PENDING 只用于「本轮跳过、没消耗重试」）
@@ -511,7 +509,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "简历发我一份", false, false));
         f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历发我一份", 1));
 
-        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true);
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
 
         assertThat(r.wouldReply()).isEqualTo(1);
         assertThat(f.adapter.resumeCalls).isEmpty();
@@ -523,37 +521,26 @@ class UnreadWatcherTest {
     /**
      * 用户报的第一现场是「进回复流程时一条日志都没有，真发了消息的人在日志里找不到自己」。
      *
-     * <p>这类问题不能靠「代码里有 log.info」来证明：日志被配置挡掉、级别不对、logger 取错
-     * 都会让它在实际运行时消失。所以这里挂一个 ListAppender 把这一轮真实 emit 的事件收下来，
-     * 断言的是「打出来了什么」，不是「写了什么代码」。
+     * <p>断言的对象是 {@link RunLog} 收到了什么，而不是「代码里有没有写 log」：ADR-0008 之后
+     * 值守的日志只从这一个出口出去，它没收到，用户就既看不到文件行、也查不到库里的行。
+     * 改造前这里挂的是 logback 的 {@code ListAppender}，因为那时日志只进文件；
+     * 现在要钉的是「进库」这条路 —— 而它才是控制台日志面板读的那一份。
      */
     @Test
     void 每个进入回复流程的会话都留下可读日志() {
-        Logger logger = (Logger) LoggerFactory.getLogger(UnreadWatcher.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
-            Fixture f = new Fixture(true);
-            f.replyStore.engine = engineWith("简历", "好的，我把整理好的版本发您");
-            f.adapter.messages = List.of(new ChatMessage("mid-1", "方便发一份简历吗", false, false));
-            f.adapter.unread.add(UnreadThread.of("李四", "李四", "方便发一份简历吗", 1));
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = engineWith("简历", "好的，我把整理好的版本发您");
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "方便发一份简历吗", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "方便发一份简历吗", 1));
 
-            f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
-            List<String> msgs = appender.list.stream()
-                    .map(ILoggingEvent::getFormattedMessage)
-                    .toList();
-            // 入口：出了问题人第一件事是翻日志，这里必须能看见「谁进了流程」
-            assertThat(msgs).anyMatch(m -> m.contains("进入回复流程") && m.contains("李四"));
-            // 判定：为什么这么回，必须能直接读出来，不能只落库
-            assertThat(msgs).anyMatch(m -> m.contains("判定") && m.contains("李四"));
-            // 结果：发出去了还是没发出去，同样要有一行
-            assertThat(msgs).anyMatch(m -> m.contains("已发送") && m.contains("李四"));
-        } finally {
-            logger.detachAppender(appender);
-            appender.stop();
-        }
+        // 入口：出了问题人第一件事是翻日志，这里必须能看见「谁进了流程」
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("进入回复流程") && m.contains("李四"));
+        // 判定：为什么这么回，必须能直接读出来，不能只落库
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("判定") && m.contains("李四"));
+        // 结果：发出去了还是没发出去，同样要有一行
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("已发送") && m.contains("李四"));
     }
 
     /** 跳过的分支也要说清楚跳过了什么 —— 否则「值守跑了但什么都没发生」依然无法归因。 */
@@ -563,7 +550,7 @@ class UnreadWatcherTest {
         f.adapter.messages = List.of(new ChatMessage("mid-1", "你好", true, false));
         f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
 
-        f.watcher.sweep(f.adapter, PLATFORM, false, false);
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         UnreadTaskEntity task = f.mapper.rows.get(0);
         assertThat(task.getLastAction()).isEqualTo(ReplyRuleEngine.Action.SKIP_SELF.name());
@@ -595,6 +582,7 @@ class UnreadWatcherTest {
         final FakeReplier replier = new FakeReplier();
         final UnreadTaskStore taskStore;
         final UnreadWatcher watcher;
+        final RecordingRunLog runLog = new RecordingRunLog();
 
         Fixture(boolean aiReplyEnabled) {
             this.config = new FakeConfig(aiReplyEnabled);
@@ -906,5 +894,57 @@ class UnreadWatcherTest {
         UnreadTaskEntity target = new UnreadTaskEntity();
         BeanUtils.copyProperties(source, target);
         return target;
+    }
+
+    /**
+     * 只记录收到的行，不落库。用假的而不是真表：这里验的是「值守到底往外说了什么」，
+     * 真表那条路由 {@code RunLogTest} 覆盖（它要验的是级别与两处副本同源）。
+     */
+    private static final class RecordingRunLog implements RunLog {
+        private final List<String> messages = new ArrayList<>();
+        private final List<RunLogLevel> levels = new ArrayList<>();
+
+        List<String> messages() {
+            return messages;
+        }
+
+        List<RunLogLevel> levels() {
+            return levels;
+        }
+
+        @Override
+        public void info(String message) {
+            record(RunLogLevel.INFO, message);
+        }
+
+        @Override
+        public void warn(String message) {
+            record(RunLogLevel.WARN, message);
+        }
+
+        @Override
+        public void error(String message) {
+            record(RunLogLevel.ERROR, message);
+        }
+
+        @Override
+        public void error(String message, Throwable cause) {
+            record(RunLogLevel.ERROR, message);
+        }
+
+        @Override
+        public void warn(String message, Throwable cause) {
+            record(RunLogLevel.WARN, message);
+        }
+
+        @Override
+        public void log(RunLogLevel level, String message) {
+            record(level, message);
+        }
+
+        private void record(RunLogLevel level, String message) {
+            levels.add(level);
+            messages.add(message);
+        }
     }
 }
