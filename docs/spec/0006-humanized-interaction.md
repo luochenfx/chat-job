@@ -31,8 +31,8 @@
 | `pause(int,int)` | `BossAdapter:1141`、`ZhaopinAdapter:1086`，两份副本 | 删副本、改由统一节奏来源供给，**调用点区间数值原样保留** |
 | `BrowserSession:150` | `setSlowMo(props.browser().slowMoMs())`，取值为 50 | 归零。慢动作由本层的随机间隔替代 |
 | `AppProperties`（`config/`） | `record(driver, browser, selfCheck, notifyConfig, activePlatform)` | 增加 `Humanize` 分量。**四处测试里的 `new AppProperties(...)` 会编译失败**（`PlatformBrowserIsolationTest:65`、`NotifySettingsTest:90`、`NotifyTestDoubles:28`、`PlatformAdaptersTest:36`），必须同步补参 |
-| `Models.ScrollParams`（`platform/`） | `record(int roundLimit, int waitTimeSeconds)`；`roundLimit` 两个适配器都读，`waitTimeSeconds` **两个都没读** | 滚动节奏实际来自硬编码 `pause(400,700)`。`waitTimeSeconds` 是未生效的配置项，本期不改它的语义，只登记 |
-| `RunService:788` | `scrollUntilEnd(new ScrollParams(cfg.getScrollRoundLimit(), cfg.getWaitTimeSeconds()), ...)` | `roundLimit` 默认 300，语义是"滚 1.5 屏一次算一轮"。改滚轮后必须重新定义"一轮" |
+| `Models.ScrollParams`（`platform/`） | `record(int roundLimit, int waitTimeSeconds)`；`roundLimit` 两个适配器都读，`waitTimeSeconds` **两个都没读** | 滚动节奏实际来自硬编码 `pause(400,700)`。`waitTimeSeconds` 是未生效的配置项，本期不改它的语义，只登记。**后续**：`ScrollParams` 已整体删除（只剩一个值，参数对象没有意义），签名改为 `scrollUntilEnd(int roundLimit, BooleanSupplier stop)`。配置里的 `waitTimeSeconds` 保留 —— 它驱动的是编排层的**卡间停顿**（`ScanSegment.pauseFor`），不是适配器内部的滚动节奏 |
+| `RunService:788` | `scrollUntilEnd(new ScrollParams(cfg.getScrollRoundLimit(), cfg.getWaitTimeSeconds()), ...)` | `roundLimit` 默认 300，语义是"滚 1.5 屏一次算一轮"。改滚轮后必须重新定义"一轮"。**后续**：这个构造点已随 `ScrollParams` 删除，改为直接传轮数上限；该循环也已从 `RunService` 搬到 `ScanSegment`（ADR-0009） |
 | `RunStore.log(runId, level, message)` | 唯一的日志出口 | 降级与计数汇总都从这里走，不新建表 |
 | 数据库 | 最新迁移 `V16` | **本 spec 不动数据库**，参数全在 yaml |
 | `src/test` | 31 个测试类，禁 mock 框架，统一 hand-written fakes | 逻辑必须切到"能脱离浏览器测"的一侧 |
@@ -366,7 +366,7 @@ chat-job:
 | 2 | 中文 `insertText` 是否真的只产生 `input` 不产生 `keydown` | 未取证。按已知行为写进注释，实测后可能要改 |
 | 3 | 条件 c 的"意外结构变化"阈值 | 初始 2，待标定 |
 | 4 | 按岗位在列表里定位卡片（点卡片进详情） | 不具备。Boss 卡片无 `href`，只能文本匹配，本期不做 |
-| 5 | `ScrollParams.waitTimeSeconds` 两个适配器都没读 | 已确认是死配置。本期不动，另开需求 |
+| 5 | `ScrollParams.waitTimeSeconds` 两个适配器都没读 | 已确认是死配置。本期不动，另开需求。**后续已做**：整个 `ScrollParams` 删除，`PlatformPortShapeTest` 钉住它不再回来；配置项本身留下，因为它是编排层的卡间停顿旋钮 |
 | 6 | 预热是否真的改变平台判定 | 无法观测。只能靠"没有新增限流告警"作弱证据 |
 | 7 | 从列表页进入详情后，详情页的 XHR 是否带上了预期的 `Referer` | 阶段 3 实测确认 |
 
@@ -698,7 +698,7 @@ Boss 的增量比智联大：40 轮里每轮都是一次完整的滚轮计划（
 |---|---|---|
 | 1 | 按岗位在列表里定位卡片、点卡片进详情 | 不具备（Boss 卡片无 `href`）。仍然是非目标 |
 | 2 | 预热是否真的改变平台判定 | 无法直接观测。本轮只能说"没有新增限流/安全验证告警" |
-| 3 | `ScrollParams.waitTimeSeconds` 是死配置 | 依旧没人读。另开需求 |
+| 3 | `ScrollParams.waitTimeSeconds` 是死配置 | 依旧没人读。另开需求。**后续已删除**（连同 `ScrollParams` 本身）；结构守卫见 `PlatformPortShapeTest` |
 | 4 | 真 `contenteditable` 上的条件 c 容差与 `Ctrl+A` 作用域 | **本轮已用真实页面验证通过**：Boss 三次招呼语与一次值守回复全部一次写入成功，降级 0 次，读回文本与目标逐字一致。容差 2 无需调整 |
 | 5 | Boss 侧 DOM 级页面证据 | 升级前受扩展版本限制（0.3.3）。**已升到 0.4.1 复验（§10.9）**：截图从空白变成真实画面，但 `observe`/`snapshot` 仍需 `tab borrow`，而借入要人在浏览器窗口里点确认，本轮未完成。文本级证据仍缺 |
 
