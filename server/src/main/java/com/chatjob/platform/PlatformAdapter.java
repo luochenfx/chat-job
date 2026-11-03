@@ -9,7 +9,6 @@ import com.chatjob.platform.Models.DeliveryResult;
 import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 
@@ -20,7 +19,9 @@ import com.chatjob.platform.Models.UnreadThread;
  * adapter 只回答"点了这个按钮之后平台发生了什么"。这样换成智联时，
  * 变的只有这个实现类，决策逻辑一行都不用动。
  *
- * <p>所有方法都必须在 Playwright 专用线程上调用（由调用方通过 PlaywrightExecutor 调度）。
+ * <p>调度在实现内部完成：每个方法自己经 {@link com.chatjob.driver.PlaywrightExecutor}
+ * 切到 Playwright 专用线程（有返回值的走 {@code call}，void 的走 {@code run}）。
+ * 调用方在业务线程上直接调即可，不需要、也没有权限自己调度。
  */
 public interface PlatformAdapter {
 
@@ -41,8 +42,15 @@ public interface PlatformAdapter {
     /** 打开列表页（拼 URL，不走首页 UI 搜索） */
     void openSearch(SearchQuery query);
 
-    /** 反复滚动直到判据确认加载完 */
-    ScrollOutcome scrollUntilEnd(ScrollParams params, BooleanSupplier stop);
+    /**
+     * 反复滚动直到判据确认加载完。
+     *
+     * @param roundLimit 轮数上限，只是保险丝。真正的"到底了"由各平台自己的判据认定，
+     *                   撞到上限时返回的 {@link ScrollOutcome#loadedAll()} 为 false ——
+     *                   两者不是同一件事，别把"轮数到顶"读成"已经加载完"
+     * @param stop       调用方请求停止（人工停止 / 时段到点），实现应在轮首检查
+     */
+    ScrollOutcome scrollUntilEnd(int roundLimit, BooleanSupplier stop);
 
     int cardCount();
 

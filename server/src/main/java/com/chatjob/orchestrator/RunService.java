@@ -15,7 +15,6 @@ import com.chatjob.platform.Models.DeliveryResult;
 import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.PlatformAdapters;

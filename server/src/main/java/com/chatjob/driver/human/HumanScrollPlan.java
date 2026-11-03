@@ -11,7 +11,7 @@ import java.util.List;
  * （spec 0006 §1.2）。改成滚轮之后一次位移变小，所以要拆成多步。
  *
  * <p><b>这里定义的"一轮"= 一次完整的滚动计划（累计位移达到目标），不是以前那个
- * "滚 1.5 屏一次"。</b>{@code ScrollParams.roundLimit} 的 300 是按旧口径定的；如果不重新定义，
+ * "滚 1.5 屏一次"。</b>调用方传的轮数上限（300）是按旧口径定的；如果不重新定义，
  * 改滚轮后"一轮"会变成一次几百毫秒的小步，轮数会涨几十倍，保护直接失效
  * （ADR-0007 Consequences）。所以：一次 {@link #steps} 的结果 = 一轮，
  * {@code ScrollOutcome.rounds()} 的口径不变，{@code RunService} 与 {@code run_log} 的文案也不用改。

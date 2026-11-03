@@ -16,7 +16,6 @@ import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
@@ -192,7 +191,7 @@ public class BossAdapter implements PlatformAdapter {
     }
 
     @Override
-    public ScrollOutcome scrollUntilEnd(ScrollParams params, BooleanSupplier stop) {
+    public ScrollOutcome scrollUntilEnd(int roundLimit, BooleanSupplier stop) {
         return executor.call(() -> {
             Page page = ensureListPage();
             int lastCount = -1;
@@ -200,7 +199,7 @@ public class BossAdapter implements PlatformAdapter {
             int staleHits = 0;
             boolean loadedAll = false;
             int round = 0;
-            int limit = Math.max(1, params.roundLimit());
+            int limit = Math.max(1, roundLimit);
             for (; round < limit; round++) {
                 if (stop != null && stop.getAsBoolean()) {
                     break;
@@ -226,7 +225,7 @@ public class BossAdapter implements PlatformAdapter {
 
                     // 一轮 = 一次完整的滚动计划，累计位移 1.5 屏。与改造前的
                     // `window.scrollBy(0, innerHeight * 1.5)` 位移相同，区别只在于
-                    // 现在派发的是真实滚轮事件（spec 0006 §3.3：ScrollParams.roundLimit 的口径不变）
+                    // 现在派发的是真实滚轮事件（spec 0006 §3.3：轮数上限 roundLimit 的口径不变）
                     human.scrollPageByScreens(page, page.locator(BossSelectors.LIST_CONTAINER), 1.5);
                     int current = page.locator(BossSelectors.CARD).count();
                     if (current == lastCount) {

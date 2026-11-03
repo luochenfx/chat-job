@@ -8,7 +8,6 @@ import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import org.junit.jupiter.api.Test;
@@ -113,7 +112,7 @@ class PlatformAdaptersTest {
             }
 
             @Override
-            public ScrollOutcome scrollUntilEnd(ScrollParams params, BooleanSupplier stop) {
+            public ScrollOutcome scrollUntilEnd(int roundLimit, BooleanSupplier stop) {
                 throw new UnsupportedOperationException("不参与本测试");
             }
 

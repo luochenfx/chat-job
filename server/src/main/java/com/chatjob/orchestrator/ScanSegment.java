@@ -3,7 +3,6 @@ package com.chatjob.orchestrator;
 import com.chatjob.driver.BlockedException;
 import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.runlog.RunLog;
@@ -112,8 +111,7 @@ final class ScanSegment {
                 SearchQuery query = new SearchQuery(combo.getCity(), combo.getKeyword());
                 adapter.openSearch(query);
                 ScrollOutcome scroll = adapter.scrollUntilEnd(
-                        new ScrollParams(cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
-                                cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds()),
+                        cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
                         host::stopRequested);
                 combo.setCardsSeen(scroll.cards());
                 runLog.info("组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
@@ -284,7 +282,8 @@ final class ScanSegment {
 
             runStore.checkpoint(run, run.getCombinationIndex(), 0, card + 1);
 
-            // 节奏：每张卡片后随机 [waitTime/2, waitTime]
+            // 卡间停顿：每张卡片后随机 [waitTime/2, waitTime]。这是编排层的等待，
+            // 与适配器内部的滚动节奏无关（后者由人类化交互层自己决定，不受这项配置影响）
             String next = card + 2 <= cardCount ? "查看第 " + (card + 2) + " 个岗位" : "进入下一组搜索条件";
             pauseFor(cfg, next);
         }

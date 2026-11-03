@@ -20,9 +20,6 @@ public final class Models {
     public record SearchQuery(String city, String keyword) {
     }
 
-    public record ScrollParams(int roundLimit, int waitTimeSeconds) {
-    }
-
     /**
      * @param loadedAll 是否由判据确认"确实加载完"，而不是撞到轮数上限
      */

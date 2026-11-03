@@ -16,7 +16,6 @@ import com.chatjob.platform.Models.JobDetail;
 import com.chatjob.platform.Models.LoginState;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
-import com.chatjob.platform.Models.ScrollParams;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
@@ -298,11 +297,11 @@ public class ZhaopinAdapter implements PlatformAdapter {
      * 判成"已加载完"，直接把后面的岗位丢掉。
      */
     @Override
-    public ScrollOutcome scrollUntilEnd(ScrollParams params, BooleanSupplier stop) {
+    public ScrollOutcome scrollUntilEnd(int roundLimit, BooleanSupplier stop) {
         return executor.call(() -> {
             Page page = ensureListPage();
 
-            int limit = Math.max(1, params.roundLimit());
+            int limit = Math.max(1, roundLimit);
             int stable = 0;
             int lastCount = cardCountOf(page);
             long lastHeight = contentHeight(page);
