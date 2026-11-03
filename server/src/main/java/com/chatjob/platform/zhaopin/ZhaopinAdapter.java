@@ -33,9 +33,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 
@@ -79,6 +82,20 @@ public class ZhaopinAdapter implements PlatformAdapter {
      * （spec 0006 §3.5：投递成功率优先于来源一致性）。
      */
     private static final int LIST_CARD_WAIT_MS = 8_000;
+
+    /** 连续这么多轮卡片数不增，才有资格进入"加长确认" */
+    private static final int STABLE_ROUNDS = 2;
+    /** 加长确认的轮数：每一轮都等一次 3–4.2 秒再数卡片 */
+    private static final int CONFIRM_ROUNDS = 2;
+    private static final int CONFIRM_WAIT_MIN_MS = 3_000;
+    private static final int CONFIRM_WAIT_MAX_MS = 4_200;
+    /**
+     * 文档高度增长多少像素算"还在加载"。
+     *
+     * <p>取 64：远大于广告位/轮播造成的抖动（几像素），又远小于一页卡片（约 800px 以上），
+     * 所以既不会因为抖动一直滚不完，也不会漏掉一整页的占位块。
+     */
+    private static final int HEIGHT_GROWTH_PX = 64;
 
     private final BrowserSession session;
     private final PlaywrightExecutor executor;
@@ -192,7 +209,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 if (!ZhaopinSelectors.LOGIN_ENTRY_TEXT.equals(trimmed)) {
                     continue;
                 }
-                human.click(item, new Locator.ClickOptions().setTimeout(8_000));
+                clickThenCloseExtraTabs(item, new Locator.ClickOptions().setTimeout(8_000), "点「登录」入口");
                 pause(1_200, 2_000);
                 return true;
             }
@@ -255,7 +272,21 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
     /**
      * 滚动加载。判据与 Boss 不同：智联没有页码也没有「共 N 条」，只能靠
-     * 「连续两轮卡片数不增」收口 —— 少一轮会在懒加载间隙误判到底。
+     * 「连续若干轮卡片数不增」收口 —— 少一轮会在懒加载间隙误判到底。
+     *
+     * <p><b>2026-11-03 的教训：两轮不够。</b>同一个组合（福州 / java）历史上稳定加载 192–195 张，
+     * 那天只加载到 80 张、3 轮就判了「确认到底」，于是后 110 多个岗位一张都没看；
+     * 日志上表现为「搜索已结束（所有搜索组合都跑完了）」，看起来像候选池只有这么多。
+     * 80 正好是 4 页 × 20 条 —— 第 5 页的请求比两次 800–1300ms 的间隔还慢，
+     * 连续两轮都读到同一个数字，就被当成了到底。
+     *
+     * <p>所以判定分成两步：先连续 {@value #STABLE_ROUNDS} 轮不增，再做一次
+     * <b>加长确认</b>（{@value #CONFIRM_ROUNDS} 轮、每轮等 3–4.2 秒），确认期间长出来就继续滚。
+     * 代价是每次真正到底多花 6–8 秒，一天一个组合，可以接受；收益是不再静默丢岗位。
+     *
+     * <p><b>文档高度也算一条判据</b>：懒加载先插入占位块再换成卡片，这段间隙里卡片数不变、
+     * 但 {@code scrollHeight} 已经变高。只看卡片数会把这一段读成"到底"。
+     * 增长阈值取 {@value #HEIGHT_GROWTH_PX}px，远大于广告/轮播的高度抖动，又远小于一页卡片。
      *
      * <p>不再监听 {@code /c/i/search/positions} 的响应：编号改从面板取之后，翻页数据
      * 对扫描毫无用处（实测那条监听一条响应都没抓到，而卡片照样长到 196 张）。
@@ -273,7 +304,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
             int limit = Math.max(1, params.roundLimit());
             int stable = 0;
-            int lastCount = page.locator(ZhaopinSelectors.CARD).count();
+            int lastCount = cardCountOf(page);
+            long lastHeight = contentHeight(page);
             boolean loadedAll = false;
             int round = 0;
 
@@ -284,16 +316,38 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 try {
                     human.scrollPageToBottom(page, null);
                     pause(800, 1_300);
-                    int current = page.locator(ZhaopinSelectors.CARD).count();
-                    if (current == lastCount) {
-                        stable++;
-                    } else {
+                    int current = cardCountOf(page);
+                    long height = contentHeight(page);
+                    // 读不到高度时（导航中、上下文被销毁）不用这一条判据：把"未知"当成"没变高"
+                    // 会让一次读取失败直接推进 stable，而恰好那一刻可能正在加载下一页
+                    boolean heightGrew = height >= 0 && lastHeight >= 0 && height > lastHeight + HEIGHT_GROWTH_PX;
+                    boolean grew = current > lastCount || heightGrew;
+                    if (grew) {
                         stable = 0;
+                    } else {
+                        stable++;
                     }
                     lastCount = current;
+                    if (height >= 0) {
+                        lastHeight = height;
+                    }
                     // 懒加载是「滚到底 → 请求下一批 → 追加」，只看一轮会把请求间隙当成到底
-                    if (stable >= 2) {
+                    if (stable >= STABLE_ROUNDS) {
+                        int confirmed = confirmEnd(page, current);
+                        if (confirmed > current) {
+                            log.debug("加长确认期间列表又加载了 {} 张（{} → {}），继续滚动",
+                                    confirmed - current, current, confirmed);
+                            lastCount = confirmed;
+                            long afterConfirm = contentHeight(page);
+                            if (afterConfirm >= 0) {
+                                lastHeight = afterConfirm;
+                            }
+                            stable = 0;
+                            continue;
+                        }
                         loadedAll = true;
+                        log.info("列表到底：连续 {} 轮卡片数未增加，加长等待 {} 轮后仍为 {} 张",
+                                stable, CONFIRM_ROUNDS, confirmed);
                         break;
                     }
                 } catch (Exception e) {
@@ -304,7 +358,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 }
             }
             human.scrollPageToTop(page, null);
-            int cards = page.locator(ZhaopinSelectors.CARD).count();
+            int cards = cardCountOf(page);
             if (!loadedAll) {
                 log.warn("滚动到 {} 轮上限仍未确认加载完毕，按当前已加载的 {} 个岗位继续", limit, cards);
             }
@@ -312,6 +366,48 @@ public class ZhaopinAdapter implements PlatformAdapter {
                     cards, round, loadedAll ? "确认到底" : "撞到轮数上限");
             return new ScrollOutcome(loadedAll, round, cards);
         });
+    }
+
+    /**
+     * 加长确认：连续等几轮，只有卡片数始终不超过 {@code current} 才算到底。
+     *
+     * <p>返回期间读到的最大卡片数。大于入参就说明列表还在加载，调用方应当继续滚。
+     */
+    private int confirmEnd(Page page, int current) {
+        int count = current;
+        for (int i = 0; i < CONFIRM_ROUNDS; i++) {
+            pause(CONFIRM_WAIT_MIN_MS, CONFIRM_WAIT_MAX_MS);
+            int now = cardCountOf(page);
+            if (now > count) {
+                return now;
+            }
+            count = now;
+        }
+        return count;
+    }
+
+    private static int cardCountOf(Page page) {
+        return page.locator(ZhaopinSelectors.CARD).count();
+    }
+
+    /**
+     * 文档内容高度。两个 {@code scrollHeight} 取大者，理由与
+     * {@code Humanizer.remainingToBottom} 相同：由哪个元素承载滚动条取决于页面 CSS。
+     *
+     * @return 高度；读不到返回 -1（调用方据此跳过这条判据，而不是当成 0）
+     */
+    private static long contentHeight(Page page) {
+        try {
+            Object value = page.evaluate("""
+                    () => Math.max(
+                      document.body ? document.body.scrollHeight : 0,
+                      document.documentElement ? document.documentElement.scrollHeight : 0)
+                    """);
+            return value instanceof Number number ? number.longValue() : -1L;
+        } catch (Exception e) {
+            // 正在导航时读不到；只影响"占位块撑高"这一条辅助判据，卡片数仍是主判据
+            return -1L;
+        }
     }
 
     /**
@@ -341,6 +437,9 @@ public class ZhaopinAdapter implements PlatformAdapter {
     @Override
     public JobDetail fetchDetail(int cardIndex) {
         return executor.call(() -> {
+            // 先对账再点：上一张卡若点到链接、浏览器又晚了几百毫秒才建标签，
+            // 那个页面已经落在"点击前集合"里，只靠前后对比永远认不出来
+            closeStaleTabs();
             // 批次边界落在两张卡之间：上一张的面板已经读完、下一张还没点。
             // 开关关掉时整段跳过 —— 这段停顿是本期新增的行为，不是"页面怎么写"的细节，
             // 留着它会让"关掉即回到改造前"不成立（spec 0006 §2.1 第 12 条）
@@ -380,7 +479,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
             Locator card = cards.nth(cardIndex);
             // 原来这里先 scrollIntoViewIfNeeded 再 click。human.click 内部第一步就是
             // scrollIntoViewIfNeeded，重复调一次只是多一次 CDP 往返
-            human.click(card, new Locator.ClickOptions().setTimeout(10_000));
+            clickThenCloseExtraTabs(card, new Locator.ClickOptions().setTimeout(10_000),
+                    "点第 " + (cardIndex + 1) + " 张岗位卡片");
             for (int i = 0; i < 8; i++) {
                 pause(300, 500);
                 ZhaopinRecord.PanelView view = readPanel(page);
@@ -541,7 +641,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 if (button.count() == 0) {
                     return DeliveryResult.skipped("按钮容器里没有「立即投递」");
                 }
-                human.click(button, new Locator.ClickOptions().setTimeout(10_000));
+                clickThenCloseExtraTabs(button, new Locator.ClickOptions().setTimeout(10_000),
+                        "投递时点「立即投递」");
                 if (waitForDeliverModal(page, stop)) {
                     log.info("投递成功（判据: 弹窗「{}」）| {} @ {}",
                             ZhaopinSelectors.DELIVER_MODAL_OK_TEXT, job.jobName(), job.companyName());
@@ -806,7 +907,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 log.warn("找不到发送按钮");
                 return false;
             }
-            human.click(send, new Locator.ClickOptions().setTimeout(8_000));
+            clickThenCloseExtraTabs(send, new Locator.ClickOptions().setTimeout(8_000), "点「发送」");
             return waitForMoreSelfMessages(page, before, 30_000);
         });
     }
@@ -891,7 +992,7 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
             int before = countResumeTips(page);
             try {
-                human.click(button, new Locator.ClickOptions().setTimeout(8_000));
+                clickThenCloseExtraTabs(button, new Locator.ClickOptions().setTimeout(8_000), "点「发简历」");
             } catch (Exception e) {
                 return ResumeResult.failed("点击「发简历」失败: " + e.getMessage());
             }
@@ -920,7 +1021,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
                         .filter(new Locator.FilterOptions().setHasText("确定"))
                         .first();
                 if (confirm.count() > 0 && confirm.isVisible(new Locator.IsVisibleOptions().setTimeout(300))) {
-                    human.click(confirm, new Locator.ClickOptions().setTimeout(5_000));
+                    clickThenCloseExtraTabs(confirm, new Locator.ClickOptions().setTimeout(5_000),
+                            "点「发简历」的二次确认");
                     log.info("「发简历」弹出了二次确认，已点「确定」");
                     pause(600, 1_000);
                     return;
@@ -993,7 +1095,8 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 return false;
             }
             verifyDigest(matched, thread);
-            human.click(matched, new Locator.ClickOptions().setTimeout(8_000));
+            clickThenCloseExtraTabs(matched, new Locator.ClickOptions().setTimeout(8_000),
+                    "打开会话「" + thread.title() + "」");
             pause(1_200, 2_000);
             return page.locator(ZhaopinSelectors.IM_CHAT_PANEL).count() > 0;
         } catch (ThreadTargetUnsafeException e) {
@@ -1036,6 +1139,95 @@ public class ZhaopinAdapter implements PlatformAdapter {
     }
 
     // ---------------------------------------------------------------- 页面管理
+
+    /**
+     * 点击，并收掉这次点击自己打开的新标签页。
+     *
+     * <p><b>为什么需要这一步。</b>智联的岗位卡片里嵌着「岗位名」「公司名」两个
+     * {@code target="_blank"} 链接，而人类化点击是按元素外框取随机落点（{@code HumanAim.gauss}），
+     * 落点有概率正好落在链接上 —— 浏览器于是打开一个新标签，右侧面板同时也切过去了。
+     * 流程看起来没坏，但每点一张卡就多一个标签：实测一次扫描后浏览器里留下 10 个岗位详情页、
+     * 3 个公司详情页，而 {@code run_log} 里一个字都没有，只能从"最后停在哪个页面"反推。
+     *
+     * <p><b>为什么不改落点避开链接。</b>往哪里挪取决于卡片内部布局（收藏、举报、"最新"角标都可能在），
+     * 挪错会点到别的动作上，比多开一个标签严重得多。所以这里只做观测与收尾，
+     * 把"点到了链接"这件事写进日志，是否调整落点留给真实页面的证据决定。
+     *
+     * <p>检测成本是两次本地列表拷贝：{@code context.pages()} 读的是内存里的页面集合，
+     * 不发 CDP 请求。多数点击前后集合不变，就直接返回。
+     */
+    private void clickThenCloseExtraTabs(Locator target, Locator.ClickOptions options, String note) {
+        Page owner = target.page();
+        Set<Page> before = currentPages(owner);
+        try {
+            human.click(target, options);
+        } finally {
+            // 放在 finally：点到链接后即使后续动作抛异常，那个标签也已经开出来了
+            closeExtraTabs(owner, before, note);
+        }
+    }
+
+    /** 当前标签页集合。用身份比较：Playwright 的 {@code Page} 没有值语义，{@code equals} 不可依赖。 */
+    private static Set<Page> currentPages(Page owner) {
+        Set<Page> out = Collections.newSetFromMap(new IdentityHashMap<>());
+        try {
+            out.addAll(owner.context().pages());
+        } catch (Exception e) {
+            // 浏览器正在重建时读不到；返回空集合会让下一次比对把"所有页面"都当成新的，
+            // 所以这里显式返回 null 由调用方跳过检测
+            return null;
+        }
+        return out;
+    }
+
+    private void closeExtraTabs(Page owner, Set<Page> before, String note) {
+        if (before == null) {
+            return;
+        }
+        List<Page> current;
+        try {
+            current = List.copyOf(owner.context().pages());
+        } catch (Exception e) {
+            log.debug("检查新开标签页失败（{}）: {}", note, e.getMessage());
+            return;
+        }
+        for (Page page : current) {
+            if (before.contains(page)) {
+                continue;
+            }
+            human.closeExtraTab(page, note);
+        }
+    }
+
+    /**
+     * 清掉既不属于本适配器、也不是常驻占位页的标签页。
+     *
+     * <p>点击前后的对比只能抓住"立刻出现"的标签。点到的链接若在几百毫秒后才建标签
+     * （页面有防抖，或浏览器在排队），那个页面会落在下一次点击的"点击前集合"里，
+     * 从此再也不会被认成多余 —— 它会一直留到服务重启。所以每张卡开始前再做一次全量对账。
+     *
+     * <p>只认 {@code listPage} 与 {@code threadPage}：本适配器没有第三个"长期持有"的页面，
+     * 投递页在 {@code deliver} 内创建、在该方法返回前关闭。将来若要新增常驻页面，
+     * 必须同时加到这里，否则它会在下一张卡开始时被关掉。
+     *
+     * <p>常驻占位页（{@code about:blank}）必须放过：它看起来和"没用的页面"一模一样，
+     * 但关掉它等同于关掉整个浏览器。
+     */
+    private void closeStaleTabs() {
+        List<Page> current;
+        try {
+            current = List.copyOf(session.context().pages());
+        } catch (Exception e) {
+            log.debug("标签页对账失败: {}", e.getMessage());
+            return;
+        }
+        for (Page page : current) {
+            if (page == listPage || page == threadPage || session.isKeepAlive(page)) {
+                continue;
+            }
+            human.closeExtraTab(page, "扫描前对账，上一张卡遗留下来的");
+        }
+    }
 
     private Page ensureListPage() {
         if (listPage != null && !listPage.isClosed()) {
@@ -1135,13 +1327,30 @@ public class ZhaopinAdapter implements PlatformAdapter {
         }
     }
 
+    /**
+     * 关闭一个用完的页面。
+     *
+     * <p>原来整段是静默的。静默的代价在 2026-11-03 暴露出来：投递页没关掉时，浏览器里会累积
+     * 十几个岗位详情页标签，而 {@code run_log} 里没有任何一行能解释它们从哪来 ——
+     * 唯一的线索是"任务结束后停在某个详情页"。所以关不掉要留一条 WARN，
+     * 关得掉就什么都不写。
+     */
     private void closeQuietly(Page page) {
+        if (page == null) {
+            return;
+        }
         try {
-            if (page != null && !page.isClosed()) {
+            if (!page.isClosed()) {
                 page.close();
             }
-        } catch (Exception ignore) {
-            // 关页失败不影响结论
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? "" : e.getMessage();
+            if (message.contains("has been closed") || message.contains("Target page, context or browser")) {
+                // 页面已经在导航或浏览器重建中自行关闭，不是残留
+                log.debug("页面已自行关闭，无需处理: {}", message);
+                return;
+            }
+            log.warn("关闭页面失败，这个标签可能仍留在浏览器里: {}", message);
         }
     }
 

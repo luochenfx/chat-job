@@ -302,7 +302,7 @@ mvn -B -f server/pom.xml test
 cd console && npm run build
 ```
 
-`server/src/test/java/` 下共 42 个测试类；全量 352 例通过（12 例按注解跳过，2026-11-02 实测）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
+`server/src/test/java/` 下共 42 个测试类；全量 359 例通过（12 例按注解跳过，2026-11-03 实测）。`PlatformBrowserIsolationTest` 默认关闭，需手动加 `-Dchat-job.browser.verify=true` 才会启动真实浏览器。
 
 | 脚本 | 用途 | 副作用 |
 |---|---|---|

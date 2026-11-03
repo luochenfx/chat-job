@@ -170,4 +170,26 @@ public interface Humanize {
      * 而实例只有一份。
      */
     void onFallback(FallbackListener listener);
+
+    /**
+     * 注册"页面自己打开了新标签页"的回调；传 {@code null} 表示不再记录。
+     *
+     * <p>与 {@link #onFallback} 同一套分工：本层只抛事件，{@code run_log} 由编排层写。
+     */
+    void onNewTab(NewTabListener listener);
+
+    /**
+     * 关闭一个"不属于本轮"的标签页，并通知 {@link NewTabListener}。
+     *
+     * <p>谁来判断它不属于本轮：适配器。只有它知道本轮的页面集合是哪些
+     * （{@code listPage} / {@code threadPage} / 本次投递页），通用层不知道，
+     * 也不该知道——那会把平台知识拽进本层。
+     *
+     * <p><b>不抛异常</b>：关不掉只记一条 WARN，不能因为"多了一个标签"打断正在进行的扫描。
+     *
+     * @param tab  要关闭的页面
+     * @param note 触发场景（人话），会原样进日志
+     * @return 该页面的地址；读不到返回空串
+     */
+    String closeExtraTab(Page tab, String note);
 }

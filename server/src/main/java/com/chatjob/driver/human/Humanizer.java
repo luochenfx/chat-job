@@ -102,6 +102,9 @@ public class Humanizer implements Humanize {
      */
     private volatile FallbackListener fallbackListener;
 
+    /** 同 {@link #fallbackListener}：页面自己打开的标签页也会进 {@code run_log}。 */
+    private volatile NewTabListener newTabListener = NewTabListener.NONE;
+
     /**
      * 已预热的页面。用 {@link WeakHashMap} 按页面身份计，页面被关闭后条目自动消失，
      * 不需要在 {@code close} 路径上补一句"记得清理"——那种清理漏一次就是内存里攒着一堆死页面。
@@ -144,6 +147,53 @@ public class Humanizer implements Humanize {
     @Override
     public void onFallback(FallbackListener listener) {
         this.fallbackListener = listener != null ? listener : FallbackListener.NONE;
+    }
+
+    @Override
+    public void onNewTab(NewTabListener listener) {
+        this.newTabListener = listener != null ? listener : NewTabListener.NONE;
+    }
+
+    /**
+     * 关闭一个多余标签页。
+     *
+     * <p>顺序是<b>先上报再关闭</b>：关掉之后 {@code page.url()} 就读不到了，而"它是什么地址"
+     * 正是这条日志唯一有价值的部分——只说"多了一个标签"没法判断是点到了公司名链接、
+     * 还是平台弹出的推广页。
+     *
+     * <p>关不掉不算失败：页面可能已经在导航中自行关闭，或浏览器正处于重建。
+     */
+    @Override
+    public String closeExtraTab(Page tab, String note) {
+        if (tab == null) {
+            return "";
+        }
+        String url = safePageUrl(tab);
+        try {
+            newTabListener.onOpened(url, note == null ? "" : note);
+        } catch (RuntimeException e) {
+            // 监听者是编排层写的，它出错不能连累正在跑的扫描
+            log.debug("上报新标签页失败: {}", e.getMessage());
+        }
+        warmedPages.remove(tab);
+        try {
+            if (!tab.isClosed()) {
+                tab.close();
+            }
+        } catch (PlaywrightException e) {
+            log.warn("关闭多余标签页失败（{}）: {}", url, e.getMessage());
+        }
+        return url;
+    }
+
+    private static String safePageUrl(Page page) {
+        try {
+            String url = page.url();
+            return url == null ? "" : url;
+        } catch (PlaywrightException e) {
+            // 页面在创建瞬间就被关掉时，地址还没提交
+            return "";
+        }
     }
 
     @Override

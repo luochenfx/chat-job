@@ -403,7 +403,7 @@ public class RunService {
                         // 写成「已结束」会让人以为 300 张都过了一遍
                         String stopWord = reason == StandbyGate.StopReason.COMBINATION_TIMEOUT ? "扫描暂停" : "扫描已结束";
                         finish(run, RunStatus.COMPLETED, "SCAN_DONE",
-                                stopWord + "（" + whyOf(reason, run.getPlatform())
+                                stopWord + "（" + whyOf(reason, run)
                                         + "），该平台未启用值守，任务结束");
                         return;
                     }
@@ -596,7 +596,7 @@ public class RunService {
         boolean timedOut = why0 == StandbyGate.StopReason.COMBINATION_TIMEOUT;
         String message = neverScanned
                 ? "这个平台没有开启「搜索岗位」，本轮只处理消息：每 " + interval + "检查一次未读消息，" + tail
-                : (timedOut ? "搜索暂停（" : "搜索已结束（") + whyOf(why0, cfg, delivered, evaluated)
+                : (timedOut ? "搜索暂停（" : "搜索已结束（") + whyOf(why0, cfg, delivered, evaluated, scannedCards(run))
                 + "），继续处理消息：每 " + interval + "检查一次未读消息，" + tail
                 // 超时保留断点，所以「怎么接着扫」必须写出来：不写的话，唯一的动作暗示是
                 // 「调高名额」，而真实需求可能只是等明天
@@ -621,12 +621,22 @@ public class RunService {
      *
      * <p>不共用就会出现两份「配额已用完 / 评估已达上限 / 组合已扫完」的措辞，改一处漏一处；
      * 而那种漏改在日志里表现为同一件事有两种说法，排查时会当成两件事。
+     *
+     * <p><b>组合耗尽这一支必须带上实际用量</b>：它是唯一一种「没到任何上限却不再扫描」的停法，
+     * 只写「所有搜索组合都跑完了」时，读日志的人第一反应是"是不是提前退出了"——
+     * 而真实原因是候选池就这么大（或者上一环漏了岗位）。把 {@code 49/400}、{@code 15/100}
+     * 摆在同一行，才能把这两种情况分开。
+     *
+     * @param cards 本轮已加载过的卡片总数（各组合 {@code cards_seen} 之和）
      */
-    private String whyOf(StandbyGate.StopReason reason, PlatformConfigEntity cfg, int delivered, int evaluated) {
+    private String whyOf(StandbyGate.StopReason reason, PlatformConfigEntity cfg, int delivered, int evaluated,
+                         int cards) {
         return switch (reason) {
             case QUOTA -> "今天主动联系的名额已经用完（" + delivered + "/" + quota(cfg) + "）";
             case EVAL_LIMIT -> "今天查看岗位的数量已达上限（" + evaluated + "/" + evalLimit(cfg) + "）";
-            case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了";
+            // 不再套一层括号：调用方已经把这一句包在「搜索已结束（…）」里，再套一层读起来像嵌套条件
+            case COMBOS_EXHAUSTED -> "所有搜索组合都跑完了，共 " + cards + " 张卡；评估 " + evaluated + "/"
+                    + evalLimit(cfg) + "、投递 " + delivered + "/" + quota(cfg) + " 都还没到上限";
             // 带上具体上限值与剩余量：只说「超时」，读的人分不清是配置上限到了还是页面卡死了
             case COMBINATION_TIMEOUT -> "单个搜索组合跑到了时间上限 "
                     + ConfigStore.normalizeCombinationTimeLimit(cfg.getCombinationTimeLimitSec())
@@ -637,15 +647,28 @@ public class RunService {
     }
 
     /**
-     * 同上一句，当日计数自己取。
+     * 同上一句，当日计数与卡片数自己取。
      *
      * <p>给 {@code runLoop} 的「只扫描」收尾用：那里没有 {@code enterStandby} 已经算好的数字，
      * 而这句话必须带上实际值 ——「配额已用完（30/30）」与不带数字的「配额已用完」，
      * 在排查时是两件事。
      */
-    private String whyOf(StandbyGate.StopReason reason, String platform) {
+    private String whyOf(StandbyGate.StopReason reason, RunEntity run) {
+        String platform = run.getPlatform();
         return whyOf(reason, configStore.platformConfig(platform),
-                runStore.deliveredToday(platform), runStore.evaluatedToday(platform));
+                runStore.deliveredToday(platform), runStore.evaluatedToday(platform), scannedCards(run));
+    }
+
+    /** 本轮已加载过的卡片总数。只用于日志：组合表是唯一记得「这一轮到底有多少张卡」的地方。 */
+    private int scannedCards(RunEntity run) {
+        if (run.getId() == null) {
+            return 0;
+        }
+        int total = 0;
+        for (CombinationRunEntity combo : runStore.combinations(run.getId())) {
+            total += count(combo.getCardsSeen());
+        }
+        return total;
     }
 
     /**
@@ -1436,6 +1459,12 @@ public class RunService {
     private HumanCounters.Snapshot beginInteractionTracking(RunEntity run, String platform) {
         Humanize human = sessions.of(platform).humanize();
         human.onFallback((kind, reason) -> log(run, "WARN", "交互降级[" + kindLabel(kind) + "] " + reason));
+        // 页面自己打开的标签页（点到 target=_blank 的链接）。记 INFO 而不是 WARN：
+        // 它不是故障，但必须留下痕迹 —— 否则「任务结束后浏览器里多了一堆详情页标签」
+        // 只能靠人去数标签，日志里一句话都没有。
+        human.onNewTab((url, note) -> log(run, "INFO",
+                "多出一个标签页（" + note + "）：" + (url == null || url.isBlank() ? "地址未知" : url)
+                        + "，已关闭"));
         return human.counters().snapshot();
     }
 
@@ -1452,6 +1481,8 @@ public class RunService {
         }
         Humanize human = sessions.of(run.getPlatform()).humanize();
         human.onFallback(null);
+        // 与新标签页监听同寿：Run 结束之后再冒出来的页面不属于任何一条 Run，不写进日志
+        human.onNewTab(null);
         HumanCounters.Snapshot delta = human.counters().snapshot().minus(start);
         if (delta.interactions() == 0 && delta.fallbacks() == 0) {
             return;

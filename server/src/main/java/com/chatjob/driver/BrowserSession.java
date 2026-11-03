@@ -265,6 +265,17 @@ public class BrowserSession {
         return context;
     }
 
+    /**
+     * 这个页面是不是常驻占位页。
+     *
+     * <p>给"清掉多余标签页"的逻辑用：占位页停在 {@code about:blank}，看起来和"没用的页面"
+     * 一模一样，但关掉它等同于关掉整个浏览器（持久化上下文的最后一个页面被关 = 退出）。
+     * 让调用方按 URL 判断是错的——我们自己的业务页也可能暂时停在空白页。
+     */
+    public boolean isKeepAlive(Page page) {
+        return page != null && page == keepAlive;
+    }
+
     public Playwright playwright() {
         ensureReady();
         return playwright;
