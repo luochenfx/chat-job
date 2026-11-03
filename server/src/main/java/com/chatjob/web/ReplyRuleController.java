@@ -6,8 +6,6 @@ import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.ReplyRuleEntity;
 import com.chatjob.store.entity.ReplyRuleTextEntity;
 import com.chatjob.store.entity.SensitiveWordEntity;
-import com.chatjob.store.mapper.ReplyRuleMapper;
-import com.chatjob.store.mapper.ReplyRuleTextMapper;
 import com.chatjob.store.mapper.SensitiveWordMapper;
 import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.ReplyRuleEngine;
@@ -31,20 +29,15 @@ import java.util.Map;
 @RequestMapping("/api/reply")
 public class ReplyRuleController {
 
-    private final ReplyRuleMapper ruleMapper;
-    private final ReplyRuleTextMapper textMapper;
     private final SensitiveWordMapper sensitiveMapper;
     private final ReplyStore replyStore;
     private final ConfigStore configStore;
     /** created_at / updated_at 的时间来源 */
     private final TimeSource time;
 
-    public ReplyRuleController(ReplyRuleMapper ruleMapper, ReplyRuleTextMapper textMapper,
-                               SensitiveWordMapper sensitiveMapper, ReplyStore replyStore,
+    public ReplyRuleController(SensitiveWordMapper sensitiveMapper, ReplyStore replyStore,
                                ConfigStore configStore,
                                TimeSource time) {
-        this.ruleMapper = ruleMapper;
-        this.textMapper = textMapper;
         this.sensitiveMapper = sensitiveMapper;
         this.replyStore = replyStore;
         this.configStore = configStore;
@@ -107,7 +100,7 @@ public class ReplyRuleController {
             throw new IllegalArgumentException("至少要有一条回复内容");
         }
 
-        ReplyRuleEntity rule = body.id() == null ? null : ruleMapper.selectById(body.id());
+        ReplyRuleEntity rule = replyStore.rule(body.id());
         boolean created = rule == null;
         if (created) {
             rule = new ReplyRuleEntity();
@@ -128,23 +121,9 @@ public class ReplyRuleController {
             rule.setAction(ReplyRuleEngine.RULE_ACTION_REPLY);
         }
         rule.setUpdatedAt(time.stamp());
-        if (created) {
-            ruleMapper.insert(rule);
-        } else {
-            ruleMapper.updateById(rule);
-        }
-
-        // 文案全量替换：界面上就是"这一组文案"，部分更新会留下孤儿行
-        textMapper.delete(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
-                .eq(ReplyRuleTextEntity::getRuleId, rule.getId()));
-        int order = 0;
-        for (String text : texts) {
-            ReplyRuleTextEntity entity = new ReplyRuleTextEntity();
-            entity.setRuleId(rule.getId());
-            entity.setText(text);
-            entity.setSortOrder(order++);
-            textMapper.insert(entity);
-        }
+        // 规则行与它的文案是两次写，事务边界在 store 那一侧（没有它，文案写到一半失败会留下
+        // 半新半旧的库，而接口已经返回 500）
+        replyStore.saveRule(rule, texts);
         return Map.of("ok", true, "id", rule.getId());
     }
 
@@ -161,9 +140,7 @@ public class ReplyRuleController {
 
     @DeleteMapping("/rules/{id}")
     public Map<String, Object> deleteRule(@PathVariable Long id) {
-        textMapper.delete(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
-                .eq(ReplyRuleTextEntity::getRuleId, id));
-        ruleMapper.deleteById(id);
+        replyStore.deleteRule(id);
         return Map.of("ok", true);
     }
 

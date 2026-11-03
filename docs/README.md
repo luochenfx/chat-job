@@ -332,6 +332,7 @@ cd console && npm run build
 | [`adr/0008-run-log-single-exit.md`](adr/0008-run-log-single-exit.md) | 运行日志只有一个出口，库与文件是它的两份副本（已实现） |
 | [`adr/0009-scan-judgement-before-loop.md`](adr/0009-scan-judgement-before-loop.md) | 扫描判据收成一处纯函数，循环留在编排层（已实现） |
 | [`adr/0010-config-write-back.md`](adr/0010-config-write-back.md) | 配置写回：没传的字段一律保持原值（已实现） |
+| [`adr/0011-single-row-config-and-rule-transaction.md`](adr/0011-single-row-config-and-rule-transaction.md) | 单行配置由唯一索引保证，规则与文案的写回放进事务（已实现） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

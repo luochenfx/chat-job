@@ -15,6 +15,7 @@ import com.chatjob.time.TimeSource;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -22,6 +23,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** 配置读写。所有"单行表"的默认值都在这里统一提供，避免空库启动后处处判空。 */
 @Slf4j
@@ -167,15 +170,52 @@ public class ConfigStore {
      * 因为它会写库。只是「看一眼」的只读视图请用 {@link #peekPlatformConfig(String)}。
      */
     public PlatformConfigEntity platformConfig(String platform) {
-        PlatformConfigEntity existing = find(platform);
+        return readOrCreate(
+                () -> find(platform),
+                () -> {
+                    PlatformConfigEntity created = defaults(platform);
+                    created.setUpdatedAt(time.stamp());
+                    log.info("已创建平台配置默认值: platform={}", platform);
+                    return created;
+                },
+                platformConfigMapper::insert);
+    }
+
+    /**
+     * 读一行，没有就建一行。
+     *
+     * <p>三张「全局只有一份」的表（platform_config / ai_config / notify_config）都是这个形状。
+     * 它们在库里有唯一约束守着最多一行（platform_config 是 V1 的 uk_platform_config，
+     * 另两张是 V18 的单行索引），所以「查不到再插」在并发首访时会撞约束 —— 不接住它就是
+     * 一个 500，而正确的结果其实已经有了（另一个线程刚建好的那一份）。
+     *
+     * <p>正常路径不写库：只有真查不到才插一次，插完就返回，不做二次查询。
+     *
+     * <p>接住异常之后必须重读一次再判空：若重读还是空，说明撞的不是「别人先建好了」
+     * （可能是 NOT NULL、外键这类真问题），这时把原异常抛回去，不要吞掉。
+     */
+    static <T> T readOrCreate(Supplier<T> read, Supplier<T> create, Consumer<T> insert) {
+        T existing = read.get();
         if (existing != null) {
             return existing;
         }
-        PlatformConfigEntity created = defaults(platform);
-        created.setUpdatedAt(time.stamp());
-        platformConfigMapper.insert(created);
-        log.info("已创建平台配置默认值: platform={}", platform);
+        T created = create.get();
+        try {
+            insert.accept(created);
+        } catch (DataIntegrityViolationException e) {
+            T raced = read.get();
+            if (raced == null) {
+                throw e;
+            }
+            log.warn("单行配置被并发创建，改为读取先建好的那一份: {}", e.getMessage());
+            return raced;
+        }
         return created;
+    }
+
+    /** 单行表的「取第一行」：不用 {@code selectOne}，它在两行时会抛 TooManyResultsException */
+    private static <T> T firstOrNull(List<T> list) {
+        return list.isEmpty() ? null : list.get(0);
     }
 
     /**
@@ -362,32 +402,32 @@ public class ConfigStore {
     // ------------------------------------------------------------ AI 配置
 
     public AiConfigEntity aiConfig() {
-        List<AiConfigEntity> list = aiConfigMapper.selectList(Wrappers.emptyWrapper());
-        if (!list.isEmpty()) {
-            return list.get(0);
-        }
-        AiConfigEntity created = new AiConfigEntity();
-        created.setProviderId(null);
-        created.setIntroduce("");
-        created.setPromptTemplate(DEFAULT_PROMPT);
-        created.setGreetingPrompt("");
-        created.setQualityGateEnabled(1);
-        created.setTemplateGreeting("您好，我对这个岗位很感兴趣，方便发一份简历给您看看吗？");
-        created.setJdMaxChars(4000);
-        created.setAiTimeoutSeconds(20);
-        created.setCollectEffectMetrics(0);
-        created.setAiReplyEnabled(0);
-        created.setAiReplyToneCheckEnabled(1);
-        created.setAiReplyToneTerms("");
-        created.setAiReplyStyle("");
-        created.setAiReplyTimeoutSeconds(DEFAULT_AI_REPLY_TIMEOUT_SECONDS);
-        created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
-        created.setAiReplySkipAlertPct(DEFAULT_AI_REPLY_SKIP_ALERT_PCT);
-        created.setAiReplySkipAlertMinSample(DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE);
-        created.setUpdatedAt(time.stamp());
-        aiConfigMapper.insert(created);
-        log.info("已创建 AI 配置默认值");
-        return created;
+        return readOrCreate(
+                () -> firstOrNull(aiConfigMapper.selectList(Wrappers.emptyWrapper())),
+                () -> {
+                    AiConfigEntity created = new AiConfigEntity();
+                    created.setProviderId(null);
+                    created.setIntroduce("");
+                    created.setPromptTemplate(DEFAULT_PROMPT);
+                    created.setGreetingPrompt("");
+                    created.setQualityGateEnabled(1);
+                    created.setTemplateGreeting("您好，我对这个岗位很感兴趣，方便发一份简历给您看看吗？");
+                    created.setJdMaxChars(4000);
+                    created.setAiTimeoutSeconds(20);
+                    created.setCollectEffectMetrics(0);
+                    created.setAiReplyEnabled(0);
+                    created.setAiReplyToneCheckEnabled(1);
+                    created.setAiReplyToneTerms("");
+                    created.setAiReplyStyle("");
+                    created.setAiReplyTimeoutSeconds(DEFAULT_AI_REPLY_TIMEOUT_SECONDS);
+                    created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
+                    created.setAiReplySkipAlertPct(DEFAULT_AI_REPLY_SKIP_ALERT_PCT);
+                    created.setAiReplySkipAlertMinSample(DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE);
+                    created.setUpdatedAt(time.stamp());
+                    log.info("已创建 AI 配置默认值");
+                    return created;
+                },
+                aiConfigMapper::insert);
     }
 
     public void saveAiConfig(AiConfigEntity entity) {
@@ -603,19 +643,19 @@ public class ConfigStore {
      * 两类都需要这一行存在，所以这里直接建，不像平台配置那样分「读写」和「只看一眼」两条路。
      */
     public NotifyConfigEntity notifyConfig() {
-        List<NotifyConfigEntity> list = notifyConfigMapper.selectList(Wrappers.emptyWrapper());
-        if (!list.isEmpty()) {
-            return list.get(0);
-        }
-        NotifyConfigEntity created = new NotifyConfigEntity();
-        created.setWecomWebhookCipher("");
-        created.setAlertAbnormal(1);
-        created.setAlertStandby(1);
-        created.setAlertDutyEnd(1);
-        created.setUpdatedAt(time.stamp());
-        notifyConfigMapper.insert(created);
-        log.info("已创建告警配置默认值");
-        return created;
+        return readOrCreate(
+                () -> firstOrNull(notifyConfigMapper.selectList(Wrappers.emptyWrapper())),
+                () -> {
+                    NotifyConfigEntity created = new NotifyConfigEntity();
+                    created.setWecomWebhookCipher("");
+                    created.setAlertAbnormal(1);
+                    created.setAlertStandby(1);
+                    created.setAlertDutyEnd(1);
+                    created.setUpdatedAt(time.stamp());
+                    log.info("已创建告警配置默认值");
+                    return created;
+                },
+                notifyConfigMapper::insert);
     }
 
     public void saveNotifyConfig(NotifyConfigEntity entity) {

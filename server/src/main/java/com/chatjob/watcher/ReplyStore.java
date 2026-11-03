@@ -14,6 +14,7 @@ import com.chatjob.store.entity.SensitiveWordEntity;
 import com.chatjob.time.TimeSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -60,6 +61,53 @@ public class ReplyStore {
         return textMapper.selectList(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
                 .eq(ReplyRuleTextEntity::getRuleId, ruleId)
                 .orderByAsc(ReplyRuleTextEntity::getSortOrder));
+    }
+
+    /** 单条规则，编辑时用来取旧值。不存在返回 null */
+    public ReplyRuleEntity rule(Long id) {
+        return id == null ? null : ruleMapper.selectById(id);
+    }
+
+    /**
+     * 保存一条规则并全量替换它的文案。
+     *
+     * <p>两次写必须同生共死：文案是「这一组」，界面上不存在「规则改了、文案还是旧的」这种
+     * 状态。没有事务时，文案写到一半失败会留下**部分文案**，而规则名已经改了 ——
+     * 用户看到的是「保存失败」，库里却是半新半旧。
+     *
+     * <p>文案走「先删后插」而不是逐条比对：界面上提交的就是完整的一组，部分更新会留下孤儿行。
+     */
+    @Transactional
+    public Long saveRule(ReplyRuleEntity rule, List<String> texts) {
+        if (rule.getId() == null) {
+            ruleMapper.insert(rule);
+        } else {
+            ruleMapper.updateById(rule);
+        }
+        textMapper.delete(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
+                .eq(ReplyRuleTextEntity::getRuleId, rule.getId()));
+        int order = 0;
+        for (String text : texts) {
+            ReplyRuleTextEntity entity = new ReplyRuleTextEntity();
+            entity.setRuleId(rule.getId());
+            entity.setText(text);
+            entity.setSortOrder(order++);
+            textMapper.insert(entity);
+        }
+        return rule.getId();
+    }
+
+    /**
+     * 删除一条规则连同它的文案。
+     *
+     * <p>顺序是「先文案、后规则」：反过来的话，第二步失败会留下一条**没有文案但仍在生效**的
+     * 规则 —— 引擎按关键词命中它，却没有话可说。
+     */
+    @Transactional
+    public void deleteRule(Long id) {
+        textMapper.delete(Wrappers.<ReplyRuleTextEntity>lambdaQuery()
+                .eq(ReplyRuleTextEntity::getRuleId, id));
+        ruleMapper.deleteById(id);
     }
 
     public List<String> sensitiveWords() {
