@@ -1,7 +1,6 @@
 package com.chatjob.watcher;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.ConversationEntity;
 import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.ReplyRuleEntity;
@@ -12,12 +11,11 @@ import com.chatjob.store.mapper.ReplyRuleMapper;
 import com.chatjob.store.mapper.ReplyRuleTextMapper;
 import com.chatjob.store.mapper.SensitiveWordMapper;
 import com.chatjob.store.entity.SensitiveWordEntity;
+import com.chatjob.time.TimeSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -27,7 +25,6 @@ import java.util.List;
 @Component
 public class ReplyStore {
 
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
     /** 同会话回复冷却：3 分钟 */
     public static final int REPLY_COOLDOWN_MINUTES = 3;
 
@@ -36,17 +33,21 @@ public class ReplyStore {
     private final SensitiveWordMapper sensitiveMapper;
     private final ReplyLogMapper logMapper;
     private final ConversationMapper conversationMapper;
+    /** 冷却窗口与按日区间的唯一来源 */
+    private final TimeSource time;
 
     public ReplyStore(ReplyRuleMapper ruleMapper,
                       ReplyRuleTextMapper textMapper,
                       SensitiveWordMapper sensitiveMapper,
                       ReplyLogMapper logMapper,
-                      ConversationMapper conversationMapper) {
+                      ConversationMapper conversationMapper,
+                      TimeSource time) {
         this.ruleMapper = ruleMapper;
         this.textMapper = textMapper;
         this.sensitiveMapper = sensitiveMapper;
         this.logMapper = logMapper;
         this.conversationMapper = conversationMapper;
+        this.time = time;
     }
 
     public List<ReplyRuleEntity> rules() {
@@ -91,7 +92,7 @@ public class ReplyStore {
 
     public ConversationEntity upsertConversation(String platform, String conversationKey, Long jobPostingId) {
         ConversationEntity existing = findConversation(platform, conversationKey);
-        String now = ConfigStore.now();
+        String now = time.stamp();
         if (existing == null) {
             ConversationEntity entity = new ConversationEntity();
             entity.setPlatform(platform);
@@ -125,26 +126,35 @@ public class ReplyStore {
         return conversationId == null ? null : conversationMapper.selectById(conversationId);
     }
 
+    /**
+     * 我方是否还在该会话的回复冷却窗口内（{@link #REPLY_COOLDOWN_MINUTES} 分钟）。
+     *
+     * <p>空值表示「从没回过」，不构成冷却，返回 false。
+     *
+     * <p>读不出来时返回 true，即「仍在冷却」。这一步判错会连着给同一个 HR 发两条，
+     * 代价高于漏回一条，所以保守处理并留 WARN。
+     */
     public boolean inCooldown(ConversationEntity conversation) {
         if (conversation == null || conversation.getLastOwnReplyAt() == null) {
             return false;
         }
-        try {
-            return LocalDateTime.parse(conversation.getLastOwnReplyAt(), TS)
-                    .isAfter(LocalDateTime.now().minusMinutes(REPLY_COOLDOWN_MINUTES));
-        } catch (Exception e) {
-            return false;
+        var lastReply = time.parse(conversation.getLastOwnReplyAt());
+        if (lastReply.isEmpty()) {
+            log.warn("回复时间读不出来，按仍在冷却处理（本会话暂不回复）| 会话={} | timestamp={}",
+                    conversation.getPlatformConversationId(), conversation.getLastOwnReplyAt());
+            return true;
         }
+        return lastReply.get().isAfter(time.now().minusMinutes(REPLY_COOLDOWN_MINUTES));
     }
 
     public void markOwnReply(ConversationEntity conversation) {
-        conversation.setLastOwnReplyAt(ConfigStore.now());
+        conversation.setLastOwnReplyAt(time.stamp());
         conversationMapper.updateById(conversation);
     }
 
     /** 效果采集（可开关）：只记首响时间与条数，不参与任何自动决策 */
     public void recordHrMessage(ConversationEntity conversation) {
-        String now = ConfigStore.now();
+        String now = time.stamp();
         conversation.setLastHrMessageAt(now);
         if (conversation.getFirstHrReplyAt() == null) {
             conversation.setFirstHrReplyAt(now);
@@ -167,7 +177,7 @@ public class ReplyStore {
 
     public void log(ReplyLogEntity entity) {
         if (entity.getCreatedAt() == null) {
-            entity.setCreatedAt(ConfigStore.now());
+            entity.setCreatedAt(time.stamp());
         }
         logMapper.insert(entity);
     }
@@ -186,7 +196,7 @@ public class ReplyStore {
      * 正常跳过，混进来会让「需要人补规则」的那批被噪声淹掉。
      */
     public List<ReplyLogEntity> unmatched(int days, int limit, boolean includeAiOutcomes) {
-        String cutoff = LocalDateTime.now().minusDays(days).format(TS);
+        String cutoff = time.format(time.now().minusDays(days));
         var query = Wrappers.<ReplyLogEntity>lambdaQuery()
                 .ge(ReplyLogEntity::getCreatedAt, cutoff)
                 .orderByDesc(ReplyLogEntity::getId)
@@ -221,14 +231,14 @@ public class ReplyStore {
      * 今天 00:00:00 的那一份必须算今天。
      */
     public int resumeOnRequestToday(String platform) {
-        LocalDate day = LocalDate.now();
-        String from = day.atStartOfDay().format(TS);
-        String to = day.plusDays(1).atStartOfDay().format(TS);
+        LocalDate day = time.now().toLocalDate();
+        String from = time.format(day.atStartOfDay());
+        String to = time.format(day.plusDays(1).atStartOfDay());
         return (int) logMapper.countResumeOnRequest(platform, from, to);
     }
 
     public void deleteLogOlderThan(int days) {
-        String cutoff = LocalDateTime.now().minusDays(days).format(TS);
+        String cutoff = time.format(time.now().minusDays(days));
         logMapper.delete(Wrappers.<ReplyLogEntity>lambdaQuery()
                 .lt(ReplyLogEntity::getCreatedAt, cutoff));
     }

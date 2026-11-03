@@ -4,6 +4,7 @@ import com.chatjob.platform.PlatformInfo;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.WatcherStatsMapper;
+import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.UnreadTaskStore;
 import com.chatjob.watcher.WatcherStats;
 import lombok.extern.slf4j.Slf4j;
@@ -47,12 +48,16 @@ public class WatcherController {
     private final ConfigStore configStore;
     private final WatcherStatsMapper statsMapper;
     private final UnreadTaskStore taskStore;
+    /** 统计窗口的时间来源 */
+    private final TimeSource time;
 
     public WatcherController(ConfigStore configStore, WatcherStatsMapper statsMapper,
-                             UnreadTaskStore taskStore) {
+                             UnreadTaskStore taskStore,
+                             TimeSource time) {
         this.configStore = configStore;
         this.statsMapper = statsMapper;
         this.taskStore = taskStore;
+        this.time = time;
     }
 
     /**
@@ -218,9 +223,9 @@ public class WatcherController {
         return out;
     }
 
-    private static String cutoff(int days) {
+    private String cutoff(int days) {
         int d = Math.max(1, Math.min(days, MAX_DAYS));
-        return LocalDateTime.now().minusDays(d).format(TS);
+        return time.format(time.now().minusDays(d));
     }
 
     private static int clampLimit(int limit) {

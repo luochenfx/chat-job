@@ -6,6 +6,7 @@ import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.store.ConfigStore;
+import com.chatjob.time.FixedTimeSource;
 import com.chatjob.store.entity.ConversationEntity;
 import com.chatjob.store.entity.ReplyLogEntity;
 import com.chatjob.store.entity.UnreadTaskEntity;
@@ -45,6 +46,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 后者由 {@code tools/verify-p1.mjs}（真实页面只读）与 {@code tools/verify-p0.mjs} 覆盖。
  */
 class UnreadWatcherTest {
+
+    /** 固定时刻：值守链路的时间戳不参与断言，固定住只为去掉一处墙钟依赖 */
+    private static final FixedTimeSource TIME = FixedTimeSource.of("2026-03-15T09:00:00");
 
     private static final String PLATFORM = "boss";
 
@@ -595,7 +599,7 @@ class UnreadWatcherTest {
         Fixture(boolean aiReplyEnabled) {
             this.config = new FakeConfig(aiReplyEnabled);
             this.mapper.events = adapter.events;
-            this.taskStore = new UnreadTaskStore(mapper);
+            this.taskStore = new UnreadTaskStore(mapper, TIME);
             this.watcher = new UnreadWatcher(replyStore, taskStore, config, replier);
         }
     }
@@ -611,7 +615,7 @@ class UnreadWatcherTest {
         boolean toneCheck = true;
 
         FakeConfig(boolean enabled) {
-            super(null, null, null, null, null, new ObjectMapper());
+            super(null, null, null, null, null, new ObjectMapper(), TIME);
             this.enabled = enabled;
         }
 
@@ -674,7 +678,7 @@ class UnreadWatcherTest {
         private long seq = 0;
 
         FakeReplyStore(FakeAdapter adapter) {
-            super(null, null, null, null, null);
+            super(null, null, null, null, null, TIME);
         }
 
         @Override
@@ -718,7 +722,7 @@ class UnreadWatcherTest {
 
         @Override
         public void markOwnReply(ConversationEntity conversation) {
-            conversation.setLastOwnReplyAt(ConfigStore.now());
+            conversation.setLastOwnReplyAt(TIME.stamp());
         }
 
         @Override

@@ -4,6 +4,7 @@ import com.chatjob.config.AppProperties;
 import com.chatjob.config.SecretCipher;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.NotifyConfigEntity;
+import com.chatjob.time.FixedTimeSource;
 
 /**
  * 通知相关的测试替身。项目约定不引入 mock 框架，用到什么就手写一个。
@@ -38,7 +39,8 @@ final class NotifyTestDoubles {
         final NotifyConfigEntity entity = new NotifyConfigEntity();
 
         FakeConfigStore() {
-            super(null, null, null, null, null, null);
+            super(null, null, null, null, null, null,
+                    FixedTimeSource.of("2026-03-15T09:00:00"));
             entity.setWecomWebhookCipher("");
             entity.setAlertAbnormal(1);
             entity.setAlertStandby(1);

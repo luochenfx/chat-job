@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SimpleDriverDataSource;
 
+import com.chatjob.time.FixedTimeSource;
+
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -54,7 +56,8 @@ class RunStoreAbandonCombinationsTest {
 
         // 四个 mapper 为了构造 RunStore 必须占位，这条 SQL 一个都不用。
         // 传 null 是刻意的：将来若把它改成依赖某个 mapper，这里会立刻 NPE 而不是静默通过
-        runStore = new RunStore(null, null, null, null, jdbc);
+        runStore = new RunStore(null, null, null, null, jdbc,
+                FixedTimeSource.of("2026-03-15T09:00:00"));
     }
 
     @Test

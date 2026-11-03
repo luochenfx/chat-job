@@ -1,7 +1,6 @@
 package com.chatjob.orchestrator;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.DailyCounterEntity;
 import com.chatjob.store.entity.RunEntity;
@@ -10,12 +9,11 @@ import com.chatjob.store.mapper.CombinationRunMapper;
 import com.chatjob.store.mapper.DailyCounterMapper;
 import com.chatjob.store.mapper.RunLogMapper;
 import com.chatjob.store.mapper.RunMapper;
+import com.chatjob.time.TimeSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,28 +22,26 @@ import java.util.Optional;
 @Component
 public class RunStore {
 
-    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-
     private final RunMapper runMapper;
     private final CombinationRunMapper combinationMapper;
     private final RunLogMapper runLogMapper;
     private final DailyCounterMapper dailyCounterMapper;
     private final JdbcTemplate jdbc;
+    /** 当日计数的分区键与各时间戳的唯一来源 */
+    private final TimeSource time;
 
     public RunStore(RunMapper runMapper,
                     CombinationRunMapper combinationMapper,
                     RunLogMapper runLogMapper,
                     DailyCounterMapper dailyCounterMapper,
-                    JdbcTemplate jdbc) {
+                    JdbcTemplate jdbc,
+                    TimeSource time) {
         this.runMapper = runMapper;
         this.combinationMapper = combinationMapper;
         this.runLogMapper = runLogMapper;
         this.dailyCounterMapper = dailyCounterMapper;
         this.jdbc = jdbc;
-    }
-
-    public static String today() {
-        return LocalDate.now().format(DAY);
+        this.time = time;
     }
 
     // ---------------------------------------------------------------- Run
@@ -60,7 +56,7 @@ public class RunStore {
         run.setLastCardIndex(0);
         run.setDeliveredCount(0);
         run.setEvaluatedCount(0);
-        run.setCreatedAt(ConfigStore.now());
+        run.setCreatedAt(time.stamp());
         runMapper.insert(run);
         return run;
     }
@@ -117,7 +113,7 @@ public class RunStore {
      */
     public void touchActivity(Long runId, String action) {
         jdbc.update("UPDATE run SET current_action = ?, last_activity_at = ? WHERE id = ?",
-                action, ConfigStore.now(), runId);
+                action, time.stamp(), runId);
     }
 
     /** 挂起等待值守时段：不写 startedAt（真正开跑时 markRunning 才写） */
@@ -196,7 +192,7 @@ public class RunStore {
 
     public void markRunning(RunEntity run) {
         run.setStatus(RunStatus.RUNNING.name());
-        run.setStartedAt(ConfigStore.now());
+        run.setStartedAt(time.stamp());
         runMapper.updateById(run);
     }
 
@@ -204,7 +200,7 @@ public class RunStore {
         run.setStatus(status.name());
         run.setTerminalReason(reason);
         run.setMessage(message);
-        run.setFinishedAt(ConfigStore.now());
+        run.setFinishedAt(time.stamp());
         runMapper.updateById(run);
         log.info("Run {} 结束: {} / {} / {}", run.getId(), status, reason, message);
     }
@@ -267,7 +263,7 @@ public class RunStore {
                 UPDATE combination_run
                    SET status = 'INTERRUPTED', finished_at = ?
                  WHERE run_id = ? AND status = 'RUNNING'
-                """, ConfigStore.now(), runId);
+                """, time.stamp(), runId);
     }
 
     /**
@@ -295,7 +291,7 @@ public class RunStore {
         entity.setRunId(runId);
         entity.setLevel(level);
         entity.setMessage(message);
-        entity.setCreatedAt(ConfigStore.now());
+        entity.setCreatedAt(time.stamp());
         runLogMapper.insert(entity);
     }
 
@@ -313,13 +309,13 @@ public class RunStore {
         DailyCounterEntity existing = dailyCounterMapper.selectOne(
                 Wrappers.<DailyCounterEntity>lambdaQuery()
                         .eq(DailyCounterEntity::getPlatform, platform)
-                        .eq(DailyCounterEntity::getDay, today()));
+                        .eq(DailyCounterEntity::getDay, time.today()));
         if (existing != null) {
             return existing;
         }
         DailyCounterEntity created = new DailyCounterEntity();
         created.setPlatform(platform);
-        created.setDay(today());
+        created.setDay(time.today());
         created.setDelivered(0);
         created.setEvaluated(0);
         dailyCounterMapper.insert(created);
@@ -345,7 +341,7 @@ public class RunStore {
                 ON CONFLICT(platform, day) DO UPDATE SET
                     delivered = delivered + excluded.delivered,
                     evaluated = evaluated + excluded.evaluated
-                """, platform, today(), delivered, evaluated);
+                """, platform, time.today(), delivered, evaluated);
     }
 
     /**
@@ -364,14 +360,14 @@ public class RunStore {
     public int deliveredToday(String platform) {
         Integer value = jdbc.queryForObject(
                 "SELECT COALESCE(SUM(delivered), 0) FROM daily_counter WHERE platform = ? AND day = ?",
-                Integer.class, platform, today());
+                Integer.class, platform, time.today());
         return value == null ? 0 : value;
     }
 
     public int evaluatedToday(String platform) {
         Integer value = jdbc.queryForObject(
                 "SELECT COALESCE(SUM(evaluated), 0) FROM daily_counter WHERE platform = ? AND day = ?",
-                Integer.class, platform, today());
+                Integer.class, platform, time.today());
         return value == null ? 0 : value;
     }
 }

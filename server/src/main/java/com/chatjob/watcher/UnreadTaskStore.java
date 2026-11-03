@@ -1,13 +1,11 @@
 package com.chatjob.watcher;
 
-import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.UnreadTaskMapper;
+import com.chatjob.time.TimeSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
@@ -65,13 +63,13 @@ public class UnreadTaskStore {
      */
     private static final int[] BACKOFF_MINUTES = {1, 5, 15};
 
-    /** 与 {@code ConfigStore.now()} 同格式；时间存可比较文本，字典序即时间序 */
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
-
     private final UnreadTaskMapper mapper;
+    /** 时间戳与退避窗口的唯一来源 */
+    private final TimeSource time;
 
-    public UnreadTaskStore(UnreadTaskMapper mapper) {
+    public UnreadTaskStore(UnreadTaskMapper mapper, TimeSource time) {
         this.mapper = mapper;
+        this.time = time;
     }
 
     // ------------------------------------------------------------ 创建
@@ -90,7 +88,7 @@ public class UnreadTaskStore {
      */
     public UnreadTaskEntity openOrTouch(String platform, String conversationKey, Long conversationId,
                                         int unread, String digest) {
-        String now = ConfigStore.now();
+        String now = time.stamp();
         UnreadTaskEntity existing = mapper.findOpen(platform, conversationKey);
         if (existing == null) {
             UnreadTaskEntity task = new UnreadTaskEntity();
@@ -125,7 +123,7 @@ public class UnreadTaskStore {
     // ------------------------------------------------------------ 查询
 
     public List<UnreadTaskEntity> dueForRetry(int limit) {
-        return mapper.findDueForRetry(ConfigStore.now(), Math.max(1, limit));
+        return mapper.findDueForRetry(time.stamp(), Math.max(1, limit));
     }
 
     public UnreadTaskEntity findById(Long id) {
@@ -139,12 +137,27 @@ public class UnreadTaskStore {
      * <p>时间读不出来（为空或脏数据）时返回 {@code false}，即「现在就可以重试」：
      * 宁可多重试一次，也不要让一条任务因为一个空字段永久卡住 ——
      * 卡住的任务既不重试也不再出现在列表里，等于静默丢消息。
+     *
+     * <p>这一处的取舍与 {@code JobStore#withinHours}、{@code ReplyStore#inCooldown} 相反，
+     * 是因为它们的出口不同：那两处保守的代价是「这次不做」，下一轮还会再判；这里保守的代价是
+     * <b>永远不做</b>——任务停在 FAILED，既不重试也不进未读列表。放行的风险由已有的两次重试预算
+     * 兜住，第三次失败转 {@code GAVE_UP} 出现在控制台，人能看到。所以只补一条 WARN，不改判定。
      */
     public boolean waitingForRetry(UnreadTaskEntity task) {
         if (task == null || !Status.FAILED.name().equals(task.getStatus())) {
             return false;
         }
-        return isAfter(task.getNextRetryAt(), ConfigStore.now());
+        String nextRetryAt = task.getNextRetryAt();
+        if (nextRetryAt == null) {
+            return false;
+        }
+        var at = time.parse(nextRetryAt);
+        if (at.isEmpty()) {
+            log.warn("重试时间读不出来，按已到期处理（本轮会重试，仍受重试次数上限约束）| 会话={} | timestamp={}",
+                    task.getPlatformConversationId(), nextRetryAt);
+            return false;
+        }
+        return at.get().isAfter(time.now());
     }
 
     // ------------------------------------------------------------ 流转
@@ -152,7 +165,7 @@ public class UnreadTaskStore {
     /** 开始处理。落 PROCESSING 的好处是进程中途被杀时，下一轮能看出「中断」而不是「没处理」 */
     public UnreadTaskEntity claim(UnreadTaskEntity task) {
         task.setStatus(Status.PROCESSING.name());
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         mapper.update(task);
         return task;
     }
@@ -171,7 +184,7 @@ public class UnreadTaskStore {
         task.setStatus(Status.PENDING.name());
         task.setNextRetryAt(null);
         task.setLastError(note);
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         mapper.update(task);
         log.info("未读任务本轮不处理，退回待办 | 会话={} | {}", task.getPlatformConversationId(), note);
     }
@@ -183,7 +196,7 @@ public class UnreadTaskStore {
         task.setLastReasonCode(reasonCode);
         task.setLastError(note);
         task.setNextRetryAt(null);
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         mapper.update(task);
     }
 
@@ -199,7 +212,7 @@ public class UnreadTaskStore {
         task.setLastAction(action);
         task.setLastReasonCode(reasonCode);
         task.setLastError(error);
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         if (attempt >= max) {
             task.setStatus(Status.GAVE_UP.name());
             task.setNextRetryAt(null);
@@ -224,7 +237,7 @@ public class UnreadTaskStore {
         task.setLastReasonCode(reasonCode);
         task.setLastError(error);
         task.setNextRetryAt(null);
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         mapper.update(task);
     }
 
@@ -248,9 +261,9 @@ public class UnreadTaskStore {
         }
         task.setStatus(Status.PENDING.name());
         task.setAttemptCount(0);
-        task.setNextRetryAt(ConfigStore.now());
+        task.setNextRetryAt(time.stamp());
         task.setLastAction(Action.MANUAL_RETRY);
-        task.setUpdatedAt(ConfigStore.now());
+        task.setUpdatedAt(time.stamp());
         mapper.update(task);
         log.info("未读任务人工重试 | id={} | 会话={}", id, task.getPlatformConversationId());
         return true;
@@ -267,23 +280,8 @@ public class UnreadTaskStore {
         return BACKOFF_MINUTES[index];
     }
 
-    private static String plusMinutes(int minutes) {
-        return LocalDateTime.now().plusMinutes(minutes).format(TS);
-    }
-
-    /**
-     * {@code left > right}（两个时间文本都可解析时）。任一侧为空或不可解析一律返回 false，
-     * 即「不算还没到时间」—— 由调用方决定这是「可以动手」。
-     */
-    static boolean isAfter(String left, String right) {
-        if (left == null || right == null) {
-            return false;
-        }
-        try {
-            return LocalDateTime.parse(left, TS).isAfter(LocalDateTime.parse(right, TS));
-        } catch (Exception e) {
-            return false;
-        }
+    private String plusMinutes(int minutes) {
+        return time.format(time.now().plusMinutes(minutes));
     }
 
     private static int intOf(Integer value) {

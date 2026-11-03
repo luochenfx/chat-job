@@ -2,6 +2,7 @@ package com.chatjob.watcher;
 
 import com.chatjob.store.entity.UnreadTaskEntity;
 import com.chatjob.store.mapper.UnreadTaskMapper;
+import com.chatjob.time.FixedTimeSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.BeanUtils;
 
@@ -29,9 +30,10 @@ class UnreadTaskStoreTest {
     private static final String PLATFORM = "boss";
     private static final String KEY = "张三";
     private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+    private static final FixedTimeSource TIME = FixedTimeSource.of("2026-03-15T09:00:00");
 
     private static UnreadTaskStore store(FakeMapper mapper) {
-        return new UnreadTaskStore(mapper);
+        return new UnreadTaskStore(mapper, TIME);
     }
 
     @Test
@@ -88,10 +90,24 @@ class UnreadTaskStoreTest {
 
         assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.FAILED.name());
         assertThat(task.getAttemptCount()).isEqualTo(1);
-        assertThat(minutesFromNow(task.getNextRetryAt())).isBetween(0.8, 1.2);
+        assertThat(minutesFrom(TIME.now(), task.getNextRetryAt())).isBetween(0.8, 1.2);
         assertThat(store.waitingForRetry(task)).isTrue();
         // 还没到期，本轮不该被捞出来
         assertThat(store.dueForRetry(10)).isEmpty();
+    }
+
+    @Test
+    void 重试时间读不出来时按已到期处理() {
+        FakeMapper mapper = new FakeMapper();
+        UnreadTaskStore store = store(mapper);
+        UnreadTaskEntity task = store.openOrTouch(PLATFORM, KEY, 1L, 1, "aaaa");
+        store.markFailed(task, UnreadTaskStore.Action.AI_FAILED, null, "boom");
+
+        // 空格分隔的旧格式能被 SQL 的字符串比较选中，但解析不了。这里守住「不因此永久卡住」：
+        // 判定退化为「现在就可以重试」，重复发送由重试预算兜住
+        task.setNextRetryAt("2026-03-15 10:00:00");
+
+        assertThat(store.waitingForRetry(task)).isFalse();
     }
 
     @Test
@@ -223,10 +239,11 @@ class UnreadTaskStoreTest {
         assertThat(again.getLastMessageDigest()).isEqualTo("keep-me");
     }
 
-    private static double minutesFromNow(String timestamp) {
+    /** 距 {@code base} 还有几分钟。用注入的固定时刻做基准，断言不再依赖跑测试的钟点 */
+    private static double minutesFrom(LocalDateTime base, String timestamp) {
         LocalDateTime at = LocalDateTime.parse(timestamp, TS);
         return (at.toEpochSecond(java.time.ZoneOffset.UTC)
-                - LocalDateTime.now().toEpochSecond(java.time.ZoneOffset.UTC)) / 60.0;
+                - base.toEpochSecond(java.time.ZoneOffset.UTC)) / 60.0;
     }
 
     private static UnreadTaskEntity copy(UnreadTaskEntity source) {

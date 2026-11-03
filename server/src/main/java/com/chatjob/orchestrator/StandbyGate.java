@@ -73,7 +73,7 @@ public final class StandbyGate {
      * </ol>
      *
      * @param scanDay     当前扫描所属自然日，null 表示这一轮从没扫过（按跨日处理）
-     * @param today       今天的自然日，{@link RunStore#today()}
+     * @param today       今天的自然日，取自 {@code TimeSource.today()}
      * @param scanEnabled 该平台是否参与扫描；false 时任何情况都不返回 {@code SCAN}。
      *                    放最后一位，是为了既有用例只需在尾部补一个 {@code true}
      */

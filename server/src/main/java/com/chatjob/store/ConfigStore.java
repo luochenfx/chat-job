@@ -11,13 +11,12 @@ import com.chatjob.store.mapper.BlacklistMapper;
 import com.chatjob.store.mapper.NotifyConfigMapper;
 import com.chatjob.store.mapper.PlatformConfigMapper;
 import com.chatjob.store.mapper.ProviderMapper;
+import com.chatjob.time.TimeSource;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -99,8 +98,6 @@ public class ConfigStore {
     /** 表达风格长度上限。超出截断保存 —— 宁可少一段约束，也避免一次误粘贴让 prompt 超出长度限制 */
     public static final int MAX_AI_REPLY_STYLE_CHARS = 500;
 
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
-
     private static final List<String> DEFAULT_REPEAT_MESSAGES = List.of(
             "请问是有什么顾虑需要沟通吗？",
             "我可以去贵公司面试吗？",
@@ -139,23 +136,23 @@ public class ConfigStore {
     private final ProviderMapper providerMapper;
     private final BlacklistMapper blacklistMapper;
     private final ObjectMapper json;
+    /** 只用于给 created_at / updated_at 落库，不参与任何判定 */
+    private final TimeSource time;
 
     public ConfigStore(PlatformConfigMapper platformConfigMapper,
                        AiConfigMapper aiConfigMapper,
                        NotifyConfigMapper notifyConfigMapper,
                        ProviderMapper providerMapper,
                        BlacklistMapper blacklistMapper,
-                       ObjectMapper json) {
+                       ObjectMapper json,
+                       TimeSource time) {
         this.platformConfigMapper = platformConfigMapper;
         this.aiConfigMapper = aiConfigMapper;
         this.notifyConfigMapper = notifyConfigMapper;
         this.providerMapper = providerMapper;
         this.blacklistMapper = blacklistMapper;
         this.json = json;
-    }
-
-    public static String now() {
-        return LocalDateTime.now().format(TS);
+        this.time = time;
     }
 
     // ------------------------------------------------------------ 平台配置
@@ -172,7 +169,7 @@ public class ConfigStore {
             return existing;
         }
         PlatformConfigEntity created = defaults(platform);
-        created.setUpdatedAt(now());
+        created.setUpdatedAt(time.stamp());
         platformConfigMapper.insert(created);
         log.info("已创建平台配置默认值: platform={}", platform);
         return created;
@@ -278,7 +275,7 @@ public class ConfigStore {
     }
 
     public void savePlatformConfig(PlatformConfigEntity entity) {
-        entity.setUpdatedAt(now());
+        entity.setUpdatedAt(time.stamp());
         if (entity.getId() == null) {
             platformConfigMapper.insert(entity);
         } else {
@@ -377,14 +374,14 @@ public class ConfigStore {
         created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
         created.setAiReplySkipAlertPct(DEFAULT_AI_REPLY_SKIP_ALERT_PCT);
         created.setAiReplySkipAlertMinSample(DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE);
-        created.setUpdatedAt(now());
+        created.setUpdatedAt(time.stamp());
         aiConfigMapper.insert(created);
         log.info("已创建 AI 配置默认值");
         return created;
     }
 
     public void saveAiConfig(AiConfigEntity entity) {
-        entity.setUpdatedAt(now());
+        entity.setUpdatedAt(time.stamp());
         if (entity.getId() == null) {
             aiConfigMapper.insert(entity);
         } else {
@@ -588,14 +585,14 @@ public class ConfigStore {
         created.setAlertAbnormal(1);
         created.setAlertStandby(1);
         created.setAlertDutyEnd(1);
-        created.setUpdatedAt(now());
+        created.setUpdatedAt(time.stamp());
         notifyConfigMapper.insert(created);
         log.info("已创建告警配置默认值");
         return created;
     }
 
     public void saveNotifyConfig(NotifyConfigEntity entity) {
-        entity.setUpdatedAt(now());
+        entity.setUpdatedAt(time.stamp());
         if (entity.getId() == null) {
             notifyConfigMapper.insert(entity);
         } else {
@@ -627,9 +624,9 @@ public class ConfigStore {
     }
 
     public ProviderEntity saveProvider(ProviderEntity entity) {
-        entity.setUpdatedAt(now());
+        entity.setUpdatedAt(time.stamp());
         if (entity.getId() == null) {
-            entity.setCreatedAt(now());
+            entity.setCreatedAt(time.stamp());
             providerMapper.insert(entity);
         } else {
             providerMapper.updateById(entity);
@@ -666,7 +663,7 @@ public class ConfigStore {
         entity.setKind(kind);
         entity.setKeyword(keyword);
         entity.setNormalized(normalized);
-        entity.setCreatedAt(now());
+        entity.setCreatedAt(time.stamp());
         blacklistMapper.insert(entity);
         return true;
     }

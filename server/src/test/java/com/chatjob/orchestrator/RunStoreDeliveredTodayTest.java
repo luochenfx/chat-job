@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SimpleDriverDataSource;
 
+import com.chatjob.time.FixedTimeSource;
+
 import java.nio.file.Path;
 import java.time.LocalDate;
 
@@ -24,6 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 临时库落在 JUnit 的 {@code @TempDir}，跑完即丢。
  */
 class RunStoreDeliveredTodayTest {
+
+    /** 固定「今天」：这个测试要构造「当日」的计数，跟着墙钟走会在跨零点时翻车 */
+    private static final FixedTimeSource TIME = FixedTimeSource.of("2026-03-15T09:00:00");
 
     @TempDir
     Path tmp;
@@ -65,7 +70,7 @@ class RunStoreDeliveredTodayTest {
 
         // 四个 mapper 为了构造 RunStore 必须占位，deliveredToday 一个都不用。
         // 传 null 是刻意的：将来若把它改成依赖某个 mapper，这里会立刻 NPE 而不是静默通过
-        runStore = new RunStore(null, null, null, null, jdbc);
+        runStore = new RunStore(null, null, null, null, jdbc, TIME);
     }
 
     @Test
@@ -86,14 +91,14 @@ class RunStoreDeliveredTodayTest {
         runStore.incrementDelivered("boss");
         // 同一天里发了三份简历、失败了四次、还有两次演练跳过
         jdbc.update("INSERT INTO reply_log (action, reply_source, created_at) VALUES (?, ?, ?)",
-                "REPLY_RESUME", "RESUME", RunStore.today() + "T10:00:00");
+                "REPLY_RESUME", "RESUME", TIME.today() + "T10:00:00");
         jdbc.update("INSERT INTO reply_log (action, reply_source, created_at) VALUES (?, ?, ?)",
-                "REPLY_RESUME", "RESUME", RunStore.today() + "T11:00:00");
+                "REPLY_RESUME", "RESUME", TIME.today() + "T11:00:00");
         jdbc.update("INSERT INTO reply_log (action, reply_source, created_at) VALUES (?, ?, ?)",
-                "REPLY_RESUME", "RESUME", RunStore.today() + "T12:00:00");
-        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('FAILED', ?)", RunStore.today() + "T10:00:00");
-        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('SKIPPED', ?)", RunStore.today() + "T10:01:00");
-        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('DELIVERED', ?)", RunStore.today() + "T10:02:00");
+                "REPLY_RESUME", "RESUME", TIME.today() + "T12:00:00");
+        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('FAILED', ?)", TIME.today() + "T10:00:00");
+        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('SKIPPED', ?)", TIME.today() + "T10:01:00");
+        jdbc.update("INSERT INTO delivery (status, started_at) VALUES ('DELIVERED', ?)", TIME.today() + "T10:02:00");
 
         // 主动投递仍然是 1：别人先开口的事、失败的事、没有发生的事都不吃配额
         assertThat(runStore.deliveredToday("boss")).isEqualTo(1);

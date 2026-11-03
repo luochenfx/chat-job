@@ -9,6 +9,7 @@ import com.chatjob.store.entity.SensitiveWordEntity;
 import com.chatjob.store.mapper.ReplyRuleMapper;
 import com.chatjob.store.mapper.ReplyRuleTextMapper;
 import com.chatjob.store.mapper.SensitiveWordMapper;
+import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.ReplyRuleEngine;
 import com.chatjob.watcher.ReplyStore;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -35,15 +36,19 @@ public class ReplyRuleController {
     private final SensitiveWordMapper sensitiveMapper;
     private final ReplyStore replyStore;
     private final ConfigStore configStore;
+    /** created_at / updated_at 的时间来源 */
+    private final TimeSource time;
 
     public ReplyRuleController(ReplyRuleMapper ruleMapper, ReplyRuleTextMapper textMapper,
                                SensitiveWordMapper sensitiveMapper, ReplyStore replyStore,
-                               ConfigStore configStore) {
+                               ConfigStore configStore,
+                               TimeSource time) {
         this.ruleMapper = ruleMapper;
         this.textMapper = textMapper;
         this.sensitiveMapper = sensitiveMapper;
         this.replyStore = replyStore;
         this.configStore = configStore;
+        this.time = time;
     }
 
     // ---------------------------------------------------------------- 规则
@@ -106,7 +111,7 @@ public class ReplyRuleController {
         boolean created = rule == null;
         if (created) {
             rule = new ReplyRuleEntity();
-            rule.setCreatedAt(ConfigStore.now());
+            rule.setCreatedAt(time.stamp());
         }
         rule.setName(body.name().trim());
         rule.setKeywords(String.join(",", keywords));
@@ -122,7 +127,7 @@ public class ReplyRuleController {
         } else if (created) {
             rule.setAction(ReplyRuleEngine.RULE_ACTION_REPLY);
         }
-        rule.setUpdatedAt(ConfigStore.now());
+        rule.setUpdatedAt(time.stamp());
         if (created) {
             ruleMapper.insert(rule);
         } else {
@@ -189,7 +194,7 @@ public class ReplyRuleController {
         }
         SensitiveWordEntity entity = new SensitiveWordEntity();
         entity.setWord(word);
-        entity.setCreatedAt(ConfigStore.now());
+        entity.setCreatedAt(time.stamp());
         sensitiveMapper.insert(entity);
         return Map.of("ok", true, "added", true);
     }

@@ -27,6 +27,7 @@ import com.chatjob.store.entity.DeliveryEntity;
 import com.chatjob.store.entity.JobPostingEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
+import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.UnreadWatcher;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -94,6 +95,9 @@ public class RunService {
      */
     private final BrowserSessions sessions;
 
+    /** 业务时间的唯一来源：时段判断、跨日、时间戳落库。页面等待超时不走这里 */
+    private final TimeSource time;
+
     /**
      * 本实例服务的平台适配器。由 {@link #bind(String)} 在创建后一次性赋值。
      *
@@ -135,7 +139,8 @@ public class RunService {
                       PatchrightDriver patchright,
                       com.chatjob.web.SseHub sse,
                       PlatformSwitches switches,
-                      BrowserSessions sessions) {
+                      BrowserSessions sessions,
+                      TimeSource time) {
         this.runStore = runStore;
         this.jobStore = jobStore;
         this.configStore = configStore;
@@ -148,6 +153,7 @@ public class RunService {
         this.sse = sse;
         this.switches = switches;
         this.sessions = sessions;
+        this.time = time;
     }
 
     /**
@@ -211,7 +217,7 @@ public class RunService {
         String effectiveMode = mode == null ? "NORMAL" : mode;
         // 挂起的 Run 这一刻不开浏览器，所以不在这里校验 driver —— 否则「晚上想排明早的任务」
         // 会因为此刻 driver 起不来而被直接拒掉。真正的校验留到唤醒后的 runLoop 入口。
-        boolean parked = !"DRY_RUN".equals(effectiveMode) && !DutyWindow.of(cfg).contains(LocalTime.now());
+        boolean parked = !"DRY_RUN".equals(effectiveMode) && !DutyWindow.of(cfg).contains(time.now().toLocalTime());
 
         if (!parked) {
             // fail-closed 前置到启动这一刻：driver 不可用时直接拒绝，而不是建一个 Run
@@ -521,22 +527,22 @@ public class RunService {
                 return StandbyExit.ENDED;
             }
             DutyWindow window = DutyWindow.of(cfg);
-            LocalTime now = LocalTime.now();
+            LocalTime now = time.now().toLocalTime();
             int interval = ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds());
             int delivered = runStore.deliveredToday(run.getPlatform());
             int evaluated = runStore.evaluatedToday(run.getPlatform());
 
-            StandbyGate.Action action = StandbyGate.decide(now, window, reason, run.getScanDay(), RunStore.today(),
+            StandbyGate.Action action = StandbyGate.decide(now, window, reason, run.getScanDay(), time.today(),
                     delivered, quota(cfg), evaluated, evalLimit(cfg), scanEnabled);
             if (action == StandbyGate.Action.PARK) {
                 park(run, "DUTY_END");
                 return StandbyExit.PARKED;
             }
             if (action == StandbyGate.Action.SCAN) {
-                boolean newDay = run.getScanDay() == null || !RunStore.today().equals(run.getScanDay());
+                boolean newDay = run.getScanDay() == null || !time.today().equals(run.getScanDay());
                 String code = newDay ? "NEW_DAY"
                         : reason == StandbyGate.StopReason.EVAL_LIMIT ? "EVAL_LIMIT_RAISED" : "QUOTA_RAISED";
-                String why = newDay ? "已跨自然日（" + RunStore.today() + "），恢复扫描"
+                String why = newDay ? "已跨自然日（" + time.today() + "），恢复扫描"
                         : reason == StandbyGate.StopReason.EVAL_LIMIT
                         ? "评估上限已回升（" + evaluated + "/" + evalLimit(cfg) + "），恢复扫描"
                         : "主动投递配额已回升（" + delivered + "/" + quota(cfg) + "），恢复扫描";
@@ -566,7 +572,7 @@ public class RunService {
                     + "，回复 " + sweep.replied() + "，未命中 " + sweep.unmatched()
                     + (sweep.retried() > 0 ? "，重试 " + sweep.retried() : "")
                     + (sweep.failed() > 0 ? "，失败 " + sweep.failed() : "")
-                    + "；下次巡检 " + LocalTime.now().plusSeconds(jittered).format(HHMMSS)
+                    + "；下次巡检 " + time.now().toLocalTime().plusSeconds(jittered).format(HHMMSS)
                     + "（已待命 " + standbyMinutes + " 分钟）");
             sleepInterruptibly(run, window, jittered * 1000L);
         }
@@ -685,13 +691,13 @@ public class RunService {
      */
     private void act(RunEntity run, String action) {
         run.setCurrentAction(action);
-        run.setLastActivityAt(ConfigStore.now());
+        run.setLastActivityAt(time.stamp());
         runStore.touchActivity(run.getId(), action);
     }
 
     private void park(RunEntity run, String reason) {
         DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
-        LocalTime now = LocalTime.now();
+        LocalTime now = time.now().toLocalTime();
         String message = "已到自动回复结束时间（" + window.describe() + "，现在 " + DutyWindow.format(now) + "），"
                 + "已停止操作；" + window.nextOpenHint(now) + "，这一轮还没有结束，不需要重新启动";
         runStore.markWaiting(run, message);
@@ -713,7 +719,7 @@ public class RunService {
      * 第二天一个岗位都不投，而日志上看不出任何异常。
      */
     private void ensureScanDay(RunEntity run) {
-        String today = RunStore.today();
+        String today = time.today();
         if (today.equals(run.getScanDay())) {
             return;
         }
@@ -742,7 +748,7 @@ public class RunService {
     private void sleepInterruptibly(RunEntity run, DutyWindow window, long millis) {
         long deadline = System.currentTimeMillis() + millis;
         while (System.currentTimeMillis() < deadline) {
-            if (stopRequested || !window.contains(LocalTime.now())
+            if (stopRequested || !window.contains(time.now().toLocalTime())
                     || !configStore.platformWatchEnabled(run.getPlatform())) {
                 return;
             }
@@ -830,7 +836,7 @@ public class RunService {
             }
             long comboStartedAt = System.currentTimeMillis();
             combo.setStatus("RUNNING");
-            combo.setStartedAt(ConfigStore.now());
+            combo.setStartedAt(time.stamp());
             runStore.updateCombination(combo);
             publish(run, "combination.started", Map.of(
                     "seq", combo.getSeq(),
@@ -894,7 +900,7 @@ public class RunService {
                 log(run, "WARN", "组合 #" + combo.getSeq() + " 失败已跳过：" + e.getMessage());
                 log.warn("组合 {} 失败", combo.getSeq(), e);
             } finally {
-                combo.setFinishedAt(ConfigStore.now());
+                combo.setFinishedAt(time.stamp());
                 runStore.updateCombination(combo);
             }
 
@@ -1186,7 +1192,7 @@ public class RunService {
             return true;
         }
         DutyWindow window = DutyWindow.of(configStore.platformConfig(run.getPlatform()));
-        LocalTime now = LocalTime.now();
+        LocalTime now = time.now().toLocalTime();
         if (window.contains(now)) {
             return true;
         }
@@ -1231,7 +1237,7 @@ public class RunService {
             return;
         }
         DutyWindow window = DutyWindow.of(configStore.platformConfig(waiting.getPlatform()));
-        LocalTime now = LocalTime.now();
+        LocalTime now = time.now().toLocalTime();
         if (!window.contains(now)) {
             logParkedHeartbeat(waiting, window, now);
             return;
@@ -1316,7 +1322,7 @@ public class RunService {
             log(run, "INFO", "值守时段为全天，本轮不会因时段收工");
             return;
         }
-        long minutes = window.closesInMinutes(LocalTime.now());
+        long minutes = window.closesInMinutes(time.now().toLocalTime());
         String left = minutes < 0 ? "" : "（还能跑约 " + minutes + " 分钟）";
         log(run, "INFO", "值守时段 " + window.describe() + "，到 " + DutyWindow.format(window.end())
                 + " 停止操作页面并挂起" + left);
@@ -1340,7 +1346,7 @@ public class RunService {
             return false;
         }
         DutyWindow window = DutyWindow.of(cfg);
-        LocalTime now = LocalTime.now();
+        LocalTime now = time.now().toLocalTime();
         if (window.contains(now)) {
             return false;
         }
@@ -1544,7 +1550,7 @@ public class RunService {
 
     public DutyStatus dutyStatus() {
         DutyWindow window = DutyWindow.of(configStore.platformConfig(adapter().platform()));
-        LocalTime now = LocalTime.now();
+        LocalTime now = time.now().toLocalTime();
         if (!window.contains(now)) {
             return new DutyStatus(window.describe(), false, window.nextOpenHint(now),
                     -1, window.opensInMinutes(now));

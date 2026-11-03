@@ -3,16 +3,14 @@ package com.chatjob.orchestrator;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.chatjob.platform.Models.DeliveryResult;
 import com.chatjob.platform.Models.JobDetail;
-import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.DeliveryEntity;
 import com.chatjob.store.entity.JobPostingEntity;
 import com.chatjob.store.mapper.DeliveryMapper;
 import com.chatjob.store.mapper.JobPostingMapper;
+import com.chatjob.time.TimeSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
@@ -40,14 +38,15 @@ public class JobStore {
     /** AI 判定不通过的冷却时间 */
     private static final int SKIP_COOLDOWN_HOURS = 24;
 
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
-
     private final JobPostingMapper jobMapper;
     private final DeliveryMapper deliveryMapper;
+    /** 时间戳与冷却窗口的唯一来源 */
+    private final TimeSource time;
 
-    public JobStore(JobPostingMapper jobMapper, DeliveryMapper deliveryMapper) {
+    public JobStore(JobPostingMapper jobMapper, DeliveryMapper deliveryMapper, TimeSource time) {
         this.jobMapper = jobMapper;
         this.deliveryMapper = deliveryMapper;
+        this.time = time;
     }
 
     /** @param reason 非空表示跳过，原因直接展示在控制台 */
@@ -65,7 +64,7 @@ public class JobStore {
         JobPostingEntity existing = jobMapper.selectOne(Wrappers.<JobPostingEntity>lambdaQuery()
                 .eq(JobPostingEntity::getPlatform, platform)
                 .eq(JobPostingEntity::getPlatformJobId, detail.platformJobId()));
-        String now = ConfigStore.now();
+        String now = time.stamp();
         if (existing == null) {
             JobPostingEntity entity = new JobPostingEntity();
             entity.setPlatform(platform);
@@ -125,15 +124,29 @@ public class JobStore {
         return Decision.proceed();
     }
 
-    private boolean withinHours(String timestamp, int hours) {
+    /**
+     * 时间戳是否落在最近 {@code hours} 小时内。
+     *
+     * <p>空值表示「这件事没发生过」（从没评估过），不是脏数据，所以返回 false —— 允许处理。
+     *
+     * <p>读不出来时返回 true，即「仍算在冷却期内」。这是「一律保守」的取舍：宁可漏掉一次
+     * 重新评估，也不要因为一个读不懂的时间戳把同一岗位再投一遍。代价是这类岗位会停在这里，
+     * 所以失败要留 WARN，让人能看见。
+     *
+     * <p>包内可见是为了单测能直连：它没有协作者，输入只有时间戳与注入的时钟，
+     * 而真正的接口 {@link #decide(Long)} 需要一整套 mapper 替身才能走到这一行。
+     */
+    boolean withinHours(String timestamp, int hours) {
         if (timestamp == null) {
             return false;
         }
-        try {
-            return LocalDateTime.parse(timestamp, TS).isAfter(LocalDateTime.now().minusHours(hours));
-        } catch (Exception e) {
-            return false;
+        var finishedAt = time.parse(timestamp);
+        if (finishedAt.isEmpty()) {
+            log.warn("投递时间读不出来，按仍在冷却处理（本岗位本轮不再评估）| timestamp={} | 窗口={}h",
+                    timestamp, hours);
+            return true;
         }
+        return finishedAt.get().isAfter(time.now().minusHours(hours));
     }
 
     public int attemptCount(Long jobId) {
@@ -149,7 +162,7 @@ public class JobStore {
         entity.setAttemptNo(attemptCount(jobId) + 1);
         entity.setStatus(STATUS_DELIVERING);
         entity.setDecidedBy(decidedBy);
-        entity.setStartedAt(ConfigStore.now());
+        entity.setStartedAt(time.stamp());
         deliveryMapper.insert(entity);
         return entity;
     }
@@ -166,7 +179,7 @@ public class JobStore {
         delivery.setScore(score);
         delivery.setAiReason(aiReason);
         delivery.setAiRaw(aiRaw);
-        delivery.setFinishedAt(ConfigStore.now());
+        delivery.setFinishedAt(time.stamp());
         deliveryMapper.updateById(delivery);
     }
 
@@ -197,7 +210,7 @@ public class JobStore {
 
     /** 清理：只删「未投递 且 超期」的扫描明细，否则去重记录被清掉会导致重复投递 */
     public int cleanScannedOlderThan(int days) {
-        String cutoff = LocalDateTime.now().minusDays(days).format(TS);
+        String cutoff = time.format(time.now().minusDays(days));
         List<JobPostingEntity> candidates = jobMapper.selectList(
                 Wrappers.<JobPostingEntity>lambdaQuery()
                         .lt(JobPostingEntity::getLastSeenAt, cutoff));

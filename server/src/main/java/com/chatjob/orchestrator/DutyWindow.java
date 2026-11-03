@@ -98,10 +98,6 @@ public record DutyWindow(LocalTime start, LocalTime end) {
         return !now.isBefore(start) || now.isBefore(end);
     }
 
-    public boolean allowsNow() {
-        return contains(LocalTime.now());
-    }
-
     /** 给人看的一句话，如 "09:00–22:00"、"22:00–次日 06:00"、"全天" */
     public String describe() {
         if (alwaysOn()) {

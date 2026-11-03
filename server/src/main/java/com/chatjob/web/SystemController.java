@@ -18,6 +18,7 @@ import com.chatjob.store.ConfigStore;
 import com.chatjob.store.OptionStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
+import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.ReplyStore;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -60,12 +61,15 @@ public class SystemController {
     private final Notifier notifier;
     private final JdbcTemplate jdbc;
     private final PlatformSwitches switches;
+    /** serverTime 与清理窗口的时间来源 */
+    private final TimeSource time;
 
     public SystemController(PatchrightDriver patchright, BrowserChannel browserChannel, BrowserSessions sessions,
                             SelfCheck selfCheck, PlatformAdapters adapters, RunStore runStore, JobStore jobStore,
                             ReplyStore replyStore, OptionStore optionStore, ConfigStore configStore,
                             RunServices runServices, Notifier notifier, JdbcTemplate jdbc,
-                            PlatformSwitches switches) {
+                            PlatformSwitches switches,
+                            TimeSource time) {
         this.patchright = patchright;
         this.browserChannel = browserChannel;
         this.sessions = sessions;
@@ -80,6 +84,7 @@ public class SystemController {
         this.notifier = notifier;
         this.jdbc = jdbc;
         this.switches = switches;
+        this.time = time;
     }
 
     /**
@@ -116,7 +121,7 @@ public class SystemController {
         out.put("resumeOnRequestToday", replyStore.resumeOnRequestToday(key));
         out.put("dictionaryTotal", optionStore.total());
         out.put("sseSubscribers", 0);
-        out.put("serverTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        out.put("serverTime", time.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         return out;
     }
 
@@ -186,14 +191,14 @@ public class SystemController {
         int jobs = jobStore.cleanScannedOlderThan(scannedDays);
         int replies = 0;
         try {
-            String cutoff = LocalDateTime.now().minusDays(90)
+            String cutoff = time.now().minusDays(90)
                     .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
             replies = jdbc.update("DELETE FROM reply_log WHERE created_at < ?", cutoff);
         } catch (Exception ignore) {
             // 清理失败不影响主流程
         }
         int logs = jdbc.update("DELETE FROM run_log WHERE created_at < ?",
-                LocalDateTime.now().minusDays(logDays)
+                time.now().minusDays(logDays)
                         .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
         return Map.of("ok", true, "jobsRemoved", jobs, "replyLogsRemoved", replies, "runLogsRemoved", logs);
     }
@@ -263,7 +268,7 @@ public class SystemController {
         out.put("browserLabel", channel.label());
         // 字典是跨平台的一份（platform_option 按平台存，但入口只有一个），所以放在全局条
         out.put("dictionaryTotal", optionStore.total());
-        out.put("serverTime", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        out.put("serverTime", time.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         return out;
     }
 
@@ -357,7 +362,7 @@ public class SystemController {
         String key = adapters.platformKey(platform);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("platform", key);
-        out.put("day", RunStore.today());
+        out.put("day", time.today());
         out.put("delivered", runStore.deliveredToday(key));
         out.put("evaluated", runStore.evaluatedToday(key));
         out.put("resumeOnRequest", replyStore.resumeOnRequestToday(key));
