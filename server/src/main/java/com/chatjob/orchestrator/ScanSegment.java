@@ -252,7 +252,7 @@ final class ScanSegment {
             // 那里 incr 的两个点才是唯一口径，照抄一遍只会多出第二份真相。
             int evaluatedBefore = count(run.getEvaluatedCount());
             int deliveredBefore = count(run.getDeliveredCount());
-            jobs.process(run, cfg, detail, query);
+            jobs.process(cfg, detail, query);
             int evaluatedDelta = count(run.getEvaluatedCount()) - evaluatedBefore;
             int deliveredDelta = count(run.getDeliveredCount()) - deliveredBefore;
             if (evaluatedDelta > 0 || deliveredDelta > 0) {

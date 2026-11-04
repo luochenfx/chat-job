@@ -185,7 +185,7 @@ class ScanSegmentTest {
         };
 
         @Override
-        public void process(RunEntity run, PlatformConfigEntity cfg, JobDetail detail, SearchQuery query) {
+        public void process(PlatformConfigEntity cfg, JobDetail detail, SearchQuery query) {
             processed.add(detail.platformJobId());
             onProcess.run();
         }
@@ -231,6 +231,7 @@ class ScanSegmentTest {
         boolean dutyEnded;
         final List<String> acts = new ArrayList<>();
         final List<String> events = new ArrayList<>();
+        final List<String> notifications = new ArrayList<>();
 
         @Override
         public boolean stopRequested() {
@@ -264,6 +265,11 @@ class ScanSegmentTest {
         @Override
         public void publishUnread(UnreadWatcher.SweepResult sweep) {
             events.add("unread.detected");
+        }
+
+        @Override
+        public void notify(String kind, String title, String body) {
+            notifications.add(kind);
         }
     }
 

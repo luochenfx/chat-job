@@ -330,7 +330,7 @@ cd console && npm run build
 | [`adr/0006-alert-config-in-db.md`](adr/0006-alert-config-in-db.md) | 告警配置存进数据库，并从控制台配置（已实现） |
 | [`adr/0007-humanized-interaction-layer.md`](adr/0007-humanized-interaction-layer.md) | 交互收敛到单层；导航来源比鼠标轨迹更重要（已实现；五条 Open Questions 已取证 3 条，Boss 侧 DOM 观测受扩展版本限制） |
 | [`adr/0008-run-log-single-exit.md`](adr/0008-run-log-single-exit.md) | 运行日志只有一个出口，库与文件是它的两份副本（已实现） |
-| [`adr/0009-scan-judgement-before-loop.md`](adr/0009-scan-judgement-before-loop.md) | 扫描判据收成一处纯函数，循环留在编排层（已实现） |
+| [`adr/0009-scan-judgement-before-loop.md`](adr/0009-scan-judgement-before-loop.md) | 扫描判据收成一处纯函数，循环留在编排层；待命段与单卡处置随后同形搬出（已实现，3a–3d） |
 | [`adr/0010-config-write-back.md`](adr/0010-config-write-back.md) | 配置写回：没传的字段一律保持原值（已实现） |
 | [`adr/0011-single-row-config-and-rule-transaction.md`](adr/0011-single-row-config-and-rule-transaction.md) | 单行配置由唯一索引保证，规则与文案的写回放进事务（已实现） |
 | [`adr/0012-platform-page-kit.md`](adr/0012-platform-page-kit.md) | 两个适配器的页面动作收进一个 kit，选择器留在适配器（已实现；真实一轮已跑，卡片数与改动前一致） |

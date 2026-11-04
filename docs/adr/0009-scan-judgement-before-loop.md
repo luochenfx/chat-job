@@ -2,9 +2,11 @@
 
 ## Status
 
-accepted（2026-11-04，架构审查「重构顺序」第 3 步）。分两次落地：3a 判据（`com.chatjob.scan`：
-`ScanStop`、`ScanBoundary`），3b 循环（`orchestrator.ScanSegment` + `ScanHost` + `JobProcessor`）。
-守卫：`ScanBoundaryTest`、`ScanBoundarySingleSiteTest`、`ScanSegmentTest`、`StandbyGateTest`。
+accepted（2026-11-04，架构审查「重构顺序」第 3 步）。分四次落地：3a 判据（`com.chatjob.scan`：
+`ScanStop`、`ScanBoundary`），3b 循环（`orchestrator.ScanSegment` + `ScanHost` + `JobProcessor`），
+3c 待命段（`orchestrator.StandbySegment` + `RunControl`），3d 单卡处置（`orchestrator.JobDisposition`）。
+守卫：`ScanBoundaryTest`、`ScanBoundarySingleSiteTest`、`ScanSegmentTest`、`StandbyGateTest`、
+`StandbySegmentTest`、`JobDispositionTest`。
 
 ## Context
 
@@ -80,12 +82,76 @@ SSE 出口全在一个类里。其中扫描段最混杂：分页、AI 判定、�
    `AiJudge`、`BlacklistMatcher` —— 那三样要真库与真网络，扫描段的循环就只能等整机跑起来才测得了。
    接口只有一个方法，`RunService` 用 `this::processOneJob` 实现，实现体一行没动。
 
+## 3c 实施补记（2026-11-04 同日，结掉 Open Question 3）
+
+待命段搬出去时，有五处按当时的事实做了决定：
+
+1. **`enterStandby` 与 `standbyLoop` 合成一个 `enter`。** 它们原来成对出现两次（只值守的 Run
+   启动时、扫描停下时），中间没有任何别的动作。合成之后「先发横幅再进循环」不再是一条要靠
+   调用方记得的约定，runLoop 里少了两处配对。
+
+2. **宿主拆成 `RunControl` 与 `ScanHost`。** 待命段只用六个方法（停止 / 暂停 / 动作 / 推送 /
+   巡检载荷 / 告警），`interrupted` 与 `endIfOutOfDuty` 只有卡片边界用，而且都会把 `dutyEnded`
+   置真 —— 待命段每轮自己用 `StandbyGate` 判时段，不该有第二条路径能改它。于是 `ScanHost
+   extends RunControl`，多出来的两条留在子接口上。`notify` 是这次新加到 `RunControl` 的：
+   待命段的横幅要发企业微信，而「带平台展示名的唯一通知出口」不能让第二个类自己拼一遍。
+
+3. **`ensureScanDay` 跟着搬。** 它的两个调用点是扫描入口与回扫出口，后者在 `StandbySegment`
+   里。三次调用同一个 no-op 无害，两处各抄一份复位逻辑就会分叉 —— 而分叉的表现是第二天
+   一个岗位都不投。这是本模块唯一一处「不只是待命」的持有，理由写在该方法上。
+
+4. **「扫描停下之后这一轮到哪一步」的四条判定留在 `runLoop`。** 停止 / 演练 / 到点 / 值守关
+   里面有三个直接落终止态，而终止态的落法只有 `finish` 一处；把它们并进待命段，模块就要同时
+   回答「结束了没有」与「待命怎么守」，还得认识 `RunStatus`。待命的定义前提是「值守仍在继续」，
+   这四条问的正是「还继续吗」—— 它们发生在待命之外。
+
+5. **`RunLogSingleExitTest` 的名单跟着搬，并补上 `ScanSegment`。** 名单是硬编码的类路径：
+   待命段带走了原来那三十多条日志调用，不跟着加，守卫就从「管住两个重日志类」悄悄缩回一个，
+   而且不会变红。守卫的 javadoc 里写明了这条。
+
+搬完之后 `RunService` 从 1400 降到 **1105**，另加 `StandbySegment` 384 行、`RunControl` 43 行。
+**仍然到不了 800**：剩下的是生命周期、上面第 4 条那四条判定，以及 `processOneJob`（单卡处置，
+单独一步）。测试从 413 涨到 **419**：`StandbySegmentTest` 6 例覆盖「停止」「关值守」「配额调高回扫」
+「时段外挂起」「未启用扫描的横幅」「组合超时的横幅」；`ScanSegmentTest` 的假宿主补了一个
+`notify` 空实现（接口多了一个方法，编译强制）。
+
+## 3d 实施补记（2026-11-04 同日，单卡处置）
+
+3b 把 `processOneJob` 留在 `RunService` 里，只留了一个 `JobProcessor` 接缝。它是最该搬的一段：
+七次早退串着四类副作用（落投递表、改两个计数、推 SSE、写日志），而「AI 判定失败记 FAILED 还是
+SKIPPED」这个决定只能从行间注释读到 —— 记错会让该岗位被打上 24 小时冷却，一次模型故障就能让
+整批岗位一天内不再尝试，且看起来像「AI 认为不合适」。做法与理由：
+
+1. **`JobDisposition` 实现 `JobProcessor`。** 接缝不变，扫描段仍然只认识那一个接口；变的只是
+   实现从 `this::processOneJob` 变成了一个每轮 Run 建一次的实例。
+
+2. **`JobProcessor.process` 去掉 `run` 入参。** 实例已经绑定一条 Run，参数里再传一份，
+   同一个事实就有两个来源，而其中一个会被忽略。
+
+3. **`JobStore` 与 `AiJudge` 留在 `RunService`，但本类不再调用它们。** 本类是这一轮的装配点
+   （待命段、单卡处置都在这里按 Run 建出来），依赖必须经过它；把它们删掉就得给 registry 换一套
+   建实例的方式，为了省两个字段不值得。字段上有注释说明这一点，免得下一个人以为是漏删。
+
+4. **顺序与文案一字未改。** 七次早退、`decidedBy` 的 `AI` / `TEMPLATE`、三条投递日志分支全部原样，
+   搬的是位置不是行为。
+
+5. **一个既有口径被钉进测试**：质量开关关闭且模板招呼语为空时，评估计数已经加过，但没有投递行。
+   这是改造前就有的行为（下一张卡会重新评估），不是这次引入的；写进测试是为了让它有据可查，
+   而不是某天被当成 bug 顺手改掉。
+
+`RunService` 从 1105 降到 **972**，`JobDisposition` 192 行。测试从 419 涨到 **427**：
+`JobDispositionTest` 8 例覆盖「黑名单」「活跃度下限」「冷却中」「AI 技术失败」「AI 判定不投」
+「模板为空」「演练」「正常投递」。到这一步，「800 行以下」还差 172 行，剩下的是生命周期
+（`start` / `stop` / `wake` / `recover` / `dutyStatus` / `staleAfterSeconds`）与 3c 补记第 4 条
+那四条判定。
+
 ## Consequences
 
 - **行数先涨后降。** 3a 之后 `RunService` 从 1596 涨到 1604（判据搬走后，调用点要量出四个参数、
   要按原因分四种写日志）。3b 之后是 **1401**，另有 `ScanSegment` 328 行、`ScanHost` 51 行、
   `JobProcessor` 29 行。**离架构审查写的「800 行以下」还差约 600** —— 那要把待命状态机与
-  Run 生命周期也抽走，属于另外两步，不是这一步没做完。
+  Run 生命周期也抽走，属于另外两步，不是这一步没做完。（待命段与单卡处置已在同日 3c / 3d 搬走，
+  `RunService` 降到 972；剩下那 172 行是生命周期与「扫描之后」的那四条判定。）
 - **每段扫描最多多一次 `evaluatedToday` 查询**：改造前它只在配额未到顶时读，现在两个计数都在
   调用前量好。它发生在「配额已到顶」那一张卡上，紧接着就 `return`。
 - **判据的边界逐字保留**：`>=` 而不是 `>`，时间上限用严格大于（刚好用满不算超时），
@@ -109,5 +175,5 @@ SSE 出口全在一个类里。其中扫描段最混杂：分页、AI 判定、�
 |---|---|---|
 | 1 | 人工停止与时段到点要不要进 `ScanStop` | 未做。要进就必须同时改控制面（3b），否则调用方拿到值之后仍要去读标志 |
 | 2 | 组合入口的扫描开关判定最终住哪 | 3b 把 `executeCombinations` 搬进 `ScanSegment` 后它与卡片边界同文件；是否合并届时再定 |
-| 3 | 待命状态机何时抽 | 未做。`standbyLoop` + `enterStandby` + `park` 约 250 行仍在 `RunService`；触发条件是它下次被改需求，不是「有空就做」 |
+| 3 | 待命状态机何时抽 | **已做（3c）**：`StandbySegment` + `RunControl`，见 3c 补记 |
 | 4 | 真实一轮的 `run_log` 序列对照 | 本步未做（要起浏览器跑一整段）。它是 3b 之前最后一道确认 |

@@ -22,9 +22,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>所以这里扫源码，钉死三件事：
  * <ol>
  *   <li>{@code run_log} 的写操作只出现在 {@code com.chatjob.runlog} 包内；</li>
- *   <li>{@code RunService} 与 {@code UnreadWatcher} 不再持有 slf4j 的 {@code Logger}；</li>
- *   <li>这两个类里不出现裸的 {@code log.info/warn/error/debug}。</li>
+ *   <li>日志密集的编排类不再持有 slf4j 的 {@code Logger}；</li>
+ *   <li>这些类里不出现裸的 {@code log.info/warn/error/debug}。</li>
  * </ol>
+ *
+ * <p><b>名单要跟着搬迁走。</b>待命段从 {@code RunService} 搬进 {@code StandbySegment} 时，
+ * 它带走了原来那 30 多条日志调用；名单不跟着加，守卫就从「管住两个重日志类」悄悄缩回一个，
+ * 而且不会变红 —— 这正是这条守卫存在的理由。
  *
  * <p>不用 ArchUnit：一条 {@code Files.readString} + 正则就够，与 {@code HumanizeSourceGuardTest} 同一种做法。
  */
@@ -35,6 +39,9 @@ class RunLogSingleExitTest {
 
     private static final List<String> BOUND_CLASSES = List.of(
             "com/chatjob/orchestrator/RunService.java",
+            "com/chatjob/orchestrator/ScanSegment.java",
+            "com/chatjob/orchestrator/StandbySegment.java",
+            "com/chatjob/orchestrator/JobDisposition.java",
             "com/chatjob/watcher/UnreadWatcher.java");
 
     @Test
@@ -54,7 +61,7 @@ class RunLogSingleExitTest {
     }
 
     @Test
-    void 两个日志密集类不再直接打文件日志() {
+    void 日志密集类不再直接打文件日志() {
         for (String name : BOUND_CLASSES) {
             String source = read(javaSourceRoot().resolve(name));
             assertThat(source)
