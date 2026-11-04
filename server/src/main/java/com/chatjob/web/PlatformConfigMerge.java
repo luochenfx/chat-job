@@ -34,7 +34,7 @@ final class PlatformConfigMerge {
      */
     static PlatformConfigEntity merge(ConfigStore store, PlatformConfigEntity current,
                                       PlatformConfigChange change) {
-        // 三枚开关：只有显式给了布尔值才动。null 不表示「关」—— 改造前它表示关，
+        // 四枚开关：只有显式给了布尔值才动。null 不表示「关」—— 改造前它表示关，
         // 于是漏传一个 enabled 就把整个平台停掉了
         if (change.enabled() != null) {
             current.setEnabled(change.enabled() ? 1 : 0);
@@ -44,6 +44,11 @@ final class PlatformConfigMerge {
         }
         if (change.watchEnabled() != null) {
             current.setWatchEnabled(change.watchEnabled() ? 1 : 0);
+        }
+        // 岗位质量开关（ADR-0017）。这一列的默认值是关，但合并规则照旧：只有显式给了布尔值才动 ——
+        // 若按「没传就当默认的关」处理，任何一个不提交它的调用方都会顺手把这个功能关掉
+        if (change.jobQualityEnabled() != null) {
+            current.setJobQualityEnabled(change.jobQualityEnabled() ? 1 : 0);
         }
 
         // 筛选参数：传 [] 是清空，不传是保持。两者必须能分开，否则「只改配额」会顺手清掉城市

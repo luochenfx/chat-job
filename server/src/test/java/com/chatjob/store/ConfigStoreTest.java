@@ -38,6 +38,13 @@ class ConfigStoreTest {
     }
 
     @Test
+    void 新平台的岗位质量判断默认关() {
+        // 唯一一个「默认关」的开关。写反了的后果是「从没配过的平台开始花模型调用」，
+        // 而不是报错 —— 默认值与 V20 的列默认值、前端 defaultPlatformConfig() 必须一致（ADR-0017）
+        assertThat(store().defaults("boss").getJobQualityEnabled()).isZero();
+    }
+
+    @Test
     void 没配过按默认一百二十秒() {
         assertThat(ConfigStore.clampWatchInterval(null))
                 .isEqualTo(ConfigStore.DEFAULT_WATCH_INTERVAL_SECONDS);

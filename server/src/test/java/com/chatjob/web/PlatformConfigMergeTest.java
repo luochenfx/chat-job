@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 「没传 = 不动」的口径。
  *
- * <p>请求体直接用 JSON 字面量构造，而不是手写一个 25 个 null 的 record —— 一来参数一旦错位
+ * <p>请求体直接用 JSON 字面量构造，而不是手写一个 26 个 null 的 record —— 一来参数一旦错位
  * 断言会变得莫名其妙，二来这样走的正是 Jackson 那条绑定路径，「字段缺失绑成 null」这个前提
  * 本身也被测到了。
  *
@@ -52,6 +52,7 @@ class PlatformConfigMergeTest {
         cfg.setEnabled(1);
         cfg.setScanEnabled(1);
         cfg.setWatchEnabled(1);
+        cfg.setJobQualityEnabled(1);
         cfg.setCities("[\"杭州\"]");
         cfg.setKeywords("[\"Java\"]");
         cfg.setJobType("全职");
@@ -142,6 +143,21 @@ class PlatformConfigMergeTest {
         PlatformConfigMerge.merge(store(), cfg, change("{\"combinationTimeLimitSec\":99999}"));
         assertThat(cfg.getCombinationTimeLimitSec())
                 .isEqualTo(ConfigStore.MAX_COMBINATION_TIME_LIMIT_SEC);
+    }
+
+    @Test
+    void 岗位质量开关没传时保持原值() throws Exception {
+        // 这一列的默认值是关，但「没传」仍然不等于「关」：否则任何一个不提交它的调用方
+        // （curl、脚本、旧版本控制台）都会把用户打开的开关悄悄关掉（ADR-0017）
+        PlatformConfigEntity cfg = current();
+
+        PlatformConfigMerge.merge(store(), cfg, change("{\"dailyDeliveryQuota\":5}"));
+
+        assertThat(cfg.getJobQualityEnabled()).isEqualTo(1);
+
+        PlatformConfigMerge.merge(store(), cfg, change("{\"jobQualityEnabled\":false}"));
+
+        assertThat(cfg.getJobQualityEnabled()).isZero();
     }
 
     @Test

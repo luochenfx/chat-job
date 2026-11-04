@@ -250,7 +250,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 |---|---|---|
 | 缺省平台（调用方未传 `platform` 时） | `boss` | `chat-job.active-platform`（`application.yaml`，可用环境变量 `CHAT_JOB_ACTIVE_PLATFORM` 覆盖） |
 | 平台开关 | 启用 | `platform_config.enabled`（V1 建表即有，阶段 3 起真正生效） |
-| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。两个都关时拒绝保存（400，文案指向平台开关）。关掉即改运行行为：扫描在卡片边界与组合入口生效，值守在待命循环的每秒检查与插空巡检生效。控制台「配置 · 平台配置」把「平台启用 / 扫描 / 值守」排成一组；概览卡在平台名旁标「仅值守 / 仅扫描」，只值守平台的「今日主动投递」「今日评估」显示 `—` 而不是 0。用 `PUT /api/config/platform/{platform}` 手工改时必须提交**整份对象**（见下方排错表）
+| 扫描开关 / 值守开关 | 都开 | `platform_config.scan_enabled` / `watch_enabled`（V14）。两个都关时拒绝保存（400，文案指向平台开关）。关掉即改运行行为：扫描在卡片边界与组合入口生效，值守在待命循环的每秒检查与插空巡检生效。控制台「配置 · 平台配置」把「平台启用 / 扫描 / 值守」排成一组；概览卡在平台名旁标「仅值守 / 仅扫描」，只值守平台的「今日主动投递」「今日评估」显示 `—` 而不是 0。用 `PUT /api/config/platform/{platform}` 手工改时只提交改动的字段，没传的一律保持原值；要清空列表传 `[]`、清空字符串传 `""`（ADR-0010）
 | 日投递配额 / 日评估上限 | 30 / 150（**每平台各一份**） | `platform_config`（V1） |
 | 卡片间隔基准 / 滚动轮上限 / 单组合时间上限 | 10 秒（实际随机 5–10 秒）/ 300 轮 / 21600 秒（6 小时；填 0 或 -1 表示不限，正数钳制 60–86400） | 同上 |
 | HR 活跃度下限 | 本月 | 同上 |
@@ -258,6 +258,7 @@ curl -s -X POST http://127.0.0.1:8080/api/runs/1/cancel
 | 待命/值守巡检间隔 | 120 秒（钳制 30–600，实际 ±10% 抖动；它同时是「AI 回复最长延迟」与「页面刷新频率」） | `platform_config.watch_interval_seconds`（V12） |
 | 值守时段 | 09:00–22:00（起止相同 = 全天） | `duty_start_time` / `duty_end_time`（V4） |
 | 质量开关 | 开（AI 判定；关则用模板招呼语直接投） | `ai_config.quality_gate_enabled` |
+| 岗位质量判断（重点关注） | **关**（每平台各一份；关着时不调模型、不落库、不发提醒，已有的评估与人工接管照常） | `platform_config.job_quality_enabled`（V20） |
 | 值守 AI 回复 | **关** | `ai_config.ai_reply_enabled`（V5） |
 | AI 味检查 / 默认词表 | 开 / 31 条（清空输入框 = 用默认，不是关闭） | `ai_config.ai_reply_tone_check_enabled`、`ai_reply_tone_terms`（V7） |
 | skip 占比告警 | 阈值 60%、最小样本 10（阈值 0 = 关闭但界面显式提示） | `ai_config.ai_reply_skip_alert_*`（V9） |

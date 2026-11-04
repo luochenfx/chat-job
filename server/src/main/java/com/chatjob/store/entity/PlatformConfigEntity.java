@@ -27,6 +27,12 @@ public class PlatformConfigEntity {
      * 关闭后平台侧的未读标记保持原样，不会出现「读过但不回」。
      */
     private Integer watchEnabled;
+    /**
+     * 岗位质量判断开关（V20，ADR-0017）：该平台要不要在值守里判断岗位质量。
+     * 它挂在 {@link #watchEnabled} 底下 —— 自动回复关着时判断根本没有入口，开着也不会发生任何事。
+     * <b>缺省按关</b>，与上面两列相反：这两列读到 null 按开，这一列读到 null 按关。
+     */
+    private Integer jobQualityEnabled;
     private String cities;
     private String keywords;
     private String jobType;

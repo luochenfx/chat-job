@@ -313,6 +313,11 @@ public class SystemController {
         // 各页共用这份清单，概览徽标与任务页的启动提示都从这里取，不再单独请求配置
         out.put("scanEnabled", on(cfg.getScanEnabled()));
         out.put("watchEnabled", on(cfg.getWatchEnabled()));
+        // 岗位质量开关缺省按关（ADR-0017），所以不走 on()：那一句的「null 即开」
+        // 只对建表默认值是 1 的列成立。AI 配置页靠它报「有几个平台在判断」，
+        // 「重点关注」页靠它说「哪个平台没开」
+        out.put("jobQualityEnabled",
+                cfg.getJobQualityEnabled() != null && cfg.getJobQualityEnabled() != 0);
         return out;
     }
 

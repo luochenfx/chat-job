@@ -21,7 +21,7 @@ import java.util.List;
  * 表达清除，和「没提交这个字段」是同一份字节。
  */
 public record PlatformConfigChange(
-        Boolean enabled, Boolean scanEnabled, Boolean watchEnabled,
+        Boolean enabled, Boolean scanEnabled, Boolean watchEnabled, Boolean jobQualityEnabled,
         List<String> cities, List<String> keywords, String jobType,
         List<String> salary, List<String> experience, List<String> degree, List<String> scale,
         List<String> industry, List<String> stage, String activeLevelFloor,

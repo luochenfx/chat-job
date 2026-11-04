@@ -252,13 +252,11 @@
             <h2>岗位质量</h2>
             <p class="hint">
               已经聊起来之后，AI 会按下面每一条判断这个岗位本身值不值得重点跟进。
-              它和投递时的「匹配度」不是一回事：那个回答「我要不要投」，这个回答「这岗位好不好」。
-              过线的会话会出现在「重点关注」页，并发一条提醒
+              过打分线的会话会出现在「重点关注」页，并发一条提醒。
+              要不要做这件事由各平台自己决定，开关在「平台配置」页，默认关
             </p>
           </div>
-          <span class="tag" :class="ai.aiReplyEnabled ? 'ok' : 'warn'">
-            {{ ai.aiReplyEnabled ? '跟着自动回复一起跑' : '需要开启 AI 自动回复' }}
-          </span>
+          <span class="tag" :class="qualityTag.cls">{{ qualityTag.text }}</span>
         </div>
 
         <div class="field">
@@ -294,7 +292,7 @@
             <label>对方回复几条后才开始判断</label>
             <input v-model.number="ai.qualityMinHrMessages" type="number" min="1" max="10" />
             <div class="desc">
-              判断点里有「邀约是否认真」「沟通深度够不够」，对方只说了一句「你好」时判不出东西
+              判断点里有「邀约是否认真」「沟通深度够不够」，对方只说了一句「你好」时无法判断
             </div>
           </div>
           <div class="field">
@@ -600,6 +598,39 @@
         <div class="desc">{{ dutyHint }}</div>
       </div>
 
+      <!--
+        岗位质量判断（ADR-0017）：按平台一份、默认关。放在这里而不是顶上那排，
+        因为它是「自动回复」底下的一件事 —— 自动回复关着时它永远不跑，
+        与那三枚互不派生的开关不是同一类东西。
+      -->
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div>
+            <h2>岗位质量判断</h2>
+            <p class="hint">
+              和 HR 聊起来之后，AI 按「AI 判断与回复」页里那几条判断点，看这个岗位本身值不值得重点跟进。
+              过线的会话会出现在「重点关注」页，并发一条提醒。它和投递时的「匹配度」是两个问题
+            </p>
+          </div>
+          <span class="tag" :class="platform.jobQualityEnabled ? 'ok' : ''">
+            {{ platform.jobQualityEnabled ? '已开启' : '已关闭' }}
+          </span>
+        </div>
+
+        <label class="switch">
+          <input v-model="platform.jobQualityEnabled" type="checkbox" :disabled="watchOff" />
+          <span>为本平台判断岗位质量</span>
+        </label>
+
+        <p v-if="watchOff" class="card-note">
+          「自动回复」关着时不会做任何判断，所以这枚开关先不起作用；打开它之后才会开始
+        </p>
+        <div v-else class="desc">
+          关闭时不会调用模型、不会记下结果、也不会发提醒。已经记下的评估和「人工接管」照常可用。
+          判断点、分数线、每天与每轮的上限在「AI 判断与回复」页，两个平台共用
+        </div>
+      </div>
+
       <div class="card">
         <h2>已经聊过的人</h2>
         <p class="hint">打开对话后先看消息记录：最后一条是我们发的，就当作已经聊过，默认跳过</p>
@@ -808,6 +839,8 @@ function defaultPlatformConfig() {
     watchIntervalSeconds: 120,
     repeatChatEnabled: false,
     repeatChatMessages: [],
+    // 与 V20 的列默认值一致：这一列是「默认关」，其余开关都是默认开
+    jobQualityEnabled: false,
     dutyStartTime: '09:00',
     dutyEndTime: '22:00'
   }
@@ -845,6 +878,25 @@ const watchHint = computed(() =>
     ? '关闭：不检查未读消息、不读消息、不回消息、不发简历；平台上的未读标记保持原样'
     : '开启：搜索过程中会顺带检查消息，搜索结束后继续盯着消息'
 )
+
+/**
+ * 开着岗位质量判断的平台。这一页的五个参数是全局的（两平台共用），
+ * 所以标签只能说「有几个平台在判断」，不能说「这个功能开着」。
+ */
+const qualityOnPlatforms = computed(() =>
+  (platforms.value || []).filter((p: any) => p.jobQualityEnabled)
+)
+
+/**
+ * 岗位质量那张卡的标签。三态而不是两态：自动回复关着时判断根本没有入口，
+ * 与「开着但没有平台启用它」是两件不同的事，写成一个「未生效」会让人去错地方找原因。
+ */
+const qualityTag = computed(() => {
+  if (!ai.aiReplyEnabled) return { cls: 'warn', text: '需要开启 AI 自动回复' }
+  const count = qualityOnPlatforms.value.length
+  if (!count) return { cls: 'warn', text: '没有平台开启' }
+  return { cls: 'ok', text: `已开启（${count} 个平台）` }
+})
 
 /** 加载完成时的快照：与当前值比较得出 dirty（切 tab / 切平台前据此拦截） */
 const snapshot = ref(JSON.stringify(platform))

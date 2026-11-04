@@ -23,6 +23,12 @@ export interface PlatformDesc {
    */
   scanEnabled?: boolean
   watchEnabled?: boolean
+  /**
+   * 岗位质量判断开关（ADR-0017）。与上面两个相反：**缺失按关**，因为后端
+   * `platform_config.job_quality_enabled` 的建表默认值就是 0。它只决定
+   * 「这个平台做不做判断」，判断点与分数线仍由 `ai_config` 两个平台共用。
+   */
+  jobQualityEnabled?: boolean
 }
 
 const STORAGE_KEY = 'chat-job.platform'

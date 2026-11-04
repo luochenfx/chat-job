@@ -27,8 +27,11 @@ import java.util.List;
  * <p>位置在值守巡检里，会话处理完之后。判断不需要再打开页面 ——
  * {@code readMessages} 的结果就在调用方手上。
  *
- * <p>五个刻意的决定：
+ * <p>六个刻意的决定：
  * <ul>
+ *   <li><b>每个平台一个开关，默认关（ADR-0017）。</b> 关着时这一段什么都不做 ——
+ *       不调模型、不落库、不发提醒。它是「要不要为这件事花钱」的总开关，与下面几个
+ *       「什么时候判」的判据不是一回事。</li>
  *   <li><b>首次门槛是「HR 至少发了 N 条」。</b> 六条判断点里两条只能看对话，
  *       对方只说了一个「你好」时判出来的分数没有意义。</li>
  *   <li><b>重判要「多 3 条 + 隔 6 小时」。</b> 只看条数会让一句「在吗」就触发一次调用；
@@ -131,6 +134,12 @@ public class QualityAssessor {
         String platform = conversation.getPlatform();
         String title = conversation.getPlatformConversationId();
         try {
+            // 平台开关关着就整段跳过（ADR-0017）。这里刻意什么都不记：它会在每一段待处理的
+            // 未读上命中一次，关掉的人会看到满屏「已关闭」，而这个状态配置页上写着。
+            // 也不参与下面的每日与每轮计数 —— 没花的钱不该占名额
+            if (!configStore.platformJobQualityEnabled(platform)) {
+                return null;
+            }
             int hrMessages = 0;
             for (ChatMessage m : messages == null ? List.<ChatMessage>of() : messages) {
                 if (!m.fromSelf()) {

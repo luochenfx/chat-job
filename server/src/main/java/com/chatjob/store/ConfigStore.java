@@ -333,6 +333,20 @@ public class ConfigStore {
     }
 
     /**
+     * 岗位质量判断开关（V20、ADR-0017）：该平台要不要在值守里判断岗位质量。
+     *
+     * <p>只读、不写库，理由同 {@link #platformScanEnabled}：它会在每一段待处理的未读上被读一次。
+     *
+     * <p><b>缺省值与前两个开关相反</b>：这里读到 {@code null} 按关。默认关是刻意的取舍
+     * （ADR-0017），所以不能沿用上面那种「null 即开」的写法 —— 抄过来会让一个从没配过的平台
+     * 悄悄开始花模型调用。
+     */
+    public boolean platformJobQualityEnabled(String platform) {
+        Integer v = peekPlatformConfig(platform).getJobQualityEnabled();
+        return v != null && v != 0;
+    }
+
+    /**
      * 新平台的默认配置。唯一一处默认值定义，insert 与 peek 都从它来。
      *
      * <p>包内可见是为了让 {@code ConfigStoreTest} 直接断言这份默认值，不必为了读它连库。
@@ -345,6 +359,9 @@ public class ConfigStore {
         // 漏设的话读到 null，两处默认值就从这一刻开始分叉
         created.setScanEnabled(1);
         created.setWatchEnabled(1);
+        // 与 V20 的列默认值 0 一致。这一列是「默认关」，漏设会让没配过的平台读到 null，
+        // 而读法把 null 当关 —— 恰好不出错，但那只是运气，不是同源
+        created.setJobQualityEnabled(0);
         created.setCities("[]");
         created.setKeywords("[]");
         created.setJobType("");

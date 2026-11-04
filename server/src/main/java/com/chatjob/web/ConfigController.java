@@ -395,6 +395,10 @@ public class ConfigController {
         // 真读到 null 只可能是实体刚构造还没落库，此时「默认开着」才是它真正的行为
         out.put("scanEnabled", entity.getScanEnabled() == null || entity.getScanEnabled() != 0);
         out.put("watchEnabled", entity.getWatchEnabled() == null || entity.getWatchEnabled() != 0);
+        // 这一列缺省按关，所以不能沿用上面两行的写法。库里读到 null 只可能是实体刚构造
+        // 还没落库，而那时它的真实行为就是「不判断」，回发 false 才对得上
+        out.put("jobQualityEnabled",
+                entity.getJobQualityEnabled() != null && entity.getJobQualityEnabled() == 1);
         out.put("cities", configStore.readList(entity.getCities()));
         out.put("keywords", configStore.readList(entity.getKeywords()));
         out.put("jobType", entity.getJobType());

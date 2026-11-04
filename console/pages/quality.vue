@@ -19,6 +19,14 @@
         还没有岗位过线。AI 只在对方已经回复过几条之后才开始判断 —— 那时候「邀约是否认真」
         「沟通深度够不够」才看得出来
       </div>
+      <!--
+        空列表要说出原因：这个功能默认关，不说的话「一直空着」会被读成「没人理我」。
+        只列没开的平台，全开时不出现这一句。
+      -->
+      <p v-if="qualityOff.length" class="card-note">
+        {{ qualityOff.join('、') }} 没有开启「岗位质量判断」，那些平台聊起来的会话不会出现在这里。
+        开关在「配置 · 平台配置」里，每个平台各一份
+      </p>
     </div>
 
     <div v-for="item in items" :key="item.conversationId" class="card">
@@ -90,11 +98,20 @@
 <script setup lang="ts">
 const { call } = useApi()
 const { show } = useToast()
+// 清单与配置页共用一份（useState）。这一页不需要「当前平台」，只要每个平台的开关状态
+const { platforms, ensure: ensurePlatform } = usePlatform()
 
 const items = ref<any[]>([])
 // 不写默认分数：配置页的分数线可能被改过，前端再写一个 80 就是第二处住所
 const scoreLine = ref<number | null>(null)
 const busy = ref(false)
+
+/** 没开岗位质量判断的平台，只用于空列表时那句说明 */
+const qualityOff = computed(() =>
+  (platforms.value || [])
+    .filter((p) => !p.jobQualityEnabled)
+    .map((p) => p.label || p.platform)
+)
 
 /**
  * 三档结论的配色与记号。
@@ -143,5 +160,9 @@ async function release(item: any) {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  // 清单只用来判断「哪些平台没开」；拉不到就不显示那一句，不拦着列表本身
+  void ensurePlatform().catch(() => {})
+  void refresh()
+})
 </script>

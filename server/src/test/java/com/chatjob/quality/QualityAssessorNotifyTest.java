@@ -47,6 +47,22 @@ class QualityAssessorNotifyTest {
     }
 
     @Test
+    void 平台开关关着时一次模型都不调() {
+        // 开关的语义是「不花钱」：既不调模型，也不落库、不提醒。只判「有没有返回值」
+        // 拦不住「判完再丢掉」那种写法，所以这里数的是模型调用次数
+        Fixture f = new Fixture(true, true);
+        f.config.qualityOn = false;
+
+        QualityAssessor.Assessed assessed = f.assessor.assessIfDue(
+                conversation(), messages(), f.assessor.budget(), f.runLog);
+
+        assertThat(assessed).isNull();
+        assertThat(f.judge.calls).isZero();
+        assertThat(f.store.marked).isZero();
+        assertThat(f.notifier.kinds).isEmpty();
+    }
+
+    @Test
     void 告警类别关着时不发也不标记() {
         Fixture f = new Fixture(false, true);
 
@@ -108,11 +124,11 @@ class QualityAssessorNotifyTest {
         final FakeStore store = new FakeStore();
         final FakeNotifier notifier = new FakeNotifier();
         final FakeJudge judge = new FakeJudge();
+        final FakeConfig config = new FakeConfig();
         final RecordingRunLog runLog = new RecordingRunLog();
         final QualityAssessor assessor;
 
         Fixture(boolean alertEnabled, boolean configured) {
-            FakeConfig config = new FakeConfig();
             FakeSettings settings = new FakeSettings(alertEnabled, configured);
             assessor = new QualityAssessor(config, judge, store, null, notifier, settings,
                     new ObjectMapper(), TIME);
@@ -120,8 +136,16 @@ class QualityAssessorNotifyTest {
     }
 
     private static final class FakeConfig extends ConfigStore {
+        /** 平台开关（ADR-0017）。这组用例默认开着，只有「关着不判」那条把它关掉 */
+        boolean qualityOn = true;
+
         FakeConfig() {
             super(null, null, null, null, null, new ObjectMapper(), TIME);
+        }
+
+        @Override
+        public boolean platformJobQualityEnabled(String platform) {
+            return qualityOn;
         }
 
         @Override
@@ -157,6 +181,7 @@ class QualityAssessorNotifyTest {
 
     private static final class FakeJudge extends QualityJudge {
         int score = 90;
+        int calls;
 
         FakeJudge() {
             super(null, new SecretCipher(), new ObjectMapper(), new ChatClient(new ObjectMapper()));
@@ -164,6 +189,7 @@ class QualityAssessorNotifyTest {
 
         @Override
         public Assessment assess(Snapshot job, List<ChatMessage> messages, List<String> criteria) {
+            calls++;
             return new Assessment(score,
                     List.of(new Item("双休", Verdict.YES, "岗位描述写了周末双休")), "条件齐、HR 问得具体", null);
         }

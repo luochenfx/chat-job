@@ -1,0 +1,13 @@
+-- 岗位质量判断的开关（ADR-0017）。
+--
+-- 加在 platform_config 上，不是 ai_config：判断本来就是按平台跑的，每日上限也按平台计数，
+-- 「一个平台开、另一个关」是正常用法。判断点与分数线这类「我的标准」仍留在 ai_config，
+-- 两个平台共用。
+--
+-- DEFAULT 0：新库与升级上来的库都是关的。SQLite 的 ALTER TABLE ADD COLUMN 会把已有行一起
+-- 填成这个默认值，这正是「默认关」想要的结果。另一条路（加完列再 UPDATE 把旧行改成 1）
+-- 会让「默认值」在库里有两套含义，而真正会被观察到的对象恰恰是已有安装。
+--
+-- 不叫 quality_enabled：ai_config 里已经有一个 quality_gate_enabled（投递前那次 AI 判断），
+-- 两者一个字母之差，读代码时必须能一眼分开。
+ALTER TABLE platform_config ADD COLUMN job_quality_enabled INTEGER NOT NULL DEFAULT 0;
