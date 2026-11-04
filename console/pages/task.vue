@@ -345,73 +345,9 @@ function time(at: number) {
   return new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 事件里的 reason 是内部代号，界面上要变成一句能读懂的话
-function stopReasonText(reason: string) {
-  return ({
-    QUOTA: '今天主动联系的名额已经用完',
-    EVAL_LIMIT: '今天查看岗位的数量已达上限',
-    COMBOS_EXHAUSTED: '所有搜索组合都跑完了',
-    // 和「跑完了」必须分开：超时是没看完就停下，断点留在原地
-    COMBINATION_TIMEOUT: '组合时间上限到了，还有岗位没看完',
-    // 未启用扫描的平台一启动就是待命，这个原因下「扫描结束」不成立（spec 0005）
-    SCAN_DISABLED: '这个平台没有开启「搜索岗位」'
-  } as any)[reason] || reason
-}
-
-function rescanReasonText(reason: string) {
-  return ({
-    QUOTA_RAISED: '主动联系名额已调高',
-    EVAL_LIMIT_RAISED: '查看岗位上限定已调高',
-    NEW_DAY: '进入新的一天，搜索组合从头开始'
-  } as any)[reason] || reason
-}
-
+// 事件文案住在 composables/runEvents.ts：那里同时是订阅清单的来源，两边不会漂开
 function describe(e: { type: string; data: any }) {
-  const d = e.data || {}
-  switch (e.type) {
-    case 'run.started':
-      return `任务已启动（${modeText(d.mode)}）`
-    case 'run.waiting':
-      // 两种挂起来源文案必须分开：启动时就不在窗口内 vs 跑着跑着到点了。
-      // 混成一句「不在值守时段」，到点挂起会被读成任务被中断
-      return d.reason === 'DUTY_END'
-        ? `自动回复时段已结束（${d.window}，${d.at}），任务先暂停；这一轮还没有结束`
-        : `现在不在自动回复时段（${d.window}，${d.at}），任务已排队等待`
-    case 'run.standby':
-      // 未启用扫描的平台从未扫过，「扫描结束（…）」这句与事实不符：它只有在扫描真的
-      // 中止时才成立（spec 0005 §3.5 的文案要求）
-      return d.reason === 'SCAN_DISABLED'
-        ? `没有开启「搜索岗位」，直接开始处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
-        : d.reason === 'COMBINATION_TIMEOUT'
-          ? `搜索暂停（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
-          : `搜索结束（${stopReasonText(d.reason)}），继续处理未读消息：主动联系 ${d.delivered} / 已查看 ${d.evaluated}`
-    case 'run.rescan':
-      return `继续搜索：${rescanReasonText(d.reason)}`
-    case 'run.awakened':
-      return `自动回复时段已到（${d.at}），开始执行排队的任务`
-    case 'combination.started':
-      return `开始第 ${d.seq + 1} 个搜索组合：${d.city || '不限'} / ${d.keyword || '不限'}`
-    case 'job.evaluated':
-      return `${d.decision === 'PASS' ? '决定投递' : d.decision === 'AI_REJECT' ? '决定不投' : '判断失败'}：${d.jobName} @ ${d.company}${d.reason ? ' — ' + d.reason : ''}`
-    case 'delivery.updated':
-      return `投递结果 ${d.status}：${d.jobName}${d.failureReason ? ' — ' + d.failureReason : ''}`
-    case 'unread.detected':
-      // 打开 AI 模式后，一次扫描可能既没有回复也没有未命中，但有待重试/已失败的任务 ——
-      // 那才是需要人看见的部分，不能因为前两个数是 0 就显示成「什么也没发生」
-      if (d.dryRunWouldReply) {
-        // 演练下 replied 恒为 0。显示成「回复 N」等于告诉操作者消息已经发出去了，
-        // 而这正是这次要消灭的错觉。
-        return `检查消息（演练）：${d.threads} 个未读，本来会回复 ${d.dryRunWouldReply} 个，没匹配到规则 ${d.unmatched} 个`
-      }
-      return `检查消息：${d.threads} 个未读，已回复 ${d.replied} 个，没匹配到规则 ${d.unmatched} 个`
-        + (d.retried ? `，重试 ${d.retried} 个（失败 ${d.failed} 个）` : '')
-    case 'circuit.opened':
-      return `已自动停止：${d.kind} — ${d.message}`
-    case 'run.finished':
-      return `任务结束：${d.status}（主动联系 ${d.delivered}，已查看 ${d.evaluated}）`
-    default:
-      return e.type
-  }
+  return describeEvent(e.type, e.data)
 }
 
 async function refresh() {

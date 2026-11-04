@@ -1,31 +1,17 @@
+import { RUN_EVENT_TYPES } from './runEvents'
+
 export interface StreamEvent {
   type: string
   data: any
   at: number
 }
 
-const EVENT_TYPES = [
-  'run.started',
-  // 挂起与唤醒：白名单漏一个是静默失效，前端只会「什么都没发生」
-  'run.waiting',
-  'run.awakened',
-  'combination.started',
-  'job.evaluated',
-  'delivery.updated',
-  'unread.detected',
-  'circuit.opened',
-  'duty.ended',
-  // 这两条原本不在白名单里：任务页的 describe() 早就写了它们的文案分支，但事件从来没被订阅，
-  // 于是「扫描结束，转入值守待命」与「恢复扫描」在界面上一直不出现，只在断言上看是对的。
-  // spec 0005 又给 run.standby 增加了 SCAN_DISABLED 这个原因，必须先订阅才谈得上显示。
-  'run.standby',
-  'run.rescan',
-  'run.finished'
-]
-
 /**
  * SSE 客户端。断线后指数退避重连（1s 起，×1.7，上限 30s，带 30% 抖动），
  * 并用 lastEventId 让服务端补发断点之后的事件。
+ *
+ * <p>订阅哪些类型不在这里写：清单在 `runEvents.ts`，与文案同一处。这里一份、
+ * 页面一份的写法漏过两次（run.standby / run.rescan），而漏订阅不会报错。
  */
 export function useRunStream() {
   const events = ref<StreamEvent[]>([])
@@ -61,7 +47,7 @@ export function useRunStream() {
       retry = 1000
     }
 
-    EVENT_TYPES.forEach((type) => {
+    RUN_EVENT_TYPES.forEach((type) => {
       source?.addEventListener(type, (e: MessageEvent) => {
         if (e.lastEventId) lastEventId = e.lastEventId
         let payload: any = e.data
