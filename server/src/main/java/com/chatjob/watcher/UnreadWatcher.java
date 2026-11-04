@@ -133,7 +133,7 @@ public class UnreadWatcher {
         // 演练支路必须排在开关判断之前：它与 ai_reply_enabled 无关 —— 开着 AI 回复时
         // 演练照样不能发。把它放进下面两个分支里，等于要求两处都记得判断。
         if (dryRun) {
-            return sweepDryRun(adapter, runLog);
+            return sweepDryRun(adapter, platform, runLog);
         }
         // 关闭态必须与改造前逐行一致（spec 2.1 第 1 条）。这里不「顺手」做任何优化。
         if (!configStore.aiReplyEnabled()) {
@@ -174,7 +174,7 @@ public class UnreadWatcher {
      * 这条未读不会再出现在列表里。接受这个代价，是因为不验证 {@code openThread} 与消息区
      * 选择器就上线，代价更大 —— 这两个地方才是历史故障高发区。
      */
-    private SweepResult sweepDryRun(PlatformAdapter adapter, RunLog runLog) {
+    private SweepResult sweepDryRun(PlatformAdapter adapter, String platform, RunLog runLog) {
         UnreadSweep round = new UnreadSweep(adapter, runLog);
         try {
             ReplyRuleEngine engine = replyStore.engine();
@@ -186,6 +186,14 @@ public class UnreadWatcher {
                     continue;
                 }
                 try {
+                    // 接管与演练无关：演练会真的点开会话，而点开就清掉平台红点（ADR-0016）。
+                    // 演练唯一的副作用本来就是这个，接管中的会话没有理由替用户付这个代价
+                    ConversationEntity rehearsalConversation = replyStore.findConversation(
+                            platform, thread.conversationId());
+                    if (rehearsalConversation != null && rehearsalConversation.takenOver()) {
+                        runLog.info("演练：跳过（人工接管中）| 会话=" + thread.title());
+                        continue;
+                    }
                     runLog.info("演练：进入会话 | 会话=" + thread.title() + " | 未读=" + thread.unread()
                             + " | 摘要=「" + clipLog(thread.lastMessage()) + "」");
                     List<ChatMessage> messages = adapter.readMessages(thread);
@@ -581,7 +589,7 @@ public class UnreadWatcher {
         // 而「判不判」与「这条回不回、回什么」无关 —— 后面每个分支都要重复一次调用就太蠢了
         if (conversation != null) {
             QualityAssessor.Assessed assessed = qualityAssessor.assessIfDue(
-                    conversation.getPlatform(), thread.title(), conversation, messages, qualityBudget, runLog);
+                    conversation, messages, qualityBudget, runLog);
             if (assessed != null) {
                 round.addAssessed(assessed);
             }

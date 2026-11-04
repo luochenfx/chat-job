@@ -302,7 +302,7 @@ public class ConfigController {
     // ---------------------------------------------------------------- 告警配置
 
     public record NotifyConfigBody(String webhook, Boolean alertAbnormal,
-                                   Boolean alertStandby, Boolean alertDutyEnd, Boolean alertWatch) {
+                                   Boolean alertStandby, Boolean alertDutyEnd, Boolean alertHotJob) {
     }
 
     /**
@@ -323,7 +323,7 @@ public class ConfigController {
         out.put("alertStandby", entity.getAlertStandby() == null || entity.getAlertStandby() != 0);
         out.put("alertDutyEnd", entity.getAlertDutyEnd() == null || entity.getAlertDutyEnd() != 0);
         // 第四类：重点关注（V19）。它每天不一定发生，所以文案里没有「每天一次」那种说法
-        out.put("alertWatch", entity.getAlertWatch() == null || entity.getAlertWatch() != 0);
+        out.put("alertHotJob", entity.getAlertHotJob() == null || entity.getAlertHotJob() != 0);
         // 节流窗口只读：它是「防刷屏」的实现手段，用户要控制的是上面三个开关。
         // 但要回发给界面，否则提示文案里那句「5 分钟」在 yaml 改成别的值之后就是假话
         out.put("throttleWindowSeconds", notifySettings.throttleWindowSeconds());
@@ -364,8 +364,8 @@ public class ConfigController {
         if (body.alertDutyEnd() != null) {
             entity.setAlertDutyEnd(body.alertDutyEnd() ? 1 : 0);
         }
-        if (body.alertWatch() != null) {
-            entity.setAlertWatch(body.alertWatch() ? 1 : 0);
+        if (body.alertHotJob() != null) {
+            entity.setAlertHotJob(body.alertHotJob() ? 1 : 0);
         }
         configStore.saveNotifyConfig(entity);
         return Map.of("ok", true, "configured", notifySettings.configured());

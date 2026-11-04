@@ -184,8 +184,8 @@
             <span>时段结束<b>{{ notifyForm.alertDutyEnd ? '开' : '关' }}</b></span>
           </label>
           <label class="switch" title="某段会话的岗位质量过了分数线。同一条会话只提醒一次">
-            <input v-model="notifyForm.alertWatch" type="checkbox" />
-            <span>重点关注<b>{{ notifyForm.alertWatch ? '开' : '关' }}</b></span>
+            <input v-model="notifyForm.alertHotJob" type="checkbox" />
+            <span>重点关注<b>{{ notifyForm.alertHotJob ? '开' : '关' }}</b></span>
           </label>
         </div>
 
@@ -292,7 +292,7 @@ const notify = ref<any>({
   alertAbnormal: true,
   alertStandby: true,
   alertDutyEnd: true,
-  alertWatch: true,
+  alertHotJob: true,
   throttleWindowSeconds: 300,
   lastDelivery: null
 })
@@ -301,7 +301,7 @@ const notifyForm = reactive({
   alertAbnormal: true,
   alertStandby: true,
   alertDutyEnd: true,
-  alertWatch: true
+  alertHotJob: true
 })
 
 /** 框里有内容＝有没保存的地址。测试按钮此时发的是旧地址，必须挡住 */
@@ -313,7 +313,7 @@ const notifyDirty = computed(
     notifyForm.alertAbnormal !== notify.value.alertAbnormal ||
     notifyForm.alertStandby !== notify.value.alertStandby ||
     notifyForm.alertDutyEnd !== notify.value.alertDutyEnd ||
-    notifyForm.alertWatch !== notify.value.alertWatch
+    notifyForm.alertHotJob !== notify.value.alertHotJob
 )
 
 const statusLabel = computed(() => {
@@ -384,7 +384,7 @@ function applyNotify(n: any) {
   notifyForm.alertAbnormal = n?.alertAbnormal !== false
   notifyForm.alertStandby = n?.alertStandby !== false
   notifyForm.alertDutyEnd = n?.alertDutyEnd !== false
-  notifyForm.alertWatch = n?.alertWatch !== false
+  notifyForm.alertHotJob = n?.alertWatch !== false
   notifyForm.webhook = ''
 }
 
@@ -456,7 +456,7 @@ async function saveNotify() {
       alertAbnormal: notifyForm.alertAbnormal,
       alertStandby: notifyForm.alertStandby,
       alertDutyEnd: notifyForm.alertDutyEnd,
-      alertWatch: notifyForm.alertWatch
+      alertHotJob: notifyForm.alertHotJob
     }
     // 留空＝不修改：不把空串发上去，接口那边也按同样口径处理
     const webhook = notifyForm.webhook.trim()

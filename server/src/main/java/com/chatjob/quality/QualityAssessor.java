@@ -1,7 +1,9 @@
 package com.chatjob.quality;
 
 import com.chatjob.evaluate.QualityJudge;
+import com.chatjob.notify.AlertCategory;
 import com.chatjob.notify.Notifier;
+import com.chatjob.notify.NotifySettings;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.PlatformInfo;
 import com.chatjob.runlog.RunLog;
@@ -53,17 +55,19 @@ public class QualityAssessor {
     private final QualityStore store;
     private final JobPostingMapper jobMapper;
     private final Notifier notifier;
+    private final NotifySettings notifySettings;
     private final ObjectMapper json;
     private final TimeSource time;
 
     public QualityAssessor(ConfigStore configStore, QualityJudge judge, QualityStore store,
-                           JobPostingMapper jobMapper, Notifier notifier, ObjectMapper json,
-                           TimeSource time) {
+                           JobPostingMapper jobMapper, Notifier notifier, NotifySettings notifySettings,
+                           ObjectMapper json, TimeSource time) {
         this.configStore = configStore;
         this.judge = judge;
         this.store = store;
         this.jobMapper = jobMapper;
         this.notifier = notifier;
+        this.notifySettings = notifySettings;
         this.json = json;
         this.time = time;
     }
@@ -117,11 +121,15 @@ public class QualityAssessor {
      *
      * @return 这一次真的判了才有返回值
      */
-    public Assessed assessIfDue(String platform, String title, ConversationEntity conversation,
-                                List<ChatMessage> messages, Budget budget, RunLog runLog) {
+    public Assessed assessIfDue(ConversationEntity conversation, List<ChatMessage> messages,
+                                Budget budget, RunLog runLog) {
         if (conversation == null || conversation.getId() == null) {
             return null;
         }
+        // 平台与标题都从会话本身取：调用方手上那两个值就是从它来的，
+        // 传进来只会多一条「万一不一致该信谁」的问题
+        String platform = conversation.getPlatform();
+        String title = conversation.getPlatformConversationId();
         try {
             int hrMessages = 0;
             for (ChatMessage m : messages == null ? List.<ChatMessage>of() : messages) {
@@ -276,6 +284,18 @@ public class QualityAssessor {
                                 ConversationEntity conversation) {
         int line = configStore.qualityScoreLine();
         if (entity.getScore() < line) {
+            return false;
+        }
+        // 先问「这条通道现在会不会真的发」，再决定记不记「已提醒」。
+        // 顺序反了的话，开关关着（或还没配 webhook）时这段会话会被永久标成已提醒，
+        // 之后打开开关也不会补发 —— 用户看到的是「过线了但从来没收到消息」
+        if (!notifySettings.alertEnabled(AlertCategory.HOT_JOB)) {
+            log.info("重点关注提醒未发出：这一类告警被关闭 | 会话={}", conversation.getPlatformConversationId());
+            return false;
+        }
+        if (!notifySettings.configured()) {
+            log.info("重点关注提醒未发出：还没配置企业微信群机器人 | 会话={}",
+                    conversation.getPlatformConversationId());
             return false;
         }
         if (!store.markNotified(conversation.getId())) {

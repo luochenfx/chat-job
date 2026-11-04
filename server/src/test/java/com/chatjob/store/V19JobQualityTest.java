@@ -57,18 +57,20 @@ class V19JobQualityTest {
             assertThat(jdbc.queryForObject("SELECT count(*) FROM conversation", Integer.class)).isEqualTo(1);
             assertThat(jdbc.queryForObject("SELECT auto_reply_paused FROM conversation", Integer.class)).isZero();
             // 3) 第四类告警默认开：升级后行为与今天一致，变化只在用户点了开关之后发生
-            assertThat(jdbc.queryForObject("SELECT alert_watch FROM notify_config", Integer.class)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT alert_hot_job FROM notify_config", Integer.class)).isEqualTo(1);
             // 4) 判断点为空的语义是「用默认六条」，不是「不判断」；分数线 80 与代码常量一致
+            // 数字一律引 ConfigStore 的常量：测试自己抄一遍就变成第五处住所（ADR-0014 第 5 条）
             assertThat(jdbc.queryForObject("SELECT quality_criteria FROM ai_config", String.class)).isEmpty();
-            assertThat(jdbc.queryForObject("SELECT quality_score_line FROM ai_config", Integer.class)).isEqualTo(80);
+            assertThat(jdbc.queryForObject("SELECT quality_score_line FROM ai_config", Integer.class))
+                    .isEqualTo(ConfigStore.DEFAULT_QUALITY_SCORE_LINE);
             assertThat(jdbc.queryForObject("SELECT quality_min_hr_messages FROM ai_config", Integer.class))
-                    .isEqualTo(2);
+                    .isEqualTo(ConfigStore.DEFAULT_QUALITY_MIN_HR_MESSAGES);
             assertThat(jdbc.queryForObject("SELECT quality_max_per_day FROM ai_config", Integer.class))
-                    .isEqualTo(30);
+                    .isEqualTo(ConfigStore.DEFAULT_QUALITY_MAX_PER_DAY);
             assertThat(jdbc.queryForObject("SELECT quality_max_per_sweep FROM ai_config", Integer.class))
-                    .isEqualTo(3);
+                    .isEqualTo(ConfigStore.DEFAULT_QUALITY_MAX_PER_SWEEP);
             assertThat(jdbc.queryForObject("SELECT quality_reeval_hours FROM ai_config", Integer.class))
-                    .isEqualTo(6);
+                    .isEqualTo(ConfigStore.DEFAULT_QUALITY_REEVAL_HOURS);
         }
     }
 }

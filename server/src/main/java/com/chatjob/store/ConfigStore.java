@@ -838,7 +838,7 @@ public class ConfigStore {
                     created.setAlertAbnormal(1);
                     created.setAlertStandby(1);
                     created.setAlertDutyEnd(1);
-                    created.setAlertWatch(1);
+                    created.setAlertHotJob(1);
                     created.setUpdatedAt(time.stamp());
                     log.info("已创建告警配置默认值");
                     return created;

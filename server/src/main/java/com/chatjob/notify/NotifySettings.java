@@ -102,7 +102,7 @@ public class NotifySettings {
             case ABNORMAL -> cfg.getAlertAbnormal();
             case STANDBY -> cfg.getAlertStandby();
             case DUTY_END -> cfg.getAlertDutyEnd();
-            case HOT_JOB -> cfg.getAlertWatch();
+            case HOT_JOB -> cfg.getAlertHotJob();
         };
         return flag == null || flag != 0;
     }

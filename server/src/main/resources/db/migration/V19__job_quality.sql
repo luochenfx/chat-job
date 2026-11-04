@@ -64,4 +64,4 @@ ALTER TABLE ai_config ADD COLUMN quality_reeval_hours   INTEGER NOT NULL DEFAULT
 
 -- 第四类告警（CONTEXT.md「告警类别」）。默认 1：升级后行为与今天一致，
 -- 变化只在用户点了开关之后发生（与 V15 三列同一口径）
-ALTER TABLE notify_config ADD COLUMN alert_watch INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE notify_config ADD COLUMN alert_hot_job INTEGER NOT NULL DEFAULT 1;

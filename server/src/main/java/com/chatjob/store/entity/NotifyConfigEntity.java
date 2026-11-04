@@ -24,6 +24,6 @@ public class NotifyConfigEntity {
     /** 值守时段结束 */
     private Integer alertDutyEnd;
     /** 重点关注：某段会话的岗位质量过了线。第四类，与前三类并列（V19） */
-    private Integer alertWatch;
+    private Integer alertHotJob;
     private String updatedAt;
 }

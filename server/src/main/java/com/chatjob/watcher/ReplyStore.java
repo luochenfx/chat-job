@@ -217,7 +217,8 @@ public class ReplyStore {
     }
 
     /** 效果采集（可开关）：只记首响时间与条数，不参与任何自动决策 */
-    public void recordHrMessage(ConversationEntity conversation) {        String now = time.stamp();
+    public void recordHrMessage(ConversationEntity conversation) {
+        String now = time.stamp();
         conversation.setLastHrMessageAt(now);
         if (conversation.getFirstHrReplyAt() == null) {
             conversation.setFirstHrReplyAt(now);

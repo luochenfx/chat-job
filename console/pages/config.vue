@@ -730,12 +730,22 @@ const aiToneTermsEffectiveCount = ref(0)
 const aiCriteriaDefault = ref('')
 const aiCriteriaDefaultCount = ref(0)
 
+/** 多行文本的有效行数：去空行、去重。两处「生效 N 条」共用，免得一个有去重一个没有 */
+function lineCount(text: string) {
+  return new Set(
+    (text || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  ).size
+}
+
 /** 判断点留空时生效条数是默认条数，不是 0 —— 显示 0 会让人以为不判断 */
-const criteriaEffective = computed(() => {
-  const text = (ai.qualityCriteria || '').trim()
-  if (!text) return aiCriteriaDefaultCount.value
-  return new Set(text.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)).size
-})
+const criteriaEffective = computed(() =>
+  ai.qualityCriteria && ai.qualityCriteria.trim()
+    ? lineCount(ai.qualityCriteria)
+    : aiCriteriaDefaultCount.value
+)
 
 function restoreCriteria() {
   ai.qualityCriteria = aiCriteriaDefault.value
@@ -903,9 +913,7 @@ async function loadAll() {
     aiToneTermsDefault.value = (a?.aiReplyToneTermsDefault ?? '').trim()
     aiToneTermsEffectiveCount.value = a?.aiReplyToneTermsEffectiveCount ?? 0
     aiCriteriaDefault.value = (a?.qualityCriteriaDefault ?? '').trim()
-    aiCriteriaDefaultCount.value = aiCriteriaDefault.value
-      ? aiCriteriaDefault.value.split(/\r?\n/).filter(Boolean).length
-      : 0
+    aiCriteriaDefaultCount.value = lineCount(aiCriteriaDefault.value)
     blacklist.value = b || []
     await loadPlatform()
   } catch (e: any) {
@@ -1132,6 +1140,9 @@ async function saveAi() {
     // 后端会丢弃超长行（一行 50 字基本是误粘的整段文本）。不说一声，用户会以为整段都生效了
     if (res?.toneTermsDropped > 0) {
       show(`已保存，但有 ${res.toneTermsDropped} 行超过 20 个字，没有保存进去`, true)
+    } else if (res?.qualityCriteriaDropped > 0) {
+      // 与词表同一个口径：整行丢弃而不是截断，不说一声用户会以为整段判断点都生效了
+      show(`已保存，但有 ${res.qualityCriteriaDropped} 条判断点超过 30 个字或超出 20 条，没有保存进去`, true)
     } else {
       show('已保存')
     }

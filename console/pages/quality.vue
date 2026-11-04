@@ -4,8 +4,9 @@
       <div>
         <h1>重点关注</h1>
         <p>
-          聊得起来的岗位上，AI 按下面这些判断点给出的质量结论。{{ scoreLine }} 分以上才会出现在这里。
-          点「人工接管」之后，系统不再替这段会话发消息，也不再打开它
+          聊得起来的岗位上，AI 按下面这些判断点给出的质量结论。分数达到配置页设定的分数线
+          （当前 {{ scoreLine ?? '—' }} 分）才会出现在这里。点「人工接管」之后，
+          系统不再替这段会话发消息，也不再打开它
         </p>
       </div>
       <div class="row">
@@ -91,7 +92,8 @@ const { call } = useApi()
 const { show } = useToast()
 
 const items = ref<any[]>([])
-const scoreLine = ref(80)
+// 不写默认分数：配置页的分数线可能被改过，前端再写一个 80 就是第二处住所
+const scoreLine = ref<number | null>(null)
 const busy = ref(false)
 
 /**
@@ -113,7 +115,7 @@ async function refresh() {
   try {
     const data = await call('/quality')
     items.value = data?.items || []
-    scoreLine.value = data?.scoreLine ?? 80
+    scoreLine.value = data?.scoreLine ?? null
   } catch (e: any) {
     show(e.message, true)
   } finally {

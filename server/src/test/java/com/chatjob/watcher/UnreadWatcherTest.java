@@ -727,7 +727,7 @@ class UnreadWatcherTest {
         final List<QualityAssessor.Assessed> calls = new ArrayList<>();
 
         FakeAssessor() {
-            super(null, null, null, null, null, new ObjectMapper(), TIME);
+            super(null, null, null, null, null, null, new ObjectMapper(), TIME);
         }
 
         @Override
@@ -736,8 +736,8 @@ class UnreadWatcherTest {
         }
 
         @Override
-        public Assessed assessIfDue(String platform, String title, ConversationEntity conversation,
-                                    List<ChatMessage> messages, Budget budget, RunLog runLog) {
+        public Assessed assessIfDue(ConversationEntity conversation, List<ChatMessage> messages,
+                                    Budget budget, RunLog runLog) {
             if (next == null) {
                 return null;
             }
@@ -806,6 +806,11 @@ class UnreadWatcherTest {
         @Override
         public ConversationEntity findById(Long conversationId) {
             return conversationId == null ? null : byId.get(conversationId);
+        }
+
+        @Override
+        public ConversationEntity findConversation(String platform, String conversationKey) {
+            return byKey.get(conversationKey);
         }
 
         @Override

@@ -49,7 +49,10 @@ public class QualityJudge {
      */
     private static final int MAX_CONTEXT_MESSAGES = 20;
 
-    /** 一句话结论的字数上限，截断用 */
+    /**
+     * 一句话结论的截断长度。提示词要求 40 字，这里留 20 字余量 ——
+     * 卡在 40 会把模型稍微超出的一句话从中间切断，而 60 之后的内容本来就是啰嗦。
+     */
     private static final int MAX_SUMMARY_CHARS = 60;
 
     private final ConfigStore configStore;
@@ -97,10 +100,10 @@ public class QualityJudge {
      * @param items 按请求的判断点顺序返回，长度一定等于请求的判断点数
      * @param error 非空表示这次判断失败，调用方不要落库
      */
-    public record Assessment(int score, List<Item> items, String summary, String raw, String error) {
+    public record Assessment(int score, List<Item> items, String summary, String error) {
 
         public static Assessment fail(String error) {
-            return new Assessment(0, List.of(), "", null, error);
+            return new Assessment(0, List.of(), "", error);
         }
 
         public boolean isFailure() {
@@ -160,7 +163,8 @@ public class QualityJudge {
             sb.append("（这次没有取到岗位信息，只能根据对话判断；岗位维度的判断点一律写 UNKNOWN）\n");
         } else {
             sb.append("岗位名称：").append(nvl(job.jobName())).append('\n');
-            sb.append("公司：").append(nvl(job.companyName())).append('\n');
+            // 公司名不进提示词：这一版明确「公司怎么样由用户自己判断」，把名字交给模型
+            // 等于让它按名气打分，而公司规模/行业/融资阶段本来就没有结构化数据
             sb.append("薪资：").append(nvl(job.salary())).append('\n');
             sb.append("城市：").append(nvl(job.area())).append('\n');
             sb.append("经验要求：").append(nvl(job.experience())).append('\n');
@@ -208,6 +212,7 @@ public class QualityJudge {
                 5. score 是 0-100，这个岗位作为「值得重点跟进的机会」的整体质量。
                    岗位条件（福利、工时、是否外包）与 HR 的沟通质量都要算进去。
                 6. summary 不超过 40 字，一句话说明为什么是这个分数。
+                7. 不要根据公司名气、规模或行业打分：这份判断只看岗位本身的条件和对话内容。
                 """);
         sb.append('\n');
         sb.append("输出格式：{\"score\": 82, \"items\": [{\"criterion\": \"双休\", ")
@@ -259,7 +264,7 @@ public class QualityJudge {
             }
             items.add(item);
         }
-        return new Assessment(score, items, summary, rawContent, null);
+        return new Assessment(score, items, summary, null);
     }
 
     /**

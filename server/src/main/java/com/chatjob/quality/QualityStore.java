@@ -166,7 +166,6 @@ public class QualityStore {
         }
     }
 
-    /** {@code selectMaps} 的列名是下划线，这里按实体字段名取回来 */
     private Map<Long, ConversationEntity> conversationsOf(Collection<Long> ids) {
         Map<Long, ConversationEntity> out = new HashMap<>();
         if (ids.isEmpty()) {
