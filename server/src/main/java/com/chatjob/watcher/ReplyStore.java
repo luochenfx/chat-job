@@ -200,9 +200,24 @@ public class ReplyStore {
         conversationMapper.updateById(conversation);
     }
 
+    /**
+     * 接管期间仍然更新会话列表读到的那点信息（ADR-0016 第 3 条）。
+     *
+     * <p>接管后不打开会话 —— 打开会清掉平台上的未读红点，人不在电脑前就会看到「已读没人回」。
+     * 但 {@code listUnreadThreads} 本来就给了最后一句与未读数，留下来界面才看得到
+     * 「接管中，HR 又说了 2 条」，用户才有理由回到这个页面。
+     */
+    public void recordThreadObservation(ConversationEntity conversation, String lastMessage, int unread) {
+        if (conversation == null) {
+            return;
+        }
+        conversation.setLastThreadMessage(lastMessage == null ? "" : lastMessage);
+        conversation.setLastThreadUnread(Math.max(0, unread));
+        conversationMapper.updateById(conversation);
+    }
+
     /** 效果采集（可开关）：只记首响时间与条数，不参与任何自动决策 */
-    public void recordHrMessage(ConversationEntity conversation) {
-        String now = time.stamp();
+    public void recordHrMessage(ConversationEntity conversation) {        String now = time.stamp();
         conversation.setLastHrMessageAt(now);
         if (conversation.getFirstHrReplyAt() == null) {
             conversation.setFirstHrReplyAt(now);

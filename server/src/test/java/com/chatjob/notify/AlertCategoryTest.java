@@ -25,6 +25,16 @@ class AlertCategoryTest {
         assertThat(AlertCategory.ofKind("duty-end")).isEqualTo(AlertCategory.DUTY_END);
     }
 
+    /**
+     * 第四类「重点关注」。与异常分开的意义在于开关能单独关：
+     * 混进异常，用户要么连故障提醒一起关掉，要么被好岗位的提醒吵到只能静音整个告警。
+     */
+    @Test
+    @DisplayName("重点关注是独立类别，不落到异常")
+    void hotJobHasOwnCategory() {
+        assertThat(AlertCategory.ofKind("hot-job")).isEqualTo(AlertCategory.HOT_JOB);
+    }
+
     @Test
     @DisplayName("测试消息不受任何开关约束")
     void testHasNoCategory() {

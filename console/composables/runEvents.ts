@@ -79,6 +79,13 @@ const TEXT: Record<string, (d: any) => string> = {
       : `检查消息：${d.threads} 个未读，已回复 ${d.replied} 个，没匹配到规则 ${d.unmatched} 个` +
         (d.retried ? `，重试 ${d.retried} 个（失败 ${d.failed} 个）` : ''),
 
+  // 质量判断每判一次就推一条。它不进「检查消息」那行汇总：那条讲的是回复，
+  // 而这一条讲的是「有个岗位值得你自己聊」，两件事混在一起会让人以为回复出了问题
+  'quality.assessed': (d) =>
+    `岗位质量 ${d.score} 分：${d.jobName || d.title}` +
+    `${d.companyName ? ' @ ' + d.companyName : ''}` +
+    `${d.summary ? ' — ' + d.summary : ''}${d.notified ? '（已提醒）' : ''}`,
+
   'circuit.opened': (d) => `已自动停止：${d.kind} — ${d.message}`,
 
   'run.finished': (d) => `任务结束：${d.status}（主动联系 ${d.delivered}，已查看 ${d.evaluated}）`

@@ -36,5 +36,17 @@ public class AiConfigEntity {
     private Integer aiReplySkipAlertPct;
     /** 告警最小样本数。低于此数显示「样本不足」，不判定 */
     private Integer aiReplySkipAlertMinSample;
+    /** 岗位判断点，换行分隔。空串 = 用 ConfigStore 的默认六条，不是「不判断」 */
+    private String qualityCriteria;
+    /** 过线分数。只决定进不进「重点关注」，不触发任何自动动作 */
+    private Integer qualityScoreLine;
+    /** 首次判断前，会话里至少要有这么多条 HR 消息 */
+    private Integer qualityMinHrMessages;
+    /** 每个平台每天最多判断几次。与投递判定的日评估上限是两个名额 */
+    private Integer qualityMaxPerDay;
+    /** 每轮值守最多判断几个 */
+    private Integer qualityMaxPerSweep;
+    /** 重判间隔（小时）：新增 3 条以上 HR 消息且超过这么久才再判一次 */
+    private Integer qualityReevalHours;
     private String updatedAt;
 }

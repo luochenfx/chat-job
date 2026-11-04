@@ -168,7 +168,7 @@
           </div>
         </div>
 
-        <!-- 三组开关：异常要人处理，待命与时段结束每天必然发生，能单独关掉才不会
+        <!-- 四组开关：异常要人处理，其余三类都是「有新情况了」，能单独关掉才不会
              逼着人把整个告警静音（关了就等于出事也没人知道） -->
         <div class="switches">
           <label class="switch" title="任务没跑起来或跑挂了：驱动不可用、自检未通过、登录失效、熔断、异常终止">
@@ -182,6 +182,10 @@
           <label class="switch" title="值守时段结束，当天不再操作页面。每天一次">
             <input v-model="notifyForm.alertDutyEnd" type="checkbox" />
             <span>时段结束<b>{{ notifyForm.alertDutyEnd ? '开' : '关' }}</b></span>
+          </label>
+          <label class="switch" title="某段会话的岗位质量过了分数线。同一条会话只提醒一次">
+            <input v-model="notifyForm.alertWatch" type="checkbox" />
+            <span>重点关注<b>{{ notifyForm.alertWatch ? '开' : '关' }}</b></span>
           </label>
         </div>
 
@@ -288,6 +292,7 @@ const notify = ref<any>({
   alertAbnormal: true,
   alertStandby: true,
   alertDutyEnd: true,
+  alertWatch: true,
   throttleWindowSeconds: 300,
   lastDelivery: null
 })
@@ -295,7 +300,8 @@ const notifyForm = reactive({
   webhook: '',
   alertAbnormal: true,
   alertStandby: true,
-  alertDutyEnd: true
+  alertDutyEnd: true,
+  alertWatch: true
 })
 
 /** 框里有内容＝有没保存的地址。测试按钮此时发的是旧地址，必须挡住 */
@@ -306,7 +312,8 @@ const notifyDirty = computed(
     webhookPending.value ||
     notifyForm.alertAbnormal !== notify.value.alertAbnormal ||
     notifyForm.alertStandby !== notify.value.alertStandby ||
-    notifyForm.alertDutyEnd !== notify.value.alertDutyEnd
+    notifyForm.alertDutyEnd !== notify.value.alertDutyEnd ||
+    notifyForm.alertWatch !== notify.value.alertWatch
 )
 
 const statusLabel = computed(() => {
@@ -377,6 +384,7 @@ function applyNotify(n: any) {
   notifyForm.alertAbnormal = n?.alertAbnormal !== false
   notifyForm.alertStandby = n?.alertStandby !== false
   notifyForm.alertDutyEnd = n?.alertDutyEnd !== false
+  notifyForm.alertWatch = n?.alertWatch !== false
   notifyForm.webhook = ''
 }
 
@@ -447,7 +455,8 @@ async function saveNotify() {
     const body: any = {
       alertAbnormal: notifyForm.alertAbnormal,
       alertStandby: notifyForm.alertStandby,
-      alertDutyEnd: notifyForm.alertDutyEnd
+      alertDutyEnd: notifyForm.alertDutyEnd,
+      alertWatch: notifyForm.alertWatch
     }
     // 留空＝不修改：不把空串发上去，接口那边也按同样口径处理
     const webhook = notifyForm.webhook.trim()

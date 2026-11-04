@@ -237,14 +237,14 @@ class StandbySegmentTest {
         int sweeps;
 
         RecordingWatcher() {
-            super(null, null, null, null);
+            super(null, null, null, null, null);
         }
 
         @Override
         public SweepResult sweep(PlatformAdapter adapter, String platform,
                                  boolean collectMetrics, boolean dryRun, RunLog runLog) {
             sweeps++;
-            return new SweepResult(3, 1, 2, 0, 0, 0, 0);
+            return new SweepResult(3, 1, 2, 0, 0, 0, 0, java.util.List.of());
         }
     }
 

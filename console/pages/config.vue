@@ -249,6 +249,83 @@
       <div class="card">
         <div class="row" style="justify-content: space-between; align-items: flex-start">
           <div>
+            <h2>岗位质量</h2>
+            <p class="hint">
+              已经聊起来之后，AI 会按下面每一条判断这个岗位本身值不值得重点跟进。
+              它和投递时的「匹配度」不是一回事：那个回答「我要不要投」，这个回答「这岗位好不好」。
+              过线的会话会出现在「重点关注」页，并发一条提醒
+            </p>
+          </div>
+          <span class="tag" :class="ai.aiReplyEnabled ? 'ok' : 'warn'">
+            {{ ai.aiReplyEnabled ? '跟着自动回复一起跑' : '需要开启 AI 自动回复' }}
+          </span>
+        </div>
+
+        <div class="field">
+          <label>判断点（一行一个）</label>
+          <textarea
+            v-model="ai.qualityCriteria"
+            :placeholder="aiCriteriaDefault"
+            style="min-height: 150px"
+          />
+          <div class="desc">
+            <template v-if="ai.qualityCriteria && ai.qualityCriteria.trim()">
+              当前使用你自己填的 {{ criteriaEffective }} 条。每条都会单独得到一个结论：符合 / 不符合 / 看不出来
+            </template>
+            <template v-else>
+              不填就使用默认的 {{ aiCriteriaDefaultCount }} 条，已用灰字显示在输入框里。
+              自己填的会<b>整个替换</b>默认的那份，不是加在默认清单后面
+            </template>
+            <button class="btn sm" style="margin-left: 8px" @click="restoreCriteria">填入默认</button>
+          </div>
+          <div class="desc">
+            判断点<b>不做字面匹配</b>：写「双休」，AI 会认得「周末双休」「上五休二」，也会认出
+            「大小周」不是双休。所以这里写的是要看什么，不是要找哪个词
+          </div>
+        </div>
+
+        <div class="grid cols-3">
+          <div class="field">
+            <label>多少分算过线</label>
+            <input v-model.number="ai.qualityScoreLine" type="number" min="0" max="100" />
+            <div class="desc">达到这个分数才进「重点关注」、才发提醒。它不触发任何自动动作</div>
+          </div>
+          <div class="field">
+            <label>对方回复几条后才开始判断</label>
+            <input v-model.number="ai.qualityMinHrMessages" type="number" min="1" max="10" />
+            <div class="desc">
+              判断点里有「邀约是否认真」「沟通深度够不够」，对方只说了一句「你好」时判不出东西
+            </div>
+          </div>
+          <div class="field">
+            <label>每天最多判断几个岗位</label>
+            <input v-model.number="ai.qualityMaxPerDay" type="number" min="1" max="200" />
+            <div class="desc">
+              <b>每个平台单独计算</b>，与「每天最多查看多少个岗位」是两笔额度，不互相占用
+            </div>
+          </div>
+        </div>
+
+        <div class="grid cols-2">
+          <div class="field">
+            <label>每轮最多判断几个</label>
+            <input v-model.number="ai.qualityMaxPerSweep" type="number" min="1" max="10" />
+            <div class="desc">超出的留到下一轮，不算失败，也不占用回复的次数</div>
+          </div>
+          <div class="field">
+            <label>隔多久重新判断（小时）</label>
+            <input v-model.number="ai.qualityReevalHours" type="number" min="0" max="720" />
+            <div class="desc">
+              对方又多说了 3 条以上、且离上次判断超过这么久，才会重判一次。
+              <b>填 0 表示每多 3 条就重判</b>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div>
             <h2>发送前检查与提醒</h2>
             <p class="hint">
               消息发出前的最后一道检查。
@@ -635,7 +712,13 @@ const ai = reactive<any>({
   aiReplyToneCheckEnabled: true,
   aiReplyToneTerms: '',
   aiReplySkipAlertPct: 60,
-  aiReplySkipAlertMinSample: 10
+  aiReplySkipAlertMinSample: 10,
+  qualityCriteria: '',
+  qualityScoreLine: 80,
+  qualityMinHrMessages: 2,
+  qualityMaxPerDay: 30,
+  qualityMaxPerSweep: 3,
+  qualityReevalHours: 6
 })
 
 // 默认风格与默认词表都由后端提供唯一一份（AiReplier.DEFAULT_STYLE / ReplyGuard.DEFAULT_TONE_TERMS），
@@ -643,6 +726,20 @@ const ai = reactive<any>({
 const aiStyleDefault = ref('')
 const aiToneTermsDefault = ref('')
 const aiToneTermsEffectiveCount = ref(0)
+// 默认判断点同样由后端提供唯一一份（ConfigStore.DEFAULT_QUALITY_CRITERIA）
+const aiCriteriaDefault = ref('')
+const aiCriteriaDefaultCount = ref(0)
+
+/** 判断点留空时生效条数是默认条数，不是 0 —— 显示 0 会让人以为不判断 */
+const criteriaEffective = computed(() => {
+  const text = (ai.qualityCriteria || '').trim()
+  if (!text) return aiCriteriaDefaultCount.value
+  return new Set(text.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)).size
+})
+
+function restoreCriteria() {
+  ai.qualityCriteria = aiCriteriaDefault.value
+}
 
 /** 输入框为空时生效条数是默认条数，不是 0 —— 只显示「空」会让人以为检查没在工作 */
 const toneTermsEffective = computed(() => {
@@ -805,6 +902,10 @@ async function loadAll() {
     aiStyleDefault.value = (a?.aiReplyStyleDefault ?? '').trim()
     aiToneTermsDefault.value = (a?.aiReplyToneTermsDefault ?? '').trim()
     aiToneTermsEffectiveCount.value = a?.aiReplyToneTermsEffectiveCount ?? 0
+    aiCriteriaDefault.value = (a?.qualityCriteriaDefault ?? '').trim()
+    aiCriteriaDefaultCount.value = aiCriteriaDefault.value
+      ? aiCriteriaDefault.value.split(/\r?\n/).filter(Boolean).length
+      : 0
     blacklist.value = b || []
     await loadPlatform()
   } catch (e: any) {
@@ -975,6 +1076,33 @@ async function saveAi() {
     show('「至少判断多少次才提醒」要填大于 0 的整数', true)
     return
   }
+  // 岗位质量的四个数字：0 对分数线和重判间隔都是合法值（全进 / 每多三条就重判），
+  // 所以这里判的是「是不是整数」而不是「是不是真值」
+  const scoreLine = Number(ai.qualityScoreLine)
+  const minHr = Number(ai.qualityMinHrMessages)
+  const perDay = Number(ai.qualityMaxPerDay)
+  const perSweep = Number(ai.qualityMaxPerSweep)
+  const reeval = Number(ai.qualityReevalHours)
+  if (!Number.isInteger(scoreLine) || scoreLine < 0 || scoreLine > 100) {
+    show('「多少分算过线」要填 0 到 100 之间的整数', true)
+    return
+  }
+  if (!Number.isInteger(minHr) || minHr < 1) {
+    show('「对方回复几条后才开始判断」要填大于 0 的整数', true)
+    return
+  }
+  if (!Number.isInteger(perDay) || perDay < 1) {
+    show('「每天最多判断几个岗位」要填大于 0 的整数', true)
+    return
+  }
+  if (!Number.isInteger(perSweep) || perSweep < 1) {
+    show('「每轮最多判断几个」要填大于 0 的整数', true)
+    return
+  }
+  if (!Number.isInteger(reeval) || reeval < 0) {
+    show('「隔多久重新判断」要填 0 或正整数，0 表示每多 3 条就重判', true)
+    return
+  }
 
   saving.value = true
   try {
@@ -987,7 +1115,13 @@ async function saveAi() {
         aiReplyTimeoutSeconds: timeout,
         aiReplyMaxPerSweep: maxPerSweep,
         aiReplySkipAlertPct: alertPct,
-        aiReplySkipAlertMinSample: minSample
+        aiReplySkipAlertMinSample: minSample,
+        qualityScoreLine: scoreLine,
+        qualityMinHrMessages: minHr,
+        qualityMaxPerDay: perDay,
+        qualityMaxPerSweep: perSweep,
+        qualityReevalHours: reeval,
+        qualityCriteria: ai.qualityCriteria ?? ''
       }
     })
     // 「自动」在服务端是一次解绑：PUT 里的 null 表达不了「清除」（与「没传这个字段」是同一份

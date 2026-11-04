@@ -2,8 +2,10 @@ package com.chatjob.watcher;
 
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
+import com.chatjob.quality.QualityAssessor;
 import com.chatjob.runlog.RunLog;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -31,6 +33,9 @@ final class UnreadSweep {
     private int retried;
     private int failed;
     private int wouldReply;
+
+    /** 本轮真的判过质量的那些会话。由编排层取走推 SSE，本类不碰通道 */
+    private final List<QualityAssessor.Assessed> assessed = new ArrayList<>();
 
     /**
      * 未读数读不到的会话数。<b>不是</b>「没有未读」：两者混同会让值守整体静默空转，
@@ -88,6 +93,11 @@ final class UnreadSweep {
         wouldReply++;
     }
 
+    /** 一次真的判过的质量评估。只有判成了才记，失败与被上限挡下的都不记 */
+    void addAssessed(QualityAssessor.Assessed result) {
+        assessed.add(result);
+    }
+
     /** 轮末告警。只有真的出现过「读不到」才出声，正常轮次不产生噪音。 */
     void warnUnreadable() {
         if (unreadUnreadable > 0) {
@@ -99,7 +109,8 @@ final class UnreadSweep {
     }
 
     UnreadWatcher.SweepResult result() {
-        return new UnreadWatcher.SweepResult(threads, replied, unmatched, sensitive, retried, failed, wouldReply);
+        return new UnreadWatcher.SweepResult(threads, replied, unmatched, sensitive, retried, failed, wouldReply,
+                List.copyOf(assessed));
     }
 
     /** 关掉会话页。关不掉不影响结论，这是三条路径共同的收尾动作。 */

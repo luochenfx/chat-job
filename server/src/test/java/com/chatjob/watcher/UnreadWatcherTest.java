@@ -6,6 +6,7 @@ import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.runlog.RunLog;
 import com.chatjob.runlog.RunLogLevel;
+import com.chatjob.quality.QualityAssessor;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.testing.FakePlatformAdapter;
 import com.chatjob.time.FixedTimeSource;
@@ -581,6 +582,62 @@ class UnreadWatcherTest {
         assertThat(task.getLastError()).contains("我方");
     }
 
+    // ------------------------------------------------------------------ 人工接管
+
+    /**
+     * 接管后不打开会话：打开会清掉平台上的未读红点，人不在电脑前就会看到「已读没人回」，
+     * 比不读更糟（ADR-0016）。但列表页本来就在读的最后一句与未读数要留下来，
+     * 否则界面上「接管中」只剩一行标题，用户没有理由回到这个页面。
+     */
+    @Test
+    void 人工接管后不打开会话也不落任务但保留列表摘要() {
+        Fixture f = new Fixture(true);
+        Long id = f.replyStore.upsert(PLATFORM, "张三");
+        f.replyStore.byId.get(id).setAutoReplyPaused(1);
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "在吗，方便聊一下吗", 3));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.readCalls).isEmpty();
+        // 接管期间每一轮都会命中同一条判据，落任务等于留一条注定发不出去的待办
+        assertThat(f.mapper.rows).isEmpty();
+        assertThat(f.replyStore.lastThreadMessage).isEqualTo("在吗，方便聊一下吗");
+        assertThat(f.replyStore.lastThreadUnread).isEqualTo(3);
+        assertThat(r.threads()).isEqualTo(1);
+        assertThat(r.replied()).isZero();
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("人工接管") && m.contains("张三"));
+    }
+
+    /** 接管在关闭态同样生效：它的含义是「我自己聊」，与系统用什么方式替它说话无关 */
+    @Test
+    void 关闭态也守人工接管() {
+        Fixture f = new Fixture(false);
+        Long id = f.replyStore.upsert(PLATFORM, "李四");
+        f.replyStore.byId.get(id).setAutoReplyPaused(1);
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "你好", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.readCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+    }
+
+    /** 判过的质量随轮次带回编排层，由它推 SSE —— 判断层不碰通道 */
+    @Test
+    void 本轮的质量评估结果随轮次带回() {
+        Fixture f = new Fixture(true);
+        f.adapter.messages = List.of(new ChatMessage("mid-1", "你好", false, false));
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "你好", 1));
+        f.assessor.next = new QualityAssessor.Assessed(1L, PLATFORM, "张三", "Java 工程师",
+                "某公司", 88, "条件齐", true);
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(r.assessed()).hasSize(1);
+        assertThat(r.assessed().get(0).score()).isEqualTo(88);
+        assertThat(r.assessed().get(0).notified()).isTrue();
+    }
+
     // ------------------------------------------------------------------ 装配
 
     private static ReplyRuleEngine engineWith(String keyword, String reply) {
@@ -602,6 +659,7 @@ class UnreadWatcherTest {
         final FakeReplyStore replyStore = new FakeReplyStore(adapter);
         final FakeConfig config;
         final FakeReplier replier = new FakeReplier();
+        final FakeAssessor assessor = new FakeAssessor();
         final UnreadTaskStore taskStore;
         final UnreadWatcher watcher;
         final RecordingRunLog runLog = new RecordingRunLog();
@@ -610,7 +668,7 @@ class UnreadWatcherTest {
             this.config = new FakeConfig(aiReplyEnabled);
             this.mapper.events = adapter.events;
             this.taskStore = new UnreadTaskStore(mapper, TIME);
-            this.watcher = new UnreadWatcher(replyStore, taskStore, config, replier);
+            this.watcher = new UnreadWatcher(replyStore, taskStore, config, replier, assessor);
         }
     }
 
@@ -657,6 +715,36 @@ class UnreadWatcherTest {
         @Override
         public boolean toneCheckEnabled() {
             return toneCheck;
+        }
+    }
+
+    /**
+     * 质量评估的 fake。默认什么都不判 —— 这条链路的单测只关心「有没有被调、调了几次」，
+     * 判断本身由 {@code QualityAssessorTest} 与 {@code QualityJudgeTest} 覆盖。
+     */
+    private static class FakeAssessor extends QualityAssessor {
+        QualityAssessor.Assessed next;
+        final List<QualityAssessor.Assessed> calls = new ArrayList<>();
+
+        FakeAssessor() {
+            super(null, null, null, null, null, new ObjectMapper(), TIME);
+        }
+
+        @Override
+        public Budget budget() {
+            return new Budget(10);
+        }
+
+        @Override
+        public Assessed assessIfDue(String platform, String title, ConversationEntity conversation,
+                                    List<ChatMessage> messages, Budget budget, RunLog runLog) {
+            if (next == null) {
+                return null;
+            }
+            Assessed result = next;
+            next = null;
+            calls.add(result);
+            return result;
         }
     }
 
@@ -738,6 +826,15 @@ class UnreadWatcherTest {
         @Override
         public void recordHrMessage(ConversationEntity conversation) {
             // 效果采集不参与决策，这里不关心
+        }
+
+        String lastThreadMessage;
+        int lastThreadUnread = -1;
+
+        @Override
+        public void recordThreadObservation(ConversationEntity conversation, String lastMessage, int unread) {
+            lastThreadMessage = lastMessage;
+            lastThreadUnread = unread;
         }
 
         @Override

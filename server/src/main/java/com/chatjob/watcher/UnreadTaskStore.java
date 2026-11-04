@@ -48,6 +48,11 @@ public class UnreadTaskStore {
         public static final String AI_SKIPPED = "AI_SKIPPED";
         public static final String LOCATE_FAILED = "LOCATE_FAILED";
         public static final String MANUAL_RETRY = "MANUAL_RETRY";
+        /**
+         * 人工接管中，不再替这段会话回复（ADR-0016）。任务直接收尾而不是退回待办：
+         * 接管期间每一轮都会命中同一条判据，退回待办等于让它每轮空转一次。
+         */
+        public static final String SKIP_TAKEOVER = "SKIP_TAKEOVER";
 
         private Action() {
         }

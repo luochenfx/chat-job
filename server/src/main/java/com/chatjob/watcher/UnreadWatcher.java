@@ -6,6 +6,7 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
+import com.chatjob.quality.QualityAssessor;
 import com.chatjob.runlog.RunLog;
 import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.ConversationEntity;
@@ -57,13 +58,15 @@ public class UnreadWatcher {
     private final UnreadTaskStore taskStore;
     private final ConfigStore configStore;
     private final AiReplier aiReplier;
+    private final QualityAssessor qualityAssessor;
 
     public UnreadWatcher(ReplyStore replyStore, UnreadTaskStore taskStore, ConfigStore configStore,
-                         AiReplier aiReplier) {
+                         AiReplier aiReplier, QualityAssessor qualityAssessor) {
         this.replyStore = replyStore;
         this.taskStore = taskStore;
         this.configStore = configStore;
         this.aiReplier = aiReplier;
+        this.qualityAssessor = qualityAssessor;
     }
 
     /**
@@ -78,7 +81,8 @@ public class UnreadWatcher {
      *                   否则控制台会把「本会回复」显示成「已回复」，给操作者一个假的成功信号
      */
     public record SweepResult(int threads, int replied, int unmatched, int sensitive,
-                              int retried, int failed, int wouldReply) {
+                              int retried, int failed, int wouldReply,
+                              List<QualityAssessor.Assessed> assessed) {
     }
 
     /** 单个任务的收尾结论，只用于本轮计数与日志 */
@@ -283,6 +287,13 @@ public class UnreadWatcher {
                 try {
                     ConversationEntity conversation = replyStore.upsertConversation(
                             platform, thread.conversationId(), null);
+                    // 接管与 AI 开关无关：含义是「我自己聊」，不管系统用什么方式替它说话（ADR-0016 第 4 条）
+                    if (conversation.takenOver()) {
+                        replyStore.recordThreadObservation(conversation, thread.lastMessage(), thread.unread());
+                        runLog.info("跳过（人工接管中，不打开会话）| 会话=" + thread.title()
+                                + " | 未读=" + thread.unread());
+                        continue;
+                    }
                     List<ChatMessage> messages = adapter.readMessages(thread);
                     if (messages.isEmpty()) {
                         // 「读不到」不是「没有新消息」：留一行，否则这条未读在日志里凭空消失
@@ -410,12 +421,24 @@ public class UnreadWatcher {
             ReplyGuard.GuardOptions guard = new ReplyGuard.GuardOptions(
                     configStore.toneTerms(), configStore.toneCheckEnabled(), engine.sensitiveWords());
             AiBudget budget = new AiBudget(configStore.aiReplyMaxPerSweep());
+            // 质量判断另有一个预算：它与回复是两个用途，共用会让一段长对话把回复的名额吃掉
+            QualityAssessor.Budget qualityBudget = qualityAssessor.budget();
 
             for (UnreadTaskEntity task : taskStore.dueForRetry(MAX_RETRY_PER_SWEEP)) {
                 round.addRetried();
+                // 接管发生在任务排进重试之后也可能：那样这条任务会一直重试到上限。
+                // 每一轮都判一次，命中就收尾，不留一条注定发不出去的任务在表里
+                ConversationEntity retryConversation = replyStore.findById(task.getConversationId());
+                if (retryConversation != null && retryConversation.takenOver()) {
+                    taskStore.markDone(task, null, UnreadTaskStore.Action.SKIP_TAKEOVER, null,
+                            "人工接管中，不再替这段会话回复");
+                    runLog.info("跳过重试（人工接管中）| 会话=" + task.getPlatformConversationId());
+                    continue;
+                }
                 UnreadThread thread = UnreadThread.retry(
                         task.getPlatformConversationId(), task.getLastMessageDigest());
-                tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget, runLog));
+                tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget,
+                        qualityBudget, round, runLog));
             }
 
             for (UnreadThread thread : round.list()) {
@@ -425,6 +448,16 @@ public class UnreadWatcher {
                 try {
                     ConversationEntity conversation = replyStore.upsertConversation(
                             platform, thread.conversationId(), null);
+                    // 人工接管（ADR-0016）：不打开会话、不读消息、不落任务。打开会清掉平台上的
+                    // 未读红点，人不在电脑前就会看到「已读没人回」，比不读更糟。
+                    // 但列表页本来就给了最后一句与未读数，留下来界面才看得到「HR 又说了 N 条」
+                    if (conversation.takenOver()) {
+                        replyStore.recordThreadObservation(conversation, thread.lastMessage(), thread.unread());
+                        runLog.info("跳过（人工接管中，不打开会话）| 会话=" + thread.title()
+                                + " | 未读=" + thread.unread() + " | 摘要=「"
+                                + clipLog(thread.lastMessage()) + "」");
+                        continue;
+                    }
                     // 先落任务，再点开会话：点开后红点就没了，顺序错了这条消息就丢（spec 2.1 第 2 条）
                     UnreadTaskEntity task = taskStore.openOrTouch(
                             platform, thread.conversationId(), conversation.getId(),
@@ -436,7 +469,8 @@ public class UnreadWatcher {
                                 + thread.title());
                         continue;
                     }
-                    tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget, runLog));
+                    tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget,
+                            qualityBudget, round, runLog));
                 } catch (Exception e) {
                     runLog.warn("处理会话 " + thread.title() + " 失败: " + e.getMessage());
                 }
@@ -487,7 +521,8 @@ public class UnreadWatcher {
      */
     private Outcome process(PlatformAdapter adapter, ReplyRuleEngine engine, UnreadThread thread,
                             UnreadTaskEntity task, boolean collectMetrics,
-                            ReplyGuard.GuardOptions guard, AiBudget budget, RunLog runLog) {
+                            ReplyGuard.GuardOptions guard, AiBudget budget,
+                            QualityAssessor.Budget qualityBudget, UnreadSweep round, RunLog runLog) {
         Long conversationId = task.getConversationId();
         ConversationEntity conversation = replyStore.findById(conversationId);
         taskStore.claim(task);
@@ -540,6 +575,16 @@ public class UnreadWatcher {
         }
         if (collectMetrics && conversation != null) {
             replyStore.recordHrMessage(conversation);
+        }
+
+        // 岗位质量判断（ADR-0015）。放在这里而不是回复之后：消息已经读在手里，
+        // 而「判不判」与「这条回不回、回什么」无关 —— 后面每个分支都要重复一次调用就太蠢了
+        if (conversation != null) {
+            QualityAssessor.Assessed assessed = qualityAssessor.assessIfDue(
+                    conversation.getPlatform(), thread.title(), conversation, messages, qualityBudget, runLog);
+            if (assessed != null) {
+                round.addAssessed(assessed);
+            }
         }
 
         // 自己发的 / 重复 / 冷却 已在上面判完，这里只让引擎回答「敏不敏感、命中哪条规则」

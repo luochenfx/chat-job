@@ -21,6 +21,7 @@ import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.CombinationRunEntity;
 import com.chatjob.store.entity.PlatformConfigEntity;
 import com.chatjob.store.entity.RunEntity;
+import com.chatjob.quality.QualityAssessor;
 import com.chatjob.time.TimeSource;
 import com.chatjob.watcher.UnreadWatcher;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -534,6 +535,18 @@ public class RunService {
                     "retried", sweep.retried(),
                     "failed", sweep.failed(),
                     "dryRunWouldReply", sweep.wouldReply()));
+        }
+        // 一次评估一条事件：界面上要能立刻看到「刚判出 86 分」，而不是等下一轮列表刷新。
+        // 与控制台列表接口不是一回事 —— 这里是提示，列表才是事实
+        for (QualityAssessor.Assessed assessed : sweep.assessed()) {
+            publish(run, "quality.assessed", Map.of(
+                    "conversationId", assessed.conversationId(),
+                    "title", assessed.title(),
+                    "jobName", assessed.jobName(),
+                    "companyName", assessed.companyName(),
+                    "score", assessed.score(),
+                    "summary", assessed.summary(),
+                    "notified", assessed.notified()));
         }
     }
 

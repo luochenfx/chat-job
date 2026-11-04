@@ -85,7 +85,10 @@ public class WecomRobotNotifier implements Notifier {
      * @return 要追加的正文尾巴；被节流掉时返回 {@code null}
      */
     private String mergeOrThrottle(String kind, String platform) {
-        if ("test".equals(kind)) {
+        // 这两类不参与合并。test 是用户自己点的，写死了「一次点击一条」；
+        // hot-job 是一个岗位一条，「此外还有 N 次同类事件被合并」会把岗位身份丢掉 ——
+        // 用户看到的是「发现 A 岗位」，而 B 岗位只变成了一个数字
+        if ("test".equals(kind) || AlertCategory.ofKind(kind) == AlertCategory.HOT_JOB) {
             return "";
         }
         String throttleKey = throttleKeyOf(kind, platform);

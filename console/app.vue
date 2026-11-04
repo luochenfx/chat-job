@@ -44,6 +44,7 @@ const subtitle = computed(() => {
 const nav = [
   { to: '/', label: '概览' },
   { to: '/task', label: '任务' },
+  { to: '/quality', label: '重点关注' },
   { to: '/jobs', label: '岗位' },
   { to: '/config', label: '配置' },
   { to: '/system', label: '系统' }

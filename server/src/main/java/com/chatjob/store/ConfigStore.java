@@ -121,6 +121,42 @@ public class ConfigStore {
     /** 表达风格长度上限。超出截断保存 —— 宁可少一段约束，也避免一次误粘贴让 prompt 超出长度限制 */
     public static final int MAX_AI_REPLY_STYLE_CHARS = 500;
 
+    // ------------------------------------------------------------ 岗位质量（ADR-0015）
+
+    /**
+     * 默认判断点。列上存空串表示「没配过」，由这里提供唯一一份 —— 与 AI 味词表同一口径：
+     * 「空」不等于「不判断」，只是「用默认的这六条」。
+     *
+     * <p>前四条看岗位信息，后两条看对话。所以首次判断的门槛是「对话里至少有两条 HR 消息」，
+     * 否则后两条只能靠猜。
+     */
+    public static final List<String> DEFAULT_QUALITY_CRITERIA = List.of(
+            "非外包", "八小时工作制", "双休", "五险一金", "HR 邀约认真", "沟通深度足够");
+
+    /** 过线分数的默认值，与 V19 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_QUALITY_SCORE_LINE = 80;
+
+    /** 首次判断要求的 HR 消息条数，与 V19 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_QUALITY_MIN_HR_MESSAGES = 2;
+
+    /** 每个平台每天的判断次数上限，与 V19 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_QUALITY_MAX_PER_DAY = 30;
+
+    /** 每轮值守的判断次数上限，与 V19 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_QUALITY_MAX_PER_SWEEP = 3;
+
+    /** 重判间隔小时数，与 V19 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_QUALITY_REEVAL_HOURS = 6;
+
+    /** 判断点条数的安全上限：它是逐项判断，条数直接乘在模型输出长度上 */
+    public static final int MAX_QUALITY_CRITERIA = 20;
+
+    /** 单个判断点的字数上限。一行 50 字基本是误粘的整段话，丢弃而不是截断（与 AI 味词表同一理由） */
+    public static final int MAX_QUALITY_CRITERION_CHARS = 30;
+
+    /** 单轮判断上限的天花板。配成 10 已经等于关掉这道保护 */
+    public static final int MAX_QUALITY_MAX_PER_SWEEP = 10;
+
     private static final List<String> DEFAULT_REPEAT_MESSAGES = List.of(
             "请问是有什么顾虑需要沟通吗？",
             "我可以去贵公司面试吗？",
@@ -458,6 +494,14 @@ public class ConfigStore {
                     created.setAiReplyMaxPerSweep(DEFAULT_AI_REPLY_MAX_PER_SWEEP);
                     created.setAiReplySkipAlertPct(DEFAULT_AI_REPLY_SKIP_ALERT_PCT);
                     created.setAiReplySkipAlertMinSample(DEFAULT_AI_REPLY_SKIP_ALERT_MIN_SAMPLE);
+                    // 判断点存空串 = 用 DEFAULT_QUALITY_CRITERIA。这里不落默认六条，
+                    // 是为了让「用户清空 = 回到默认」与「用户没配过」是同一件事
+                    created.setQualityCriteria("");
+                    created.setQualityScoreLine(DEFAULT_QUALITY_SCORE_LINE);
+                    created.setQualityMinHrMessages(DEFAULT_QUALITY_MIN_HR_MESSAGES);
+                    created.setQualityMaxPerDay(DEFAULT_QUALITY_MAX_PER_DAY);
+                    created.setQualityMaxPerSweep(DEFAULT_QUALITY_MAX_PER_SWEEP);
+                    created.setQualityReevalHours(DEFAULT_QUALITY_REEVAL_HOURS);
                     created.setUpdatedAt(time.stamp());
                     log.info("已创建 AI 配置默认值");
                     return created;
@@ -536,6 +580,16 @@ public class ConfigStore {
      * 数字比实际大，用户会以为检查覆盖得更多。
      */
     public static List<String> parseToneTerms(String raw) {
+        return parseLines(raw);
+    }
+
+    /**
+     * 换行分隔的文本 → 列表：去空行、去首尾空白、去重（保持输入顺序）。
+     *
+     * <p>判断点、AI 味词表、未来的其它多行配置都走这里 —— 三处各写一遍「split + strip + 去重」，
+     * 迟早有一处忘了去重，而表现是「当前生效 N 条」比实际大。
+     */
+    public static List<String> parseLines(String raw) {
         if (raw == null || raw.isBlank()) {
             return List.of();
         }
@@ -557,8 +611,19 @@ public class ConfigStore {
      * 但「感谢您的关注，期待与您共事」截断后就是个没人认识的碎片），既拦不住原意又可能误杀。
      */
     public static ToneTerms normalizeToneTerms(String raw) {
+        Lines lines = normalizeLines(raw, MAX_TONE_TERMS, MAX_TONE_TERM_CHARS);
+        return new ToneTerms(lines.text(), lines.kept(), lines.dropped());
+    }
+
+    /**
+     * 多行文本的清洗核心：去空行、去首尾空白、去重（保序）、超条数或超长度的整行丢弃。
+     *
+     * <p><b>超长行整行丢弃，不截断。</b> 一行几十字基本是误粘的整段文本，截断后是个没人认识的
+     * 碎片，既达不到原意又可能误伤（AI 味词表那边的理由同样适用于判断点）。
+     */
+    private static Lines normalizeLines(String raw, int maxCount, int maxChars) {
         if (raw == null || raw.isBlank()) {
-            return new ToneTerms("", 0, 0);
+            return new Lines("", 0, 0);
         }
         Set<String> seen = new LinkedHashSet<>();
         int dropped = 0;
@@ -567,17 +632,17 @@ public class ConfigStore {
             if (term.isEmpty()) {
                 continue;
             }
-            if (term.length() > MAX_TONE_TERM_CHARS) {
-                dropped++;
-                continue;
-            }
-            if (seen.size() >= MAX_TONE_TERMS) {
+            if (term.length() > maxChars || seen.size() >= maxCount) {
                 dropped++;
                 continue;
             }
             seen.add(term);
         }
-        return new ToneTerms(String.join("\n", seen), seen.size(), dropped);
+        return new Lines(String.join("\n", seen), seen.size(), dropped);
+    }
+
+    /** @param dropped 被丢弃的行数（超长或超出条数上限），控制台据此提示用户 */
+    public record Lines(String text, int kept, int dropped) {
     }
 
     /** @param dropped 被丢弃的行数（超长或超出条数上限），控制台据此提示用户 */
@@ -669,6 +734,93 @@ public class ConfigStore {
         return Math.min(configured, MAX_AI_REPLY_MAX_PER_SWEEP);
     }
 
+    // ------------------------------------------------------------ 岗位质量（ADR-0015）
+
+    /**
+     * 判断点。存的是空串时返回默认六条 —— 「没配过」不等于「不判断」，
+     * 与 AI 味词表的口径一致（空 = 用默认那份，不是关闭检查）。
+     */
+    public List<String> qualityCriteria() {
+        List<String> list = parseLines(aiConfig().getQualityCriteria());
+        return list.isEmpty() ? DEFAULT_QUALITY_CRITERIA : list;
+    }
+
+    /** 保存前的清洗：去空行、去重、单条超 30 字与超 20 条整行丢弃 */
+    public static Lines normalizeQualityCriteria(String raw) {
+        return normalizeLines(raw, MAX_QUALITY_CRITERIA, MAX_QUALITY_CRITERION_CHARS);
+    }
+
+    /**
+     * 过线分数。合法区间 [0, 100]，{@code null} 按默认 80。
+     *
+     * <p>0 是合法值（「全都进重点关注」），不归一成默认值 —— 那会把一个明确意图
+     * 静默改成 80。与「skip 占比填 0 表示关闭」同一口径。
+     */
+    public int qualityScoreLine() {
+        return clampQualityScoreLine(aiConfig().getQualityScoreLine());
+    }
+
+    public static int clampQualityScoreLine(Integer configured) {
+        if (configured == null) {
+            return DEFAULT_QUALITY_SCORE_LINE;
+        }
+        return Math.max(0, Math.min(configured, 100));
+    }
+
+    /**
+     * 首次判断要求的 HR 消息条数。小于 1 会让「刚投出去、对方一个字没说」也进判断，
+     * 而六条判断点里有两条只能看对话，所以这里按 1 兜住并允许配到 10。
+     */
+    public int qualityMinHrMessages() {
+        return clampQualityMinHrMessages(aiConfig().getQualityMinHrMessages());
+    }
+
+    public static int clampQualityMinHrMessages(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_QUALITY_MIN_HR_MESSAGES;
+        }
+        return Math.min(configured, 10);
+    }
+
+    /** 每个平台每天最多判断几次。小于 1 等于关掉这个功能，所以回落默认值而不是按 0 办 */
+    public int qualityMaxPerDay() {
+        return clampQualityMaxPerDay(aiConfig().getQualityMaxPerDay());
+    }
+
+    public static int clampQualityMaxPerDay(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_QUALITY_MAX_PER_DAY;
+        }
+        return Math.min(configured, 200);
+    }
+
+    /** 每轮值守最多判断几个。与 {@code aiReplyMaxPerSweep} 同一形状：超出的留到下一轮，不算失败 */
+    public int qualityMaxPerSweep() {
+        return clampQualityMaxPerSweep(aiConfig().getQualityMaxPerSweep());
+    }
+
+    public static int clampQualityMaxPerSweep(Integer configured) {
+        if (configured == null || configured < 1) {
+            return DEFAULT_QUALITY_MAX_PER_SWEEP;
+        }
+        return Math.min(configured, MAX_QUALITY_MAX_PER_SWEEP);
+    }
+
+    /**
+     * 重判间隔（小时）。0 是合法值：「每多一条消息就重判」，用户明确要求时按他填的办；
+     * 负数与 null 回落默认值。
+     */
+    public int qualityReevalHours() {
+        return clampQualityReevalHours(aiConfig().getQualityReevalHours());
+    }
+
+    public static int clampQualityReevalHours(Integer configured) {
+        if (configured == null || configured < 0) {
+            return DEFAULT_QUALITY_REEVAL_HOURS;
+        }
+        return Math.min(configured, 720);
+    }
+
     // ------------------------------------------------------------ 告警配置
 
     /**
@@ -686,6 +838,7 @@ public class ConfigStore {
                     created.setAlertAbnormal(1);
                     created.setAlertStandby(1);
                     created.setAlertDutyEnd(1);
+                    created.setAlertWatch(1);
                     created.setUpdatedAt(time.stamp());
                     log.info("已创建告警配置默认值");
                     return created;

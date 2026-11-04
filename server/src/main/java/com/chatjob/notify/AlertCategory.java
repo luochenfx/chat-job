@@ -4,8 +4,7 @@ package com.chatjob.notify;
  * 告警类别（CONTEXT.md「告警类别」）。
  *
  * <p>分组依据是「要本人做什么」，不是「事件发生在线路的哪一段」：
- * 异常要人立刻处理，待命与时段结束只要知道就好。后者每天必然发生，
- * 能单独关掉才不会逼着人把整个告警静音。
+ * 异常要人立刻处理，其余三类只要知道就好。它们能单独关掉，才不会逼着人把整个告警静音。
  */
 public enum AlertCategory {
 
@@ -16,7 +15,15 @@ public enum AlertCategory {
     STANDBY("进入待命"),
 
     /** 值守时段结束，当天不再操作页面。每天一次 */
-    DUTY_END("时段结束");
+    DUTY_END("时段结束"),
+
+    /**
+     * 出现了值得自己接手的岗位：某段会话的岗位质量过了线（ADR-0015）。
+     *
+     * <p>与前三类并列而不是并进异常：前三类说的都是「系统怎么样了」，这一类说的是
+     * 「有个机会」，要人做的事也不同（不是修，是去聊）。混进异常会让那个开关失去意义。
+     */
+    HOT_JOB("重点关注");
 
     private final String label;
 
@@ -42,6 +49,7 @@ public enum AlertCategory {
             case "test" -> null;
             case "standby" -> STANDBY;
             case "duty-end" -> DUTY_END;
+            case "hot-job" -> HOT_JOB;
             default -> ABNORMAL;
         };
     }

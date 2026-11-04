@@ -169,7 +169,7 @@ class ScanSegmentTest {
     /** 扫描段只在每 5 张卡 / 120 秒时巡检；本测试的卡数都不到 5，走到这里就是编排错了 */
     private static final class NeverCalledWatcher extends UnreadWatcher {
         NeverCalledWatcher() {
-            super(null, null, null, null);
+            super(null, null, null, null, null);
         }
 
         @Override

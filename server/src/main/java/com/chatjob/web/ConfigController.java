@@ -152,7 +152,10 @@ public class ConfigController {
                                String aiReplyStyle, Integer aiReplyTimeoutSeconds,
                                Integer aiReplyMaxPerSweep, Boolean aiReplyToneCheckEnabled,
                                String aiReplyToneTerms, Integer aiReplySkipAlertPct,
-                               Integer aiReplySkipAlertMinSample) {
+                               Integer aiReplySkipAlertMinSample,
+                               String qualityCriteria, Integer qualityScoreLine,
+                               Integer qualityMinHrMessages, Integer qualityMaxPerDay,
+                               Integer qualityMaxPerSweep, Integer qualityReevalHours) {
     }
 
     @GetMapping("/ai")
@@ -188,6 +191,16 @@ public class ConfigController {
         out.put("aiReplySkipAlertPct", ConfigStore.clampSkipAlertPct(entity.getAiReplySkipAlertPct()));
         out.put("aiReplySkipAlertMinSample",
                 ConfigStore.clampSkipAlertMinSample(entity.getAiReplySkipAlertMinSample()));
+        // 岗位质量（ADR-0015）。判断点回「库里存的那份」而不是生效的那份：
+        // 存的是空串表示「用默认六条」，控制台要能区分「你清空了」与「你在用默认」
+        out.put("qualityCriteria", entity.getQualityCriteria() == null ? "" : entity.getQualityCriteria());
+        out.put("qualityCriteriaDefault", String.join("\n", ConfigStore.DEFAULT_QUALITY_CRITERIA));
+        out.put("qualityCriteriaEffective", String.join("\n", configStore.qualityCriteria()));
+        out.put("qualityScoreLine", ConfigStore.clampQualityScoreLine(entity.getQualityScoreLine()));
+        out.put("qualityMinHrMessages", ConfigStore.clampQualityMinHrMessages(entity.getQualityMinHrMessages()));
+        out.put("qualityMaxPerDay", ConfigStore.clampQualityMaxPerDay(entity.getQualityMaxPerDay()));
+        out.put("qualityMaxPerSweep", ConfigStore.clampQualityMaxPerSweep(entity.getQualityMaxPerSweep()));
+        out.put("qualityReevalHours", ConfigStore.clampQualityReevalHours(entity.getQualityReevalHours()));
         return out;
     }
 
@@ -227,6 +240,7 @@ public class ConfigController {
         // 词表：清洗后落库，并把丢弃行数回给前端 —— 用户粘了一大段文本却只看到「已保存」，
         // 会以为整段都生效了
         int droppedTerms = 0;
+        int droppedCriteria = 0;
         if (body.aiReplyToneTerms() != null) {
             ConfigStore.ToneTerms terms = ConfigStore.normalizeToneTerms(body.aiReplyToneTerms());
             entity.setAiReplyToneTerms(terms.text());
@@ -239,10 +253,33 @@ public class ConfigController {
             entity.setAiReplySkipAlertMinSample(
                     ConfigStore.clampSkipAlertMinSample(body.aiReplySkipAlertMinSample()));
         }
+        // 岗位质量：全部「未传则保持原值」。判断点传空串是合法的（= 回到默认六条），
+        // 与 AI 味词表同一口径 —— 但「没提交这个字段」不能当成清空
+        if (body.qualityCriteria() != null) {
+            ConfigStore.Lines criteria = ConfigStore.normalizeQualityCriteria(body.qualityCriteria());
+            entity.setQualityCriteria(criteria.text());
+            droppedCriteria = criteria.dropped();
+        }
+        if (body.qualityScoreLine() != null) {
+            entity.setQualityScoreLine(ConfigStore.clampQualityScoreLine(body.qualityScoreLine()));
+        }
+        if (body.qualityMinHrMessages() != null) {
+            entity.setQualityMinHrMessages(ConfigStore.clampQualityMinHrMessages(body.qualityMinHrMessages()));
+        }
+        if (body.qualityMaxPerDay() != null) {
+            entity.setQualityMaxPerDay(ConfigStore.clampQualityMaxPerDay(body.qualityMaxPerDay()));
+        }
+        if (body.qualityMaxPerSweep() != null) {
+            entity.setQualityMaxPerSweep(ConfigStore.clampQualityMaxPerSweep(body.qualityMaxPerSweep()));
+        }
+        if (body.qualityReevalHours() != null) {
+            entity.setQualityReevalHours(ConfigStore.clampQualityReevalHours(body.qualityReevalHours()));
+        }
         configStore.saveAiConfig(entity);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("toneTermsDropped", droppedTerms);
+        out.put("qualityCriteriaDropped", droppedCriteria);
         return out;
     }
 
@@ -265,7 +302,7 @@ public class ConfigController {
     // ---------------------------------------------------------------- 告警配置
 
     public record NotifyConfigBody(String webhook, Boolean alertAbnormal,
-                                   Boolean alertStandby, Boolean alertDutyEnd) {
+                                   Boolean alertStandby, Boolean alertDutyEnd, Boolean alertWatch) {
     }
 
     /**
@@ -281,10 +318,12 @@ public class ConfigController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("configured", resolved.configured());
         out.put("source", resolved.source().name().toLowerCase(java.util.Locale.ROOT));
-        // 三个开关按「null 即开」回发，与 ConfigStore 的读法一致
+        // 四个开关按「null 即开」回发，与 ConfigStore 的读法一致
         out.put("alertAbnormal", entity.getAlertAbnormal() == null || entity.getAlertAbnormal() != 0);
         out.put("alertStandby", entity.getAlertStandby() == null || entity.getAlertStandby() != 0);
         out.put("alertDutyEnd", entity.getAlertDutyEnd() == null || entity.getAlertDutyEnd() != 0);
+        // 第四类：重点关注（V19）。它每天不一定发生，所以文案里没有「每天一次」那种说法
+        out.put("alertWatch", entity.getAlertWatch() == null || entity.getAlertWatch() != 0);
         // 节流窗口只读：它是「防刷屏」的实现手段，用户要控制的是上面三个开关。
         // 但要回发给界面，否则提示文案里那句「5 分钟」在 yaml 改成别的值之后就是假话
         out.put("throttleWindowSeconds", notifySettings.throttleWindowSeconds());
@@ -324,6 +363,9 @@ public class ConfigController {
         }
         if (body.alertDutyEnd() != null) {
             entity.setAlertDutyEnd(body.alertDutyEnd() ? 1 : 0);
+        }
+        if (body.alertWatch() != null) {
+            entity.setAlertWatch(body.alertWatch() ? 1 : 0);
         }
         configStore.saveNotifyConfig(entity);
         return Map.of("ok", true, "configured", notifySettings.configured());
