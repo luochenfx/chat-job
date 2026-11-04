@@ -63,7 +63,8 @@ class UnreadWatcherTest {
         assertThat(f.mapper.rows).isEmpty();
         assertThat(f.adapter.readCalls).containsExactly("read:张三");
         assertThat(r.threads()).isEqualTo(1);
-        // 未命中规则 → 关闭态只是计数，不建任务（UNMATCHED 不落库是既有行为）
+        // 未命中规则 → 关闭态只是计数，不建任务（UNMATCHED 不落库是既有行为）。
+        // 同一条消息在打开态计入 replied，见 打开态未命中只计入回复_不再重复计未命中
         assertThat(r.unmatched()).isEqualTo(1);
     }
 
@@ -97,6 +98,27 @@ class UnreadWatcherTest {
         assertThat(f.replier.inputs).hasSize(1);
         assertThat(f.replier.inputs.get(0).ruleText()).isNull();
         assertThat(f.replyStore.logs.get(0).getReplySource()).isEqualTo(ReplyLogEntity.SOURCE_AI);
+    }
+
+    /**
+     * 与 {@link #关闭态不碰任务表也不落任务()} 对照：同一条「未命中规则」的消息，
+     * 关闭态计入 {@code unmatched}（没兜底文案可发 = 漏回），打开态计入 {@code replied}。
+     *
+     * <p>这条断言的价值是它记录了「此处不该改」：{@code sweepWithTasks} 里 {@code unmatched}
+     * 从不自增，看起来像漏了，其实是两条路径语义不同。真去补上自增，控制台那句
+     * 「已回复 N 个，没匹配到规则 M 个」会把同一批会话算两遍。
+     */
+    @Test
+    void 打开态未命中只计入回复_不再重复计未命中() {
+        Fixture f = new Fixture(true);
+        f.replier.reply = AiReplier.Reply.ok("还招的，您这边主要看哪块？", "");
+        f.adapter.unread.add(UnreadThread.of("张三", "张三", "这个岗位还招人吗", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(r.threads()).isEqualTo(1);
+        assertThat(r.replied()).isEqualTo(1);
+        assertThat(r.unmatched()).isZero();
     }
 
     @Test
