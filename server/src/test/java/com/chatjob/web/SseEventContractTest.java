@@ -1,12 +1,12 @@
 package com.chatjob.web;
 
+import com.chatjob.testing.RepoRoot;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -47,8 +47,8 @@ class SseEventContractTest {
 
     @Test
     void 后端发的每个事件前端都订阅_前端订阅的每个事件后端都在发() throws IOException {
-        Set<String> backend = scanBackend(repoRoot()).literals();
-        Set<String> frontend = declaredByFrontend(repoRoot());
+        Set<String> backend = scanBackend(RepoRoot.of()).literals();
+        Set<String> frontend = declaredByFrontend(RepoRoot.of());
 
         assertThat(backend)
                 .as("后端 publish 的字面量必须与 console/composables/runEvents.ts 的键一一对应"
@@ -58,7 +58,7 @@ class SseEventContractTest {
 
     @Test
     void 用变量发事件的地方只有两处通道转发() throws IOException {
-        List<String> variableCalls = scanBackend(repoRoot()).variableCalls();
+        List<String> variableCalls = scanBackend(RepoRoot.of()).variableCalls();
 
         assertThat(variableCalls)
                 .as("新增了用变量发事件的地方：上一条守卫扫不到它。要么改成字面量，"
@@ -126,15 +126,6 @@ class SseEventContractTest {
                 .as("没从 %s 里解析出任何事件名：正则与文件格式已经对不上了", ts)
                 .isNotEmpty();
         return names;
-    }
-
-    /**
-     * 仓库根。<b>mvn 在 {@code server/} 下跑</b>，而前端在仓库根的 {@code console/}，
-     * 所以不能直接拿 {@code user.dir} 拼。两种启动位置都认。
-     */
-    private static Path repoRoot() {
-        Path cwd = Paths.get(System.getProperty("user.dir", ".")).toAbsolutePath();
-        return Files.isDirectory(cwd.resolve("src/main/java")) ? cwd.getParent() : cwd;
     }
 
     private static int lineOf(String text, int index) {

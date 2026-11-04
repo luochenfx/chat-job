@@ -40,6 +40,23 @@ public class ConfigStore {
     /** HR 活跃度下限的默认值，与 V1 迁移里的列默认值保持一致；取 {@code ActiveLevel.selectable()} 的一项 */
     public static final String DEFAULT_ACTIVE_LEVEL_FLOOR = "本月";
 
+    /**
+     * 卡间停顿的默认秒数，与 V1 迁移里的列默认值保持一致。实际等待在 [w/2, w] 之间随机。
+     *
+     * <p>它有两个读者：扫描段两次投递之间的停顿，以及 Run 的「活动中断」阈值。
+     * 两者必须用同一个数字 —— 一处改了另一处不改，界面会在还在正常等待时报「卡死」。
+     */
+    public static final int DEFAULT_WAIT_TIME_SECONDS = 10;
+
+    /** 当日投递配额的默认值，与 V1 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_DAILY_DELIVERY_QUOTA = 30;
+
+    /** 当日评估上限的默认值，与 V1 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_DAILY_EVAL_LIMIT = 150;
+
+    /** 单个搜索组合最多加载多少张卡的默认值，与 V1 迁移里的列默认值保持一致 */
+    public static final int DEFAULT_SCROLL_ROUND_LIMIT = 300;
+
     /** 未读列表一轮扫描条数的默认值，与 V6 迁移里的列默认值保持一致 */
     public static final int DEFAULT_UNREAD_SCAN_LIMIT = 100;
 
@@ -302,10 +319,10 @@ public class ConfigStore {
         created.setIndustry("[]");
         created.setStage("[]");
         created.setActiveLevelFloor(DEFAULT_ACTIVE_LEVEL_FLOOR);
-        created.setWaitTimeSeconds(10);
-        created.setDailyDeliveryQuota(30);
-        created.setDailyEvalLimit(150);
-        created.setScrollRoundLimit(300);
+        created.setWaitTimeSeconds(DEFAULT_WAIT_TIME_SECONDS);
+        created.setDailyDeliveryQuota(DEFAULT_DAILY_DELIVERY_QUOTA);
+        created.setDailyEvalLimit(DEFAULT_DAILY_EVAL_LIMIT);
+        created.setScrollRoundLimit(DEFAULT_SCROLL_ROUND_LIMIT);
         created.setCombinationTimeLimitSec(DEFAULT_COMBINATION_TIME_LIMIT_SEC);
         created.setUnreadScanLimit(DEFAULT_UNREAD_SCAN_LIMIT);
         created.setWatchIntervalSeconds(DEFAULT_WATCH_INTERVAL_SECONDS);
@@ -354,6 +371,24 @@ public class ConfigStore {
             return DEFAULT_UNREAD_SCAN_LIMIT;
         }
         return Math.min(configured, MAX_UNREAD_SCAN_LIMIT);
+    }
+
+    /**
+     * 卡间停顿归一。
+     *
+     * <p>{@code null} 只在「实体刚构造、还没落库」时出现（表列是 NOT NULL），
+     * 但这一刻是真实存在的：{@code readOrCreate} 建行之后、插入之前就会有人读它。
+     * 所以回退值必须与建行时写的值同源，否则新装用户与内存实体看到的是两个数。
+     *
+     * <p>取值不设上下界：它是「等多久」，填 1 秒就按 1 秒等。
+     */
+    public static int clampWaitTimeSeconds(Integer configured) {
+        return configured == null ? DEFAULT_WAIT_TIME_SECONDS : configured;
+    }
+
+    /** 单组合滚动轮数归一，口径同 {@link #clampWaitTimeSeconds} */
+    public static int clampScrollRoundLimit(Integer configured) {
+        return configured == null ? DEFAULT_SCROLL_ROUND_LIMIT : configured;
     }
 
     /**

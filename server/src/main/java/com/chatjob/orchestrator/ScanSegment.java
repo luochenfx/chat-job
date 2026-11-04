@@ -111,7 +111,7 @@ final class ScanSegment {
                 SearchQuery query = new SearchQuery(combo.getCity(), combo.getKeyword());
                 adapter.openSearch(query);
                 ScrollOutcome scroll = adapter.scrollUntilEnd(
-                        cfg.getScrollRoundLimit() == null ? 300 : cfg.getScrollRoundLimit(),
+                        ConfigStore.clampScrollRoundLimit(cfg.getScrollRoundLimit()),
                         host::stopRequested);
                 combo.setCardsSeen(scroll.cards());
                 runLog.info("组合 #" + combo.getSeq() + " 加载 " + scroll.cards() + " 张卡片（"
@@ -291,7 +291,7 @@ final class ScanSegment {
     }
 
     private void pauseFor(PlatformConfigEntity cfg, String next) {
-        int wait = cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds();
+        int wait = ConfigStore.clampWaitTimeSeconds(cfg.getWaitTimeSeconds());
         int min = Math.max(1, wait / 2);
         int max = Math.max(min + 1, wait);
         int millis = ThreadLocalRandom.current().nextInt(min * 1000, max * 1000);

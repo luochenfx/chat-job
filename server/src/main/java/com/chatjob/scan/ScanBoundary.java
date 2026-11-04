@@ -1,5 +1,6 @@
 package com.chatjob.scan;
 
+import com.chatjob.store.ConfigStore;
 import com.chatjob.store.entity.PlatformConfigEntity;
 
 import java.util.Optional;
@@ -16,6 +17,8 @@ import java.util.Optional;
  * 量好后传进来。{@link #quotaOf} / {@link #evalLimitOf} 只负责「没配过时按多少算」，
  * 它们跟判据住在一起，是因为「配额是 30」这件事只有配上「到了就停」才有意义 ——
  * 分开放就会出现「判据用 30、文案用 150」那种只在日志里看得见的错位。
+ * 数字本身（30 / 150）定义在 {@code ConfigStore}，这里只引用：建行时写的就是同一个常量，
+ * 再抄一份就会在「新装的行」与「刚构造的实体」之间分叉。
  *
  * <p><b>判定顺序即优先级</b>，顺序本身是被测对象：
  * <ol>
@@ -33,14 +36,23 @@ public final class ScanBoundary {
     private ScanBoundary() {
     }
 
-    /** 投递配额的缺省值。库里这一列有 DEFAULT，读到 null 只可能是实体刚构造还没落库 */
+    /**
+     * 投递配额的缺省值。库里这一列有 DEFAULT，读到 null 只可能是实体刚构造还没落库。
+     *
+     * <p>数字本身定义在 {@link ConfigStore}：建行时写的就是它，这里再抄一份就会在
+     * 「新装的行」与「刚构造的实体」之间分叉。判据留在本类，缺省值只引用不定义。
+     */
     public static int quotaOf(PlatformConfigEntity cfg) {
-        return cfg.getDailyDeliveryQuota() == null ? 30 : cfg.getDailyDeliveryQuota();
+        return cfg.getDailyDeliveryQuota() == null
+                ? ConfigStore.DEFAULT_DAILY_DELIVERY_QUOTA
+                : cfg.getDailyDeliveryQuota();
     }
 
     /** 评估上限的缺省值，口径同上 */
     public static int evalLimitOf(PlatformConfigEntity cfg) {
-        return cfg.getDailyEvalLimit() == null ? 150 : cfg.getDailyEvalLimit();
+        return cfg.getDailyEvalLimit() == null
+                ? ConfigStore.DEFAULT_DAILY_EVAL_LIMIT
+                : cfg.getDailyEvalLimit();
     }
 
     /**

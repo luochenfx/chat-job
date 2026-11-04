@@ -335,6 +335,7 @@ cd console && npm run build
 | [`adr/0011-single-row-config-and-rule-transaction.md`](adr/0011-single-row-config-and-rule-transaction.md) | 单行配置由唯一索引保证，规则与文案的写回放进事务（已实现） |
 | [`adr/0012-platform-page-kit.md`](adr/0012-platform-page-kit.md) | 两个适配器的页面动作收进一个 kit，选择器留在适配器（已实现；真实一轮已跑，卡片数与改动前一致） |
 | [`adr/0013-sse-event-contract.md`](adr/0013-sse-event-contract.md) | SSE 事件名只有一份前端清单，订阅与文案都从它派生；后端字面量由源码扫描比对（已实现） |
+| [`adr/0014-config-defaults-single-site.md`](adr/0014-config-defaults-single-site.md) | 配置缺省值只在 ConfigStore 定义一次，跨语言的初始值由测试守（已实现） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

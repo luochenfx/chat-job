@@ -909,7 +909,7 @@ public class RunService {
         PlatformConfigEntity cfg = configStore.platformConfig(adapter().platform());
         RunStatus status = run == null || run.getStatus() == null ? null : RunStatus.valueOf(run.getStatus());
         return ActivityStaleness.staleAfterSeconds(status,
-                cfg.getWaitTimeSeconds() == null ? 10 : cfg.getWaitTimeSeconds(),
+                ConfigStore.clampWaitTimeSeconds(cfg.getWaitTimeSeconds()),
                 ConfigStore.clampWatchInterval(cfg.getWatchIntervalSeconds()));
     }
 
