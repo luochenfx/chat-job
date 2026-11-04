@@ -88,11 +88,6 @@ public class FakePlatformAdapter implements PlatformAdapter {
     }
 
     @Override
-    public int cardCount() {
-        return cards;
-    }
-
-    @Override
     public JobDetail fetchDetail(int cardIndex) {
         detailCalls.add(cardIndex);
         return details.apply(cardIndex);

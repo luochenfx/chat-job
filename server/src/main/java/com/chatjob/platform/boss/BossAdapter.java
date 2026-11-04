@@ -295,11 +295,6 @@ public class BossAdapter implements PlatformAdapter {
         });
     }
 
-    @Override
-    public int cardCount() {
-        return executor.call(() -> ensureListPage().locator(BossSelectors.CARD).count());
-    }
-
     // ---------------------------------------------------------------- 抓详情
 
     @Override

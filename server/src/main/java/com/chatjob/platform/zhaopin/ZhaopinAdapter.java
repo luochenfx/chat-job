@@ -431,21 +431,6 @@ public class ZhaopinAdapter implements PlatformAdapter {
         }
     }
 
-    /**
-     * 能处理的卡数就是 DOM 卡片数。
-     *
-     * <p>早期要跟"已解析到的记录数"取 min（多出来的卡片没有编号），现在编号来自点开后的面板，
-     * 每一张卡片都能处理，取 min 反而会把后面的 176 个岗位挡掉。
-     */
-    @Override
-    public int cardCount() {
-        return executor.call(() -> {
-            int cards = ensureListPage().locator(ZhaopinSelectors.CARD).count();
-            log.debug("列表页当前有 {} 张岗位卡片", cards);
-            return cards;
-        });
-    }
-
     // ---------------------------------------------------------------- 抓详情
 
     /**

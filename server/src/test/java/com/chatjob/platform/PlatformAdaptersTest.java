@@ -117,11 +117,6 @@ class PlatformAdaptersTest {
             }
 
             @Override
-            public int cardCount() {
-                throw new UnsupportedOperationException("不参与本测试");
-            }
-
-            @Override
             public JobDetail fetchDetail(int cardIndex) {
                 throw new UnsupportedOperationException("不参与本测试");
             }

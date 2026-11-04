@@ -52,11 +52,18 @@ public interface PlatformAdapter {
      */
     ScrollOutcome scrollUntilEnd(int roundLimit, BooleanSupplier stop);
 
-    int cardCount();
-
     /**
-     * 点第 index 张卡片并抓详情接口。返回 null 表示这张卡没抓到（已改版 / 请求超时）。
+     * 点第 {@code cardIndex} 张卡片并抓详情接口。返回 null 表示这张卡没抓到（已改版 / 请求超时）。
      * 抓不到时由调用方决定是跳过还是熔断。
+     *
+     * <p><b>{@code cardIndex} 是「列表里按滚动顺序的第几张」，不是岗位标识。</b>
+     * 它只有配上「刚滚动过的那个列表」才有意义，所以调用方必须先用 {@link #scrollUntilEnd}
+     * 把列表加载到底；实现内部每次都按索引重新定位，不缓存卡片句柄 ——
+     * 两个平台的列表都会重渲染，缓存的 Locator 迟早失效。
+     *
+     * <p>由此有一条已知限制：同日续扫时，断点里的索引若碰上列表重排，会指向另一张卡。
+     * 表现是漏扫或重扫几张，不会错投 —— 每张卡仍要过一遍已投判定与冷却。
+     * 要彻底解决得让断点记岗位 id 并在列表里回找，那是另一件事。
      */
     JobDetail fetchDetail(int cardIndex);
 
