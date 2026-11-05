@@ -296,9 +296,29 @@ public class SystemController {
         out.put("quota", cfg.getDailyDeliveryQuota());
         out.put("evaluated", runStore.evaluatedToday(platform));
         out.put("evalLimit", cfg.getDailyEvalLimit());
+        out.put("series", series(platform));
         out.put("resumeOnRequest", replyStore.resumeOnRequestToday(platform));
         out.put("browserReady", browserReady(platform));
         out.put("running", runServices.of(platform).isRunning());
+        return out;
+    }
+
+    /**
+     * 概览卡里的 7 日走势。
+     *
+     * <p>挂在这一份快照里，不单开「按平台取 7 日」的接口：前端本来就靠一次
+     * {@link #overview()} 取全，多一次请求就多一个「卡上的数字与曲线取自不同时刻」的
+     * 窗口，而唯一的消费者就是这张卡。
+     *
+     * <p>{@code days} 让前端算横向位置时不必自己假设窗口长度；点里同时带 {@code day} 与
+     * {@code offset}，缺行时自然少一个 offset —— 断开由前端按 offset 是否连续判断，
+     * 后端不做任何补齐（ADR-0018 第 6 条）。
+     */
+    private Map<String, Object> series(String platform) {
+        List<RunStore.CounterPoint> points = runStore.counterSeries(platform);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("days", RunStore.SERIES_DAYS);
+        out.put("points", points);
         return out;
     }
 

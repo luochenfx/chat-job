@@ -313,7 +313,7 @@ public class RunStore {
      * <p>写成常量而不是参数：ADR-0018 第 3 条拒绝 30 / 90 日选择器 —— 真实历史只有几天，
      * 给一个永远填不满的控件比不给更糟。要放开这个窗口，先改那条决策。
      */
-    private static final int SERIES_DAYS = 7;
+    public static final int SERIES_DAYS = 7;
 
     /**
      * 一天一个点。{@code offset} 是「距今几天」，0 = 今天，6 = 六天前。
