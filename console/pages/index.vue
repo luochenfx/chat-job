@@ -164,9 +164,16 @@ const { show } = useToast()
 const { ensure } = usePlatform()
 const nowMs = useTickClock()
 
-const data = ref<any>(null)
-const busy = ref(false)
-let timer: ReturnType<typeof setInterval> | null = null
+/*
+ * 一次取全：分开请求「状态 + N 个当前 Run + N 份配置」之间会有先后，
+ * 卡片会显示自相矛盾的组合（Run 已结束、计数还是上一轮的）。
+ * 平台清单要先就位 —— 卡片的顺序与「有哪些平台」都来自它。
+ * 轮询、卸载清表、失败保留上一份数据都在 usePolledData 里。
+ */
+const { data, busy, refresh } = usePolledData(
+  () => ensure().then(() => call('/system/overview')),
+  5000
+)
 
 const global = computed<any>(() => data.value?.global || null)
 const cards = computed<any[]>(() => data.value?.platforms || [])
@@ -273,28 +280,6 @@ async function runAction(c: any) {
   }
 }
 
-async function refresh() {
-  busy.value = true
-  try {
-    await ensure()
-    // 一次取全：分开请求「状态 + N 个当前 Run + N 份配置」之间会有先后，
-    // 卡片会显示自相矛盾的组合（Run 已结束、计数还是上一轮的）
-    data.value = await call('/system/overview')
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
-}
-
-onMounted(() => {
-  refresh()
-  timer = setInterval(refresh, 5000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
-})
 </script>
 
 <style scoped>
