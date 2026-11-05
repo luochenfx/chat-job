@@ -2,9 +2,10 @@
 
 ## Status
 
-accepted（2026-11-05）。**尚未实现。** 第一批改动是 `RunStore` 的 7 日读取（`DailyCounterMapper`
+accepted（2026-11-05），已实现（0.5.0）。落地位置：`RunStore.counterSeries` 读 7 日（`DailyCounterMapper`
 保持空 mapper：它现在只用于插入，读走 `JdbcTemplate`，与 `deliveredToday` 同处）、`/api/system/overview`
-在每张平台卡里多带一段 7 日序列，以及 `index.vue` 卡内的两条 sparkline。
+在每张平台卡里多带一段 7 日序列（`series.days` + `points[]`，点里带 `offset`）、
+`console/components/Sparkline.vue` 画线，由 `index.vue` 卡内的两条 sparkline 使用。
 
 ## Context
 
