@@ -76,6 +76,15 @@
                 {{ c.delivered ?? 0 }}<span class="pstat-den"> / {{ c.quota ?? '—' }}</span>
               </template>
             </div>
+            <!-- 近 7 天：数字回答「今天」，这条回答「这几天在升还是降」。
+                 从没跑过的平台是空槽位，不是一条贴着 0 的线；历史里的缺口会断开 -->
+            <Sparkline
+              :points="c.series?.points || []"
+              :days="c.series?.days || 7"
+              metric="delivered"
+              :ceiling="c.quota"
+              label="主动投递"
+            />
           </div>
           <div class="pstat">
             <div class="pstat-label">应要求发的简历</div>
@@ -90,6 +99,13 @@
                 {{ c.evaluated ?? 0 }}<span class="pstat-den"> / {{ c.evalLimit ?? '—' }}</span>
               </template>
             </div>
+            <Sparkline
+              :points="c.series?.points || []"
+              :days="c.series?.days || 7"
+              metric="evaluated"
+              :ceiling="c.evalLimit"
+              label="查看岗位"
+            />
           </div>
         </div>
 
