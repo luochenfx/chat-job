@@ -14,7 +14,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /** Run / 组合队列 / 日志 / 当日计数 的读写。 */
@@ -303,6 +306,58 @@ public class RunStore {
     }
 
     // ---------------------------------------------------------------- 当日计数
+
+    /**
+     * 概览卡里走势图的窗口长度。
+     *
+     * <p>写成常量而不是参数：ADR-0018 第 3 条拒绝 30 / 90 日选择器 —— 真实历史只有几天，
+     * 给一个永远填不满的控件比不给更糟。要放开这个窗口，先改那条决策。
+     */
+    private static final int SERIES_DAYS = 7;
+
+    /**
+     * 一天一个点。{@code offset} 是「距今几天」，0 = 今天，6 = 六天前。
+     *
+     * <p>偏移在后端算，不让界面自己减日期：前端没有可信的「今天」（浏览器时区与本进程
+     * {@link TimeSource} 不是同一个），少一处日期运算就少一种画错位的可能。
+     */
+    public record CounterPoint(String day, int offset, int delivered, int evaluated) {
+    }
+
+    /**
+     * 最近 {@value #SERIES_DAYS} 天的投递与评估计数，按日期升序。
+     *
+     * <p><b>没有行的那天不会出现在结果里，也不补 0</b>（ADR-0018 第 6 条）：
+     * 「这天投了 0 个」是行存在、值为 0；「这天没跑」是根本没有行。两者在曲线上必须是
+     * 真实 0 点与断开的区别，否则一个从没跑过的平台会被读成「天天投 0 个」。
+     *
+     * <p>右边界卡在今天：时钟回拨或手工写入的「明天」那行不该进曲线。
+     *
+     * <p>日期解析不出来的行跳过并记一条 WARN。概览页每 5 秒轮询一次，一行脏数据不该让
+     * 整页 500 —— 那会让人以为「概览坏了」，而不是「库里有一行脏了」。
+     */
+    public List<CounterPoint> counterSeries(String platform) {
+        String todayText = time.today();
+        LocalDate today = LocalDate.parse(todayText);
+        return jdbc.query("""
+                SELECT day, delivered, evaluated FROM daily_counter
+                 WHERE platform = ? AND day >= ? AND day <= ?
+                 ORDER BY day
+                """,
+                (rs, rowNum) -> {
+                    String day = rs.getString("day");
+                    try {
+                        return new CounterPoint(day,
+                                (int) (today.toEpochDay() - LocalDate.parse(day).toEpochDay()),
+                                rs.getInt("delivered"), rs.getInt("evaluated"));
+                    } catch (DateTimeParseException e) {
+                        log.warn("daily_counter 有一行的日期读不出来，已跳过：platform={} day={}", platform, day);
+                        return null;
+                    }
+                },
+                platform, today.minusDays(SERIES_DAYS - 1L).toString(), todayText)
+                .stream().filter(Objects::nonNull).toList();
+    }
 
     public DailyCounterEntity counter(String platform) {
         DailyCounterEntity existing = dailyCounterMapper.selectOne(
