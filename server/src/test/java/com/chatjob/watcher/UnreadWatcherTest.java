@@ -353,6 +353,52 @@ class UnreadWatcherTest {
         assertThat(f.adapter.sendCalls).isEmpty();
     }
 
+    // ------------------------------------------------------------------ 平台系统消息
+
+    /**
+     * 2026-11-06 真实事故的完整复现：一次索要之后，平台播报「对方已同意，您的附件简历
+     * 已发送给对方」。这条回执含「简历」，被当成 HR 的新消息又触发了一次发简历。
+     */
+    @Test
+    void 最后一条是平台系统消息时既不回复也不发简历() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.messages = List.of(
+                new ChatMessage("mid-1", "简历发我一份", false, false),
+                new ChatMessage("mid-2", "对方已同意，您的附件简历已发送给对方", false, false, true));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "对方已同意，您的附件简历已发送给对方", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.resumeCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+        // 连 AI 都不该问：问了它就有机会把「回执」当成对方又提了一次要求
+        assertThat(f.replier.inputs).isEmpty();
+        assertThat(r.replied()).isZero();
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        // 收尾而不是重试：下一轮读到的还是这条回执
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(task.getLastAction()).isEqualTo(ReplyRuleEngine.Action.SKIP_SYSTEM.name());
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("系统消息") && m.contains("李四"));
+    }
+
+    @Test
+    void 关闭态同样不因系统回执再发一次简历() {
+        Fixture f = new Fixture(false);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.adapter.messages = List.of(new ChatMessage(
+                "mid-2", "对方已查看了您的附件简历", false, false, true));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "对方已查看了您的附件简历", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.resumeCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+        // 系统消息不进「未命中」也不进「敏感跳过」：它本来就不该在值守的账上出现
+        assertThat(r.unmatched()).isZero();
+        assertThat(r.sensitive()).isZero();
+    }
+
     // ------------------------------------------------------------------ 演练模式
 
     /**
@@ -523,6 +569,45 @@ class UnreadWatcherTest {
         assertThat(r.failed()).isEqualTo(1);
         // 没发出去就不该谎报「已回复」
         assertThat(r.replied()).isZero();
+    }
+
+    @Test
+    void 同一会话已经发过简历时不再发第二份() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", "好的，我把整理好的版本发您");
+        f.replyStore.resumeSent = true;
+        f.adapter.messages = List.of(new ChatMessage("mid-3", "简历再发我一份吧", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历再发我一份吧", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        // 一份简历只有一个版本：同一个 HR 收到第二份只会觉得这边是机器人
+        assertThat(f.adapter.resumeCalls).isEmpty();
+        // 但也不能把会话晾死 —— 有兜底文案就发它，与「按钮不可用」同一套处置
+        assertThat(f.adapter.sendCalls).containsExactly("send:李四:好的，我把整理好的版本发您");
+        assertThat(r.replied()).isEqualTo(1);
+        ReplyLogEntity log = f.replyStore.logs.get(0);
+        assertThat(log.getReasonCode()).isEqualTo("RESUME_ALREADY_SENT");
+        assertThat(log.getReasonNote()).contains("已发过简历");
+        UnreadTaskEntity task = f.mapper.rows.get(0);
+        assertThat(task.getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(task.getLastReasonCode()).isEqualTo("RESUME_ALREADY_SENT");
+    }
+
+    @Test
+    void 已发过简历且没有兜底文案时静默收尾() {
+        Fixture f = new Fixture(true);
+        f.replyStore.engine = resumeEngine("简历", null);
+        f.replyStore.resumeSent = true;
+        f.adapter.messages = List.of(new ChatMessage("mid-3", "简历再发我一份吧", false, false));
+        f.adapter.unread.add(UnreadThread.of("李四", "李四", "简历再发我一份吧", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.resumeCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.mapper.rows.get(0).getStatus()).isEqualTo(UnreadTaskStore.Status.DONE.name());
+        assertThat(f.mapper.rows.get(0).getLastAction()).isEqualTo(UnreadTaskStore.Action.AI_SKIPPED);
     }
 
     @Test
@@ -773,6 +858,8 @@ class UnreadWatcherTest {
         final Map<Long, ConversationEntity> byId = new HashMap<>();
         final Set<String> processed = new HashSet<>();
         final List<ReplyLogEntity> logs = new ArrayList<>();
+        /** 「这个会话已经发过简历」的伪造状态：真实判据查 reply_log，这里只关心它被读到了 */
+        boolean resumeSent;
         private long seq = 0;
 
         FakeReplyStore(FakePlatformAdapter adapter) {
@@ -816,6 +903,11 @@ class UnreadWatcherTest {
         @Override
         public boolean wasProcessed(Long conversationId, String messageId) {
             return processed.contains(conversationId + ":" + messageId);
+        }
+
+        @Override
+        public boolean resumeAlreadySent(Long conversationId) {
+            return resumeSent;
         }
 
         @Override

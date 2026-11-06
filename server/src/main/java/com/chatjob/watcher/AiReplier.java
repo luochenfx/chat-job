@@ -200,7 +200,9 @@ public class AiReplier {
             sb.append("（读不到历史消息）\n");
         } else {
             for (ChatMessage m : recent) {
-                String who = m.fromSelf() ? "我" : "HR";
+                // 系统消息（「附件简历请求已发送」这类回执）单独标一行，不冒充 HR 说的话：
+                // 标成 HR 会让模型以为对方又提了一次要求，标成「我」又等于替我编了一句话
+                String who = m.system() ? "系统" : (m.fromSelf() ? "我" : "HR");
                 String text = m.text() == null || m.text().isBlank() ? "[非文字消息]" : m.text().strip();
                 sb.append(who).append("：").append(text).append('\n');
             }

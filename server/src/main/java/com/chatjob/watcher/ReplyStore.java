@@ -247,6 +247,26 @@ public class ReplyStore {
     }
 
     /**
+     * 这个会话是否已经<b>成功</b>发过一份简历。
+     *
+     * <p>只认 {@code REPLY_RESUME}：那一行只在「简历卡片真的出现」时写，点失败、按钮是灰的、
+     * AI 失败降级都不写。所以它既能挡住「一份简历发三次」，又不会把「上次没发成功」
+     * 的重试一起挡掉。
+     *
+     * <p>口径是「该会话历史上发过」，不是「今天发过」：简历只有一个版本，同一个 HR
+     * 收到第二份只会觉得这边是机器人（2026-11-06 事故）。
+     */
+    public boolean resumeAlreadySent(Long conversationId) {
+        if (conversationId == null) {
+            return false;
+        }
+        Long count = logMapper.selectCount(Wrappers.<ReplyLogEntity>lambdaQuery()
+                .eq(ReplyLogEntity::getConversationId, conversationId)
+                .eq(ReplyLogEntity::getAction, ReplyLogEntity.ACTION_REPLY_RESUME));
+        return count != null && count > 0;
+    }
+
+    /**
      * 未命中列表（spec 3.8.3）。口径随 AI 开关切换：
      *
      * <ul>

@@ -341,6 +341,7 @@ cd console && npm run build
 | [`adr/0016-manual-takeover-per-conversation.md`](adr/0016-manual-takeover-per-conversation.md) | 人工接管以会话为单位，接管后不再打开它（已实现） |
 | [`adr/0017-job-quality-switch-per-platform.md`](adr/0017-job-quality-switch-per-platform.md) | 岗位质量判断按平台开关，默认关（已实现，V20） |
 | [`adr/0018-visualization-scope.md`](adr/0018-visualization-scope.md) | 可视化只做概览页里的 7 日走势：只读已有表、不引图表库、不算转化率（已实现，0.5.0） |
+| [`adr/0019-system-message-and-resume-once.md`](adr/0019-system-message-and-resume-once.md) | 系统消息不作为回复依据；卡片消息读出正文；简历同一会话只发一次（已实现，2026-11-06） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

@@ -37,9 +37,32 @@ public final class BossSelectors {
     /**
      * 消息文本节点。去掉了旧的 {@code .content}：实测命中 37 个，会把职位卡片容器一起算进来，
      * 导致卡片被当成有文字的消息喂给下游。
+     *
+     * <p>它<b>只覆盖纯文字气泡</b>：卡片类消息（索要简历、职位卡片、名片）里根本没有
+     * {@code .text} 节点 —— 实测 {@code hasTextEl=false}。所以卡片要走
+     * {@link #MESSAGE_TIME} 之外的整块正文，见 {@code BossAdapter#cardText}。
      */
     public static final String MESSAGE_TEXT = ".text, .message-text";
+    /**
+     * 消息项里的时间分隔（实测 {@code .item-time}，是消息项的子节点而不是独立条目）。
+     *
+     * <p>只有读卡片整块正文时才需要它：纯文字气泡走 {@link #MESSAGE_TEXT}，碰不到时间。
+     */
+    public static final String MESSAGE_TIME = ".item-time";
     public static final String MESSAGE_IMAGE = "img.message-image, .image-message img";
+    /**
+     * 消息条目的三个归属类名（读 {@code class} 属性，不是选择器；选择器见 {@link #MESSAGE_SELF}）。
+     *
+     * <p>{@code item-system} 是平台播报的回执与提示：「附件简历请求已发送」
+     * 「对方已同意了您的附件简历」都落在这里。它们不该被当成 HR 说的话 ——
+     * 详见 {@code Models.ChatMessage} 的 {@code system} 字段。
+     *
+     * <p>但<b>只认这一个类名是不够的</b>：卡片消息也会挂在 {@code item-system} 上
+     * （{@link #RESUME_CARD} 的实测记录里，我方发出的简历卡片就是）。所以取数时还要叠加
+     * 「正文来自 {@link #MESSAGE_TEXT}」这个条件，见 {@code BossAdapter#readMessages}。
+     */
+    public static final String MESSAGE_SYSTEM_CLASS = "item-system";
+    public static final String MESSAGE_SELF_CLASS = "item-myself";
     /** 消息条目的稳定 id（平台下发，长度统一 15 位）。缺失时才退化为「序号+文本hash」。 */
     public static final String MESSAGE_ID_ATTR = "data-mid";
 

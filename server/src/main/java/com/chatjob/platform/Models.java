@@ -130,7 +130,27 @@ public final class Models {
         }
     }
 
-    public record ChatMessage(String id, String text, boolean fromSelf, boolean image) {
+    /**
+     * 一条消息。
+     *
+     * <p>{@code fromSelf} 与 {@code system} 是<b>两个独立的维度</b>，不能合并成一个
+     * 「要不要回复」的布尔：前者是「我打的字」，后者是平台替我播报的回执
+     * （「附件简历请求已发送」「对方已查看了您的附件简历」）。
+     *
+     * <p>系统消息必须单独成维，是因为它既不是对方说的话，也不是我打的字，却<b>带着对方
+     * 说话时的关键词</b>。2026-11-06 的真实故障：那条「您的附件简历已发送给对方」整条命中
+     * 「简历索取」规则，于是刚发完的简历又被发了一次，一串回执连发三份。
+     *
+     * @param image 含图片（图片消息的文字通常读不到，只能靠这个标记说明「不是没内容」）
+     * @param system 平台系统消息。判据见 docs/tech/0002 F15：Boss 的 DOM 类名
+     *               {@code item-system} 已经把「本人 / 对方 / 系统」三分开了
+     */
+    public record ChatMessage(String id, String text, boolean fromSelf, boolean image, boolean system) {
+
+        /** 兼容非系统消息的构造点（两个适配器之外，大量单测直接用这个形状） */
+        public ChatMessage(String id, String text, boolean fromSelf, boolean image) {
+            this(id, text, fromSelf, image, false);
+        }
     }
 
     /**

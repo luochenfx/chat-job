@@ -854,7 +854,10 @@ public class ZhaopinAdapter implements PlatformAdapter {
                 if (body.isBlank() && !image) {
                     continue;
                 }
-                out.add(new ChatMessage(messageId(node, body), body, me, image));
+                // system 恒为 false：智联的消息节点上没有取证到系统消息的类名
+                // （4 个采样会话 item-system 均为 0，见 docs/tech/0002 F15 的 C12）。
+                // 那里的兜底是值守侧「同一会话只发一次简历」，不是猜一个类名。
+                out.add(new ChatMessage(messageId(node, body), body, me, image, false));
             }
         } catch (Exception e) {
             log.warn("解析消息列表失败: {}", e.getMessage());

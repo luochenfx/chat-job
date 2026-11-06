@@ -779,16 +779,56 @@ public class BossAdapter implements PlatformAdapter {
                     Locator item = items.nth(i);
                     String cls = item.getAttribute("class");
                     boolean fromSelf = item.locator(BossSelectors.MESSAGE_SELF).count() > 0
-                            || cls != null && cls.contains("item-myself");
+                            || cls != null && cls.contains(BossSelectors.MESSAGE_SELF_CLASS);
                     String text = kit.firstText(item, BossSelectors.MESSAGE_TEXT);
+                    boolean textFromNode = !text.isBlank();
+                    if (!textFromNode) {
+                        // 卡片消息没有 .text 节点，正文在卡片容器里。不回落就会把
+                        // 「对方发来一张索要简历的卡片」读成空文本 —— 那是 2026-11-06 漏掉
+                        // 丘女士那条索要的直接原因（判定=UNMATCHED，理由=消息为空或是图片）。
+                        text = cardText(item);
+                    }
+                    // 系统消息＝「挂在 item-system 上、并且正文来自文本节点」的那一类
+                    // （「您的附件简历已发送给对方」）。第二个条件不能省：Boss 的卡片也会挂在
+                    // item-system 上（本项目实测过：我方发出的绿色简历卡片就是），
+                    // 只按类名判会把「对方索要简历的那张卡片」一起跳过 —— 正是这次要修的另一半。
+                    boolean system = cls != null && cls.contains(BossSelectors.MESSAGE_SYSTEM_CLASS)
+                            && textFromNode;
                     boolean image = item.locator(BossSelectors.MESSAGE_IMAGE).count() > 0;
-                    out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image));
+                    out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image, system));
                 } catch (Exception e) {
                     log.debug("读取第 {} 条消息失败: {}", i, e.getMessage());
                 }
             }
             return out;
         });
+    }
+
+    /**
+     * 卡片类消息的可见正文。
+     *
+     * <p>Boss 的卡片（索要简历、职位卡片、名片）里没有 {@code .text} 节点，正文分散在卡片标题
+     * 与按钮上。这里取整块 {@code innerText} 再去掉时间分隔：卡片上的按钮字（「发送简历」
+     * 「点击预览附件简历」）<b>刻意保留</b> —— 它对判断「这是一张什么卡片」有用，
+     * 而只挑标题节点会在下一次改版时又读成空，把同一类漏读再犯一遍。
+     *
+     * <p>只在 {@code .text} 为空时调用，纯文字气泡走的仍是原来的路径。
+     */
+    private String cardText(Locator item) {
+        try {
+            String whole = item.innerText();
+            if (whole == null || whole.isBlank()) {
+                return "";
+            }
+            String time = kit.firstText(item, BossSelectors.MESSAGE_TIME);
+            if (!time.isEmpty()) {
+                whole = whole.replace(time, " ");
+            }
+            return whole.replaceAll("\\s+", " ").trim();
+        } catch (Exception e) {
+            log.debug("读取卡片消息正文失败: {}", e.getMessage());
+            return "";
+        }
     }
 
     /**

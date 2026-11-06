@@ -178,7 +178,8 @@ public class QualityJudge {
         sb.append('\n');
 
         List<ChatMessage> recent = tail(messages, MAX_CONTEXT_MESSAGES);
-        sb.append("对话记录（从早到晚，「我」是求职者本人，「HR」是招聘方）：\n");
+        sb.append("对话记录（从早到晚，「我」是求职者本人，「HR」是招聘方，")
+                .append("「系统」是平台播报的回执、不算任何一方说的话）：\n");
         if (recent.isEmpty()) {
             sb.append("（读不到消息）\n");
         } else {
@@ -186,7 +187,7 @@ public class QualityJudge {
                 sb.append("（更早的 ").append(messages.size() - recent.size()).append(" 条省略）\n");
             }
             for (ChatMessage m : recent) {
-                String who = m.fromSelf() ? "我" : "HR";
+                String who = m.system() ? "系统" : (m.fromSelf() ? "我" : "HR");
                 String text = m.text() == null || m.text().isBlank()
                         ? (m.image() ? "[图片]" : "[非文字消息]")
                         : m.text().strip();

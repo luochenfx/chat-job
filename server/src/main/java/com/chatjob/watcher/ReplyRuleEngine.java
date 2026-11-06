@@ -37,6 +37,14 @@ public class ReplyRuleEngine {
         /** 命中「发简历」类规则：执行真实动作，不产生文字 */
         SEND_RESUME,
         SKIP_SELF,
+        /**
+         * 平台系统消息（回执与提示），不作为回复依据。
+         *
+         * <p>与 {@link #SKIP_SELF} 分开而不是合并：两者在 {@code reply_log} 里混成一行，
+         * 「我明明没说话，为什么记成我方消息」就再也查不清。用户看到的是
+         * 「连着发了三份简历，触发文本是我自己发出去的回执」。
+         */
+        SKIP_SYSTEM,
         SKIP_DUPLICATE,
         SKIP_SENSITIVE,
         SKIP_THROTTLED,
@@ -66,12 +74,20 @@ public class ReplyRuleEngine {
     /**
      * @param text      收到的最后一条消息
      * @param fromSelf  是否自己发的
+     * @param system    是否平台系统消息（回执与提示）。与 {@code fromSelf} 同理：它不构成
+     *                  「对方说了话」，因此不参与关键词匹配
      * @param duplicate 该消息 id 是否已处理过
      * @param throttled 该会话是否处于回复冷却期
      */
-    public Decision decide(String text, boolean fromSelf, boolean duplicate, boolean throttled) {
+    public Decision decide(String text, boolean fromSelf, boolean system, boolean duplicate, boolean throttled) {
         if (fromSelf) {
             return new Decision(Action.SKIP_SELF, null, null, null, null, "自己发的消息");
+        }
+        if (system) {
+            // 系统消息带着与自己动作相关的话：「您的附件简历已发送给对方」整条含「简历」，
+            // 拿去匹配就会再发一次简历。它不是对方说的，也不是我说的，只能整条不看。
+            return new Decision(Action.SKIP_SYSTEM, null, null, null, null,
+                    "平台系统消息（回执与提示），不作为回复依据");
         }
         if (duplicate) {
             return new Decision(Action.SKIP_DUPLICATE, null, null, null, null, "消息已处理过");

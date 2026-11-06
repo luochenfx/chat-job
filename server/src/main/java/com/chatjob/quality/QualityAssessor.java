@@ -142,7 +142,9 @@ public class QualityAssessor {
             }
             int hrMessages = 0;
             for (ChatMessage m : messages == null ? List.<ChatMessage>of() : messages) {
-                if (!m.fromSelf()) {
+                // 系统消息不算 HR 说的话：把它数进去，一次「已查看简历」的回执就能把
+                // 「沟通深度」抬到评估线以上，白花一次模型调用
+                if (!m.fromSelf() && !m.system()) {
                     hrMessages++;
                 }
             }
