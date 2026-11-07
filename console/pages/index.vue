@@ -5,7 +5,7 @@
         <h1>概览</h1>
         <p>今天的投递进度。每个平台一张卡片</p>
       </div>
-      <button class="btn" :disabled="busy" @click="refresh">刷新</button>
+      <button class="btn" :disabled="busy || actionBusy" @click="refresh">刷新</button>
     </div>
 
     <!--
@@ -143,7 +143,7 @@
           <button
             class="btn"
             :class="actionOf(c).cls"
-            :disabled="busy || actionOf(c).disabled"
+            :disabled="busy || actionBusy || actionOf(c).disabled"
             :title="actionOf(c).reason"
             @click="runAction(c)"
           >
@@ -174,6 +174,9 @@ const { data, busy, refresh } = usePolledData(
   () => ensure().then(() => call('/system/overview')),
   5000
 )
+// busy 是「正在取数」，一次轮询或动作末尾的重读就会复位；动作本身要另有一个标记，
+// 否则按钮会在变更请求还没回来时就被轮询解锁
+const actionBusy = ref(false)
 
 const global = computed<any>(() => data.value?.global || null)
 const cards = computed<any[]>(() => data.value?.platforms || [])
@@ -268,7 +271,7 @@ async function runAction(c: any) {
       show(`已发送${hint}指令：${c.label}`)
     }
     await refresh()
-  }, { busy })
+  }, { busy: actionBusy })
 }
 
 </script>

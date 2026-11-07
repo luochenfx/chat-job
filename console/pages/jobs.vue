@@ -128,34 +128,32 @@ const { call, attempt } = useApi()
 const { show } = useToast()
 const { platforms, ensure } = usePlatform()
 
-const jobs = ref<any[]>([])
-const blacklist = ref<any[]>([])
 // 30 秒走一次字就够：这页的精度只到分钟，每秒重算两百多行不划算
 const nowMs = useTickClock(30000)
 const filter = ref('')
 // 空串 = 全部平台。与后端 /jobs 的缺省一致（不传就是全部）
 const platformFilter = ref('')
-const busy = ref(false)
 const newKind = ref('company')
 const newKeyword = ref('')
+
+// 挂载取一次、失败保留上一份、卸载清表都在 usePolledData 里；0 表示不轮询。
+// 两个接口的响应合成一份视图，页面不必各自维护两份状态
+const { data, busy, refresh } = usePolledData(async () => {
+  await ensure().catch(() => {})
+  const [j, b] = await Promise.all([
+    call('/jobs', { query: { limit: 200, platform: platformFilter.value || undefined } }),
+    call('/blacklist')
+  ])
+  return { jobs: j || [], blacklist: b || [] }
+}, 0)
+const jobs = computed<any[]>(() => data.value?.jobs || [])
+const blacklist = computed<any[]>(() => data.value?.blacklist || [])
 
 const filtered = computed(() => {
   if (!filter.value) return jobs.value
   if (filter.value === 'NONE') return jobs.value.filter((j) => !j.deliveryStatus)
   return jobs.value.filter((j) => j.deliveryStatus === filter.value)
 })
-
-async function refresh() {
-  await attempt(async () => {
-    await ensure().catch(() => {})
-    const [j, b] = await Promise.all([
-      call('/jobs', { query: { limit: 200, platform: platformFilter.value || undefined } }),
-      call('/blacklist')
-    ])
-    jobs.value = j || []
-    blacklist.value = b || []
-  }, { busy })
-}
 
 async function reset(job: any) {
   await attempt(async () => {
@@ -191,7 +189,6 @@ async function removeBlacklist(item: any) {
   })
 }
 
-onMounted(refresh)
 </script>
 
 <style scoped>

@@ -1,19 +1,21 @@
 import type { Ref } from 'vue'
 
 /**
- * 取数 + 轮询 + 空态。
+ * 一次取数的生命周期：挂载取一次、按节奏重取、失败保留上一份数据、卸载清表。
  *
- * <p>概览页原来自己写了三件套：`ref` 装数据、`setInterval` 每 5 秒重拉、卸载时清表。
- * 第 4 步之后这一页要同时读「总览」与「7 日走势」（两者在同一份快照里），
- * 这类代码再复制一遍就没人记得改两处。抽出来的只有这三件事，
- * `useApi` / `useToast` / `usePlatform` 的语义一概不动。
+ * <p>收的是「一次取数返回什么」，不是接口路径：概览页在请求前要先取平台清单，
+ * 岗位页要把两个接口的响应合成一份视图，质量页要顺带拉一次清单。这些差别留给各自的
+ * 取数函数，模块不认识它们，也不替调用处决定拿到数据后写进哪个状态。
  *
- * <p>收的是<b>取数的函数</b>而不是接口路径：概览页在请求前要先 `ensure()` 平台清单，
- * 把这段留成调用方的一行，composable 就不必认识 `usePlatform`。
+ * <p>intervalMs 传 0 表示只在挂载时取一次，不设定时器。任务页那一轮的实时视图走
+ * useRunSession（有事件流、日志续拉与切平台清理），形状不同，不走这里。
  *
- * <p>空态就是 `data === null` —— 第一次取回来之前没有值，页面照旧显示占位文案；
- * 取数失败<b>保留上一份数据</b>，一次失败的轮询不该把已经渲染出来的卡片清空。
- * 失败只弹 toast，不重试：这是每 5 秒一次的轮询，下一次就是重试。
+ * <p>busy 是只读的「正在取数」，调用处不能拿它当「动作进行中」：一次轮询、或者动作
+ * 末尾那次重读结束，都会把它复位，而那时动作可能还没结束。要表达动作进行中，调用处
+ * 自己建一个标记，两个一起决定按钮禁用。
+ *
+ * <p>失败只弹提示、保留上一份数据：一次取数失败不该把已经渲染出来的内容清空；
+ * 需要重试的地方由调用处显式调 refresh，有轮询的下一次就是重试。
  */
 export function usePolledData<T>(fetcher: () => Promise<T>, intervalMs: number) {
   const { attempt } = useApi()
@@ -30,7 +32,7 @@ export function usePolledData<T>(fetcher: () => Promise<T>, intervalMs: number) 
   onMounted(() => {
     // 挂载时只请求一次：定时器从下一次开始，不能出现「进页面打两次」
     refresh()
-    timer = setInterval(refresh, intervalMs)
+    if (intervalMs > 0) timer = setInterval(refresh, intervalMs)
   })
 
   onUnmounted(() => {
@@ -38,5 +40,5 @@ export function usePolledData<T>(fetcher: () => Promise<T>, intervalMs: number) 
     timer = null
   })
 
-  return { data, busy, refresh }
+  return { data, busy: computed(() => busy.value), refresh }
 }

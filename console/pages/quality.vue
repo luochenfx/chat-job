@@ -101,10 +101,16 @@ const { show } = useToast()
 // 清单与配置页共用一份（useState）。这一页不需要「当前平台」，只要每个平台的开关状态
 const { platforms, ensure: ensurePlatform } = usePlatform()
 
-const items = ref<any[]>([])
+// 挂载取一次、失败保留上一份、卸载清表都在 usePolledData 里；0 表示不轮询
+const { data, busy, refresh } = usePolledData(async () => {
+  // 清单只用来判断「哪些平台没开」；拉不到就不显示那一句，不拦着列表本身。
+  // ensure 内部有短路，只有第一次会真的发请求
+  void ensurePlatform().catch(() => {})
+  return call('/quality')
+}, 0)
+const items = computed<any[]>(() => data.value?.items || [])
 // 不写默认分数：配置页的分数线可能被改过，前端再写一个 80 就是第二处住所
-const scoreLine = ref<number | null>(null)
-const busy = ref(false)
+const scoreLine = computed<number | null>(() => data.value?.scoreLine ?? null)
 
 /** 没开岗位质量判断的平台，只用于空列表时那句说明 */
 const qualityOff = computed(() =>
@@ -112,14 +118,6 @@ const qualityOff = computed(() =>
     .filter((p) => !p.jobQualityEnabled)
     .map((p) => p.label || p.platform)
 )
-
-async function refresh() {
-  await attempt(async () => {
-    const data = await call('/quality')
-    items.value = data?.items || []
-    scoreLine.value = data?.scoreLine ?? null
-  }, { busy })
-}
 
 async function takeOver(item: any) {
   await attempt(async () => {
@@ -137,9 +135,4 @@ async function release(item: any) {
   })
 }
 
-onMounted(() => {
-  // 清单只用来判断「哪些平台没开」；拉不到就不显示那一句，不拦着列表本身
-  void ensurePlatform().catch(() => {})
-  void refresh()
-})
 </script>
