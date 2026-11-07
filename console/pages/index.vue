@@ -159,7 +159,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 const { ensure } = usePlatform()
 const nowMs = useTickClock()
@@ -253,8 +253,7 @@ function actionOf(c: any): { kind: string; text: string; cls: string; disabled: 
 async function runAction(c: any) {
   const action = actionOf(c)
   if (action.disabled) return
-  busy.value = true
-  try {
+  await attempt(async () => {
     if (action.kind === 'start') {
       // 卡片上固定 NORMAL：演练只在任务页选（卡片只有一行按钮，没法同时表达模式）
       await call('/runs', { method: 'POST', query: { platform: c.platform }, body: { mode: 'NORMAL' } })
@@ -269,11 +268,7 @@ async function runAction(c: any) {
       show(`已发送${hint}指令：${c.label}`)
     }
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 </script>

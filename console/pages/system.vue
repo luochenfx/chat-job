@@ -269,7 +269,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 const { platforms, ensure } = usePlatform()
 
@@ -360,8 +360,7 @@ const failedChecks = computed(() =>
 )
 
 async function load() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await ensure().catch(() => {})
     const [s, o, n] = await Promise.all([
       call('/system/status'),
@@ -371,11 +370,7 @@ async function load() {
     status.value = s
     overview.value = o
     applyNotify(n)
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 function applyNotify(n: any) {
@@ -389,46 +384,31 @@ function applyNotify(n: any) {
 }
 
 async function runSelfCheck(platform: string) {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const res = await call('/system/self-check', { method: 'POST', query: { platform } })
     checks[platform] = res
     show(`${labelOf(platform)} 自动检查${res.ok ? '通过' : '未通过'}`, !res.ok)
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function probeLogin(platform: string) {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const res = await call('/system/probe-login', { method: 'POST', query: { platform } })
     login[platform] = res
     show(`${labelOf(platform)} ${res.loggedIn ? '已登录' : '未登录'}`, !res.loggedIn)
     // 探测会把该平台的浏览器拉起来：不重读一次，「浏览器」那列还显示未启动，
     // 人会以为探测没生效（实际是这一行没刷新）
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function openLogin(platform: string) {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const res = await call('/system/open-login', { method: 'POST', query: { platform } })
     show(res?.hint || '已打开登录页，请在浏览器窗口扫码')
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 function labelOf(platform: string) {
@@ -436,22 +416,16 @@ function labelOf(platform: string) {
 }
 
 async function testNotify() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const res = await call('/system/notify-test', { method: 'POST' })
     // 服务端回的是「这次到底发出去了没有」，不再无条件报成功
     show(res?.message || (res?.delivered ? '已发送' : '没有发出去'), !res?.delivered)
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function saveNotify() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const body: any = {
       alertAbnormal: notifyForm.alertAbnormal,
       alertStandby: notifyForm.alertStandby,
@@ -464,38 +438,24 @@ async function saveNotify() {
     await call('/config/notify', { method: 'PUT', body })
     show('已保存')
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function clearWebhook() {
   if (!confirm('清除已保存的 Webhook 地址？清除后告警只写运行日志，手机上收不到。')) return
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call('/config/notify/webhook', { method: 'DELETE' })
     show('已清除')
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function cleanup() {
   if (!confirm('清理过期的岗位记录和日志？投递记录不会被清理。')) return
-  busy.value = true
-  try {
+  await attempt(async () => {
     cleanupResult.value = await call('/system/cleanup', { method: 'POST', body: { scannedDays: 30, logDays: 14 } })
     show('清理完成')
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 onMounted(load)

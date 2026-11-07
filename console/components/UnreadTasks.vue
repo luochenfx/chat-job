@@ -106,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 const { platforms, ensure } = usePlatform()
 
@@ -150,8 +150,7 @@ function toggleExpand(id: number) {
 }
 
 async function load() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await ensure().catch(() => {})
     const [s, t] = await Promise.all([
       call('/watcher/stats', { query: { days: 7 } }),
@@ -161,25 +160,16 @@ async function load() {
     // byPlatform 一起塞进 counts：合计与明细来自同一次响应，不会出现两者对不上
     Object.assign(counts, t?.counts || {})
     tasks.value = t?.tasks || []
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function retry(t: any) {
   if (!confirm(`将重新给「${t.conversation}」3 次机会，可能会真的给对方发出消息。继续？`)) return
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call(`/watcher/unread-tasks/${t.id}/retry`, { method: 'POST' })
     show('已重新排队，在下一轮自动回复时执行')
     await load()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 onMounted(load)

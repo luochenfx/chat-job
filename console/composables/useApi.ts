@@ -1,5 +1,15 @@
-/** 极简 API 客户端：只做 JSON 与错误消息提取，不引入 axios */
+import type { Ref } from 'vue'
+
+/**
+ * 极简 API 客户端：只做 JSON 与错误消息提取，不引入 axios。
+ *
+ * <p>另提供 {@link attempt}，把「失败弹一句错误、忙碌标记成对设置」收在这里。
+ * 以前每个页面各写一遍 try/catch/finally，37 处一模一样；成功后要说什么、要重读什么、
+ * 要不要确认，都是每个动作自己的业务，仍留在调用处，不塞进参数里。
+ */
 export function useApi() {
+  const { show } = useToast()
+
   async function call<T = any>(path: string, options: {
     method?: string
     body?: unknown
@@ -33,5 +43,25 @@ export function useApi() {
     return data as T
   }
 
-  return { call }
+  /**
+   * 一次带错误提示的操作：失败已经弹过提示，不必调用处再接一次。
+   *
+   * @param busy 传页面的忙碌标记，进来置 true、结束一定复位；不传就不动它
+   * @returns 成功 true、失败 false。调用处一般不必看，成功后要做的事直接写在 work 里
+   */
+  async function attempt(work: () => Promise<void>, options: { busy?: Ref<boolean> } = {}): Promise<boolean> {
+    const flag = options.busy
+    if (flag) flag.value = true
+    try {
+      await work()
+      return true
+    } catch (e: any) {
+      show(e.message, true)
+      return false
+    } finally {
+      if (flag) flag.value = false
+    }
+  }
+
+  return { call, attempt }
 }

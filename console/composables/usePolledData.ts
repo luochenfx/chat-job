@@ -16,20 +16,15 @@ import type { Ref } from 'vue'
  * 失败只弹 toast，不重试：这是每 5 秒一次的轮询，下一次就是重试。
  */
 export function usePolledData<T>(fetcher: () => Promise<T>, intervalMs: number) {
-  const { show } = useToast()
+  const { attempt } = useApi()
   const data = ref<T | null>(null) as Ref<T | null>
   const busy = ref(false)
   let timer: ReturnType<typeof setInterval> | null = null
 
   async function refresh() {
-    busy.value = true
-    try {
+    await attempt(async () => {
       data.value = await fetcher()
-    } catch (e: any) {
-      show(e.message, true)
-    } finally {
-      busy.value = false
-    }
+    }, { busy })
   }
 
   onMounted(() => {

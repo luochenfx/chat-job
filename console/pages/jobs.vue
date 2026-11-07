@@ -124,7 +124,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 const { platforms, ensure } = usePlatform()
 
@@ -146,8 +146,7 @@ const filtered = computed(() => {
 })
 
 async function refresh() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await ensure().catch(() => {})
     const [j, b] = await Promise.all([
       call('/jobs', { query: { limit: 200, platform: platformFilter.value || undefined } }),
@@ -155,21 +154,15 @@ async function refresh() {
     ])
     jobs.value = j || []
     blacklist.value = b || []
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function reset(job: any) {
-  try {
+  await attempt(async () => {
     await call(`/jobs/${job.id}/reset`, { method: 'POST' })
     show(`已重置 ${job.jobName}，下次搜索时会重新判断`)
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 // 函数名不能叫 blacklist —— 与上面的 ref 同名会在 <script setup> 里重复声明
@@ -179,13 +172,11 @@ function blacklistCompany(job: any) {
 
 async function addKeyword(kind: string, keyword: string) {
   if (!keyword || !keyword.trim()) return
-  try {
+  await attempt(async () => {
     await call('/blacklist', { method: 'POST', body: { kind, keyword: keyword.trim() } })
     show(`已加入黑名单：${keyword}`)
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 async function addBlacklist() {
@@ -194,12 +185,10 @@ async function addBlacklist() {
 }
 
 async function removeBlacklist(item: any) {
-  try {
+  await attempt(async () => {
     await call(`/blacklist/${item.id}`, { method: 'DELETE' })
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 onMounted(refresh)

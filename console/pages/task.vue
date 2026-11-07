@@ -202,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 const { events, connected, open, clear, close } = useRunStream()
 const { platforms, ensure, current, platform: platformSlug, label: platformLabel, select } = usePlatform()
@@ -325,7 +325,7 @@ function describe(e: { type: string; data: any }) {
 
 async function refresh() {
   const want = platformSlug.value
-  try {
+  await attempt(async () => {
     const cur = await call('/runs/current', { query: { platform: want } })
     // 切平台时 query 已变、请求还没回：这一帧描述的是上一个平台，丢掉。
     // 不丢的话，切到智联的瞬间会先看到 BOSS 的日志，然后日志"消失"变空
@@ -347,9 +347,7 @@ async function refresh() {
       currentRunId = null
     }
     if (cur.run) await pullLogs(cur.run.id)
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 /**
@@ -378,8 +376,7 @@ async function pullLogs(runId: number) {
 }
 
 async function start() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call('/runs', {
       method: 'POST',
       query: { platform: platformSlug.value },
@@ -392,50 +389,31 @@ async function start() {
       show('任务已启动')
     }
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function pause() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call(`/runs/${run.value.id}/pause`, { method: 'POST' })
     show('已暂停')
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function resume() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call(`/runs/${run.value.id}/resume`, { method: 'POST' })
     show('已继续')
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function cancel() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     await call(`/runs/${run.value.id}/cancel`, { method: 'POST' })
     show('已发送停止指令')
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 function clearLogs() {

@@ -96,7 +96,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 // 清单与配置页共用一份（useState）。这一页不需要「当前平台」，只要每个平台的开关状态
 const { platforms, ensure: ensurePlatform } = usePlatform()
@@ -114,36 +114,27 @@ const qualityOff = computed(() =>
 )
 
 async function refresh() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     const data = await call('/quality')
     items.value = data?.items || []
     scoreLine.value = data?.scoreLine ?? null
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function takeOver(item: any) {
-  try {
+  await attempt(async () => {
     await call(`/quality/${item.conversationId}/takeover`, { method: 'POST' })
     show(`已接管「${item.jobName || item.title}」，系统不会再替它回消息`)
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 async function release(item: any) {
-  try {
+  await attempt(async () => {
     await call(`/quality/${item.conversationId}/takeover`, { method: 'DELETE' })
     show(`已交还 AI：「${item.jobName || item.title}」`)
     await refresh()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 onMounted(() => {

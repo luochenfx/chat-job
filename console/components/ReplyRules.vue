@@ -150,7 +150,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 
 const words = ref<any[]>([])
@@ -171,46 +171,35 @@ const form = reactive<any>({
 })
 
 async function loadAll() {
-  try {
+  await attempt(async () => {
     const [w, r] = await Promise.all([call('/reply/sensitive'), call('/reply/rules')])
     words.value = w || []
     rules.value = r || []
     await loadUnmatched()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 async function loadUnmatched() {
-  busy.value = true
-  try {
+  await attempt(async () => {
     unmatched.value = (await call('/reply/unmatched', { query: { days: 7, limit: 50 } })) || []
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    busy.value = false
-  }
+  }, { busy })
 }
 
 async function addWord() {
   const word = newWord.value.trim()
   if (!word) return
-  try {
+  await attempt(async () => {
     await call('/reply/sensitive', { method: 'POST', body: { word } })
     newWord.value = ''
     words.value = (await call('/reply/sensitive')) || []
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 async function removeWord(item: any) {
-  try {
+  await attempt(async () => {
     await call(`/reply/sensitive/${item.id}`, { method: 'DELETE' })
     words.value = (await call('/reply/sensitive')) || []
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 function newRule() {
@@ -245,27 +234,20 @@ function closeDialog() {
 }
 
 async function saveRule() {
-  saving.value = true
-  try {
+  await attempt(async () => {
     await call('/reply/rules', { method: 'POST', body: form })
     show('规则已保存')
     rules.value = (await call('/reply/rules')) || []
     closeDialog()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    saving.value = false
-  }
+  }, { busy: saving })
 }
 
 async function deleteRule(rule: any) {
   if (!confirm(`删除规则「${rule.name}」？`)) return
-  try {
+  await attempt(async () => {
     await call(`/reply/rules/${rule.id}`, { method: 'DELETE' })
     rules.value = (await call('/reply/rules')) || []
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 /** 把未命中的消息变成一条规则草稿：关键词留空由人补，文案直接借这条消息的思路 */

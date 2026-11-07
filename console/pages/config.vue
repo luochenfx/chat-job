@@ -667,7 +667,7 @@
 </template>
 
 <script setup lang="ts">
-const { call } = useApi()
+const { call, attempt } = useApi()
 const { show } = useToast()
 
 /**
@@ -945,7 +945,7 @@ const dict = reactive<Record<string, string[]>>({
 })
 
 async function loadAll() {
-  try {
+  await attempt(async () => {
     await ensurePlatform()
     const [p, a, b] = await Promise.all([
       call('/config/providers'),
@@ -968,9 +968,7 @@ async function loadAll() {
     aiCriteriaDefaultCount.value = lineCount(aiCriteriaDefault.value)
     blacklist.value = b || []
     await loadPlatform()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 /** 只重拉「当前平台」的配置与字典：切平台不需要把提供商与 AI 配置再拉一遍 */
@@ -988,12 +986,10 @@ async function loadPlatform() {
  */
 async function switchPlatform(slug: string) {
   if (dirty.value && !confirm(`「${platformLabel.value}」的改动还没保存，放弃改动并切换到 ${labelOf(slug)}？`)) return
-  try {
+  await attempt(async () => {
     await select(slug)
     await loadPlatform()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 /** 切 tab 同样要拦：离开「平台配置」时草稿会被下一次加载覆盖 */
@@ -1054,8 +1050,7 @@ function editProvider(p: any) {
 }
 
 async function saveProvider() {
-  saving.value = true
-  try {
+  await attempt(async () => {
     const headers: Record<string, string> = {}
     providerHeaders.value.forEach((h) => {
       if (h.key.trim()) headers[h.key.trim()] = h.value
@@ -1076,22 +1071,16 @@ async function saveProvider() {
     show('已保存')
     await loadAll()
     closeProviderDialog()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    saving.value = false
-  }
+  }, { busy: saving })
 }
 
 async function deleteProvider(p: any) {
   if (!confirm(`删除「${p.model}」？同一服务商下的其他模型不受影响`)) return
-  try {
+  await attempt(async () => {
     await call(`/config/providers/${p.id}`, { method: 'DELETE' })
     show('已删除')
     await loadAll()
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 /** 把默认风格填进输入框，不落库 —— 保存动作留给用户，与「点了就改配置」区分开 */
@@ -1164,8 +1153,7 @@ async function saveAi() {
     return
   }
 
-  saving.value = true
-  try {
+  await attempt(async () => {
     const res: any = await call('/config/ai', {
       method: 'PUT',
       body: {
@@ -1200,16 +1188,11 @@ async function saveAi() {
     }
     // 回读一次：超时上限 120、回复上限 10 这类 clamp 在后端做，前端不该假装自己知道结果
     await loadAll()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    saving.value = false
-  }
+  }, { busy: saving })
 }
 
 async function savePlatform() {
-  saving.value = true
-  try {
+  await attempt(async () => {
     await call(`/config/platform/${platformSlug.value}`, { method: 'PUT', body: platform })
     show('已保存')
     // 开关变了要立刻重拉清单：否则分段控件上那个「已停用」要等下次进页面才出现
@@ -1217,21 +1200,15 @@ async function savePlatform() {
     // 回读一次：后端对 watchIntervalSeconds 等字段有钳制，不回读的话界面显示的是用户填的、
     // 库里存的是钳制后的 —— 两个数字不一致，而且人会按界面上那个数去推算行为
     await loadPlatform()
-  } catch (e: any) {
-    show(e.message, true)
-  } finally {
-    saving.value = false
-  }
+  }, { busy: saving })
 }
 
 async function removeBlacklist(item: any) {
-  try {
+  await attempt(async () => {
     await call(`/blacklist/${item.id}`, { method: 'DELETE' })
     const b = await call('/blacklist')
     blacklist.value = b || []
-  } catch (e: any) {
-    show(e.message, true)
-  }
+  })
 }
 
 onMounted(loadAll)
