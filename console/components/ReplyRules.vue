@@ -138,7 +138,7 @@
               <div v-if="m.reasonNote" class="hint-inline">{{ m.reasonNote }}</div>
             </td>
             <td class="hint-inline">{{ unmatchedReasonText(m) }}</td>
-            <td class="hint-inline">{{ (m.createdAt || '').replace('T', ' ').slice(0, 16) }}</td>
+            <td class="hint-inline">{{ stamp(m.createdAt, 'date-minute') }}</td>
             <td>
               <button class="btn sm" @click="promote(m)">用它建一条规则</button>
             </td>

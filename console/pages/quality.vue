@@ -80,7 +80,7 @@
         <template v-else>
           {{ item.takenOver ? '接管后不再读取消息内容，未读留在平台上' : '还没有新的消息' }}
         </template>
-        <span v-if="item.assessedAt"> · 判断于 {{ item.assessedAt.replace('T', ' ') }}</span>
+        <span v-if="item.assessedAt"> · 判断于 {{ stamp(item.assessedAt, 'full') }}</span>
       </div>
 
       <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 12px">

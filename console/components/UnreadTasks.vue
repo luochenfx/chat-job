@@ -77,7 +77,7 @@
               </td>
               <td class="hint-inline">{{ t.lastAction || '—' }}</td>
               <td class="hint-inline">{{ t.attemptCount }} / {{ t.maxAttempts }}</td>
-              <td class="hint-inline">{{ fmt(t.updatedAt) }}</td>
+              <td class="hint-inline">{{ t.updatedAt ? stamp(t.updatedAt, 'month-day') : '—' }}</td>
               <td class="hint-inline">{{ expanded === t.id ? '收起' : '详情' }}</td>
             </tr>
             <tr v-if="expanded === t.id" class="detail-row">
@@ -88,7 +88,7 @@
                   </div>
                   <div v-if="t.lastError" class="hint-inline">具体错误：{{ t.lastError }}</div>
                   <div v-if="t.nextRetryAt" class="hint-inline">
-                    下次重试时间：{{ fmt(t.nextRetryAt) }}
+                    下次重试时间：{{ t.nextRetryAt ? stamp(t.nextRetryAt, 'month-day') : '—' }}
                   </div>
                   <div v-if="unreadTaskView(t.status).canRetry" class="row" style="gap: 10px">
                     <button class="btn sm danger" :disabled="busy" @click="retry(t)">再试一次</button>
@@ -139,10 +139,6 @@ const platformRows = computed(() => {
 
 // 告警四档的文案与底色、任务状态的标签与配色，都在 useRunStatus.ts 里一处写定
 const alertView = computed(() => alertTextView(stats.value))
-
-function fmt(value?: string) {
-  return value ? value.replace('T', ' ').slice(5, 16) : '—'
-}
 
 function toggleDetail() {
   showDetail.value = !showDetail.value

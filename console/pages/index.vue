@@ -51,7 +51,7 @@
             </div>
             <div class="pcard-sub">
               <template v-if="c.run">
-                #{{ c.run.id }} · {{ modeText(c.run.mode) }} · {{ shortTime(c.run.startedAt) }}
+                #{{ c.run.id }} · {{ modeText(c.run.mode) }} · {{ c.run.startedAt ? stamp(c.run.startedAt, 'month-day') : '—' }}
               </template>
               <!-- 0 是真实发生的 0，不拿 — 盖掉；— 只留给「这一轮不可能产生该数字」 -->
               <template v-else>今天还没有启动过</template>
@@ -190,10 +190,6 @@ function activityOf(c: any) {
 
 function modeText(m?: string) {
   return m === 'DRY_RUN' ? '演练模式' : '正常投递'
-}
-
-function shortTime(at?: string) {
-  return at ? at.replace('T', ' ').slice(5, 16) : '—'
 }
 
 /** 组合进度：只有跑过才谈得上「第几个」 */

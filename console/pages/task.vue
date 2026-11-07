@@ -101,7 +101,7 @@
             <template v-if="run">
               #{{ run.id }} ·
               <span class="tag" :class="run.mode === 'DRY_RUN' ? 'warn' : ''">{{ modeText(run.mode) }}</span>
-              · {{ (run.startedAt || '未开始').replace('T', ' ') }}
+              · {{ stamp(run.startedAt, 'full') || '未开始' }}
             </template>
             <template v-else>{{ platformLabel }} 还没有启动过</template>
           </p>
@@ -175,7 +175,7 @@
         <div v-if="!events.length" class="empty">等待事件…</div>
         <div v-else class="log" style="max-height: 320px">
           <div v-for="(e, i) in reversed" :key="i">
-            <span class="t">{{ time(e.at) }}</span> {{ describe(e) }}
+            <span class="t">{{ clockTime(e.at) }}</span> {{ describe(e) }}
           </div>
         </div>
       </div>
@@ -190,7 +190,7 @@
       <div class="log" style="max-height: 340px">
         <div v-if="!logs.length" class="empty">暂无日志</div>
         <div v-for="l in logs" :key="l.id">
-          <span class="t">{{ (l.createdAt || '').replace('T', ' ') }}</span>
+          <span class="t">{{ stamp(l.createdAt, 'full') }}</span>
           <span :style="{ color: runLogLevelColor(l.level) }">
             [{{ l.level }}]
           </span>
@@ -316,10 +316,6 @@ const activity = computed(() =>
 // 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法
 function modeText(m: string) {
   return m === 'DRY_RUN' ? '演练模式' : '正常投递'
-}
-
-function time(at: number) {
-  return new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
 }
 
 // 事件文案住在 composables/runEvents.ts：那里同时是订阅清单的来源，两边不会漂开
