@@ -204,10 +204,12 @@
 <script setup lang="ts">
 const { call, attempt } = useApi()
 const { show } = useToast()
-const { events, connected, open, clear, close } = useRunStream()
-const { platforms, ensure, current, platform: platformSlug, label: platformLabel, select } = usePlatform()
-// 秒级时钟抽在 composable 里，概览卡与这里共用同一句「多久没动了」
-const nowMs = useTickClock()
+const { platforms, current, platform: platformSlug, label: platformLabel, select } = usePlatform()
+// 这一轮的快照、事件流、日志续拉与切平台清理都在 useRunSession 里；
+// 页面只拿要显示的值和两个动作，不必知道取数与订阅的先后顺序
+const {
+  run, combinations, logs, duty, events, connected, activity, refresh, clearLogs
+} = useRunSession(platformSlug)
 
 /** 分段控件的 v-model：读的是选中的平台，写的时候走 select（记忆到 URL 与 localStorage） */
 const platformPick = computed({
@@ -217,18 +219,9 @@ const platformPick = computed({
   }
 })
 
-const run = ref<any>(null)
-const combinations = ref<any[]>([])
-const logs = ref<any[]>([])
+// 启动模式是动作的输入，不属于「已经发生的这一轮」，留在页面
 const mode = ref('NORMAL')
 const busy = ref(false)
-// 服务端算好的时段状态（跨天/全天三种写法的判定只在后端做一次，界面不重复实现）
-const duty = ref<any>(null)
-/** 无响应阈值，后端算好下发；前端只做比较 */
-const staleAfter = ref(90)
-let lastLogId = 0
-let pollTimer: ReturnType<typeof setInterval> | null = null
-let currentRunId: number | null = null
 
 // 状态 → 标签/色调/能不能暂停，一处定义（原来三处各写一遍，加状态必漏）
 const runView = computed(() => runStatusView(run.value?.status))
@@ -306,11 +299,6 @@ const dutyLine = computed(() => {
 })
 const reversed = computed(() => [...events.value].reverse().slice(0, 60))
 
-// 「上次动是什么时候」：判断规则在 useActivity 里，这里只把阈值传进去
-const activity = computed(() =>
-  activityView(run.value, { nowMs: nowMs.value, staleAfterSeconds: staleAfter.value })
-)
-
 // 组合状态的标签与配色写在 useRunStatus.ts，这里只把「这一轮是否还活着」传进去
 
 // 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法
@@ -321,58 +309,6 @@ function modeText(m: string) {
 // 事件文案住在 composables/runEvents.ts：那里同时是订阅清单的来源，两边不会漂开
 function describe(e: { type: string; data: any }) {
   return describeEvent(e.type, e.data)
-}
-
-async function refresh() {
-  const want = platformSlug.value
-  await attempt(async () => {
-    const cur = await call('/runs/current', { query: { platform: want } })
-    // 切平台时 query 已变、请求还没回：这一帧描述的是上一个平台，丢掉。
-    // 不丢的话，切到智联的瞬间会先看到 BOSS 的日志，然后日志"消失"变空
-    if (platformSlug.value !== want) return
-    run.value = cur.run
-    duty.value = cur.duty || null
-    staleAfter.value = cur.staleAfterSeconds ?? 90
-    combinations.value = cur.combinations || []
-    if (cur.run && cur.run.id !== currentRunId) {
-      currentRunId = cur.run.id
-      clear()
-      open(cur.run.id)
-      logs.value = []
-      lastLogId = 0
-    }
-    // 没有 Run 时也要断开：否则切到「今天还没跑过」的平台，SSE 还连着上一平台那条
-    if (!cur.run && connected.value) {
-      close()
-      currentRunId = null
-    }
-    if (cur.run) await pullLogs(cur.run.id)
-  })
-}
-
-/**
- * 换平台：先把上一平台的东西全清掉，再发请求。
- *
- * <p>顺序不能反。等响应回来才清的话，界面会有一段时间挂着另一个平台的日志、组合队列与
- * 「实时连接：已连接」——那比看到空白更让人困惑：人以为切过去了，实际看的是别人。
- */
-function resetForPlatformChange() {
-  close()
-  clear()
-  run.value = null
-  duty.value = null
-  combinations.value = []
-  logs.value = []
-  lastLogId = 0
-  currentRunId = null
-}
-
-async function pullLogs(runId: number) {
-  const items = await call(`/runs/${runId}/logs`, { query: { afterId: lastLogId, limit: 200 } })
-  if (items?.length) {
-    logs.value = [...logs.value, ...items].slice(-400)
-    lastLogId = items[items.length - 1].id
-  }
 }
 
 async function start() {
@@ -416,28 +352,6 @@ async function cancel() {
   }, { busy })
 }
 
-function clearLogs() {
-  logs.value = []
-  lastLogId = 0
-}
-
-onMounted(async () => {
-  // 先拿到清单：没有清单就不知道该问哪个平台的 Run（缺省平台是后端配置，不是这里该猜的）
-  await ensure().catch(() => {})
-  await refresh()
-  pollTimer = setInterval(refresh, 3000)
-})
-
-// 换平台 = 换一条流水线：上一平台的日志、事件、组合队列一律不留
-watch(platformSlug, (next, prev) => {
-  if (!prev || !next || next === prev) return
-  resetForPlatformChange()
-  refresh()
-})
-
-onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer)
-})
 </script>
 
 <style scoped>
