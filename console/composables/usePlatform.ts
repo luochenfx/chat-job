@@ -114,8 +114,15 @@ export function usePlatform() {
   }
 
   /**
-   * 切到某个平台：写 localStorage 与 URL query，不碰任何业务数据 ——
-   * 各页面自己决定「换了平台要清掉什么」（任务页的日志与 SSE 必须清，岗位页不必）。
+   * 切到某个平台：只写 localStorage 与 URL query，不碰任何业务数据。
+   *
+   * <p>切换之后要做什么，按「这一页的内容是否只属于一个平台」分成两类：任务页的实时视图
+   * 在 useRunSession 里按平台变化先清后取；配置页在它自己的切换函数里重拉该平台的配置
+   * （提供商、AI 与黑名单是全局的，不跟着重拉）。概览页、质量页、系统页、未读任务页
+   * 一次显示所有平台，不随切换重取；岗位页的下拉是筛选条件，不选「当前平台」，也不走这里。
+   *
+   * <p>不在这里注册清理动作：平台也可能由 URL 后退或分享链接改变，那条路不经过 select，
+   * 挂在 select 上的清理就会漏掉。清理由监听当前平台的那一侧负责。
    */
   async function select(slug: string) {
     if (!known(slug) || slug === platform.value) return
@@ -129,5 +136,22 @@ export function usePlatform() {
     await router.replace({ query: { ...route.query, platform: slug } })
   }
 
-  return { platforms, ensure, refresh, platform, current, label, note, labelOf, supports, select, known }
+  /**
+   * 分段控件用的双向值：读当前平台，写的时候交给 onPick。
+   *
+   * <p>空值与「还是当前平台」在这里挡掉，避免点击已选中的按钮也去弹确认框。
+   * 各页面切换前要拦什么（配置页拦没保存的草稿）、切换后要重拉什么，是它们自己的业务，
+   * 留在 onPick 里，不塞进这里，也不为某一个页面加专用参数。
+   */
+  function picker(onPick: (slug: string) => void) {
+    return computed({
+      get: () => platform.value,
+      set: (value: string) => {
+        if (!value || value === platform.value) return
+        onPick(value)
+      }
+    })
+  }
+
+  return { platforms, ensure, refresh, platform, current, label, note, labelOf, supports, select, picker, known }
 }

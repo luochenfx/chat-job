@@ -693,17 +693,12 @@ const {
   note: platformNote,
   supports,
   select,
+  picker,
   refresh: refreshPlatforms
 } = usePlatform()
 
 /** 分段控件的 v-model：写的时候先过 dirty 拦截，再切换并重新加载该平台的配置 */
-const platformPick = computed({
-  get: () => platformSlug.value,
-  set: (value: string) => {
-    if (!value || value === platformSlug.value) return
-    void switchPlatform(value)
-  }
-})
+const platformPick = picker((slug) => { void switchPlatform(slug) })
 
 const hasExtraFilters = computed(() =>
   ['salary', 'experience', 'degree', 'scale', 'industry', 'stage'].some((key) => supports(key))

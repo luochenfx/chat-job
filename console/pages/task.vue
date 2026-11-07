@@ -204,20 +204,15 @@
 <script setup lang="ts">
 const { call, attempt } = useApi()
 const { show } = useToast()
-const { platforms, current, platform: platformSlug, label: platformLabel, select } = usePlatform()
+const { platforms, current, platform: platformSlug, label: platformLabel, select, picker } = usePlatform()
 // 这一轮的快照、事件流、日志续拉与切平台清理都在 useRunSession 里；
 // 页面只拿要显示的值和两个动作，不必知道取数与订阅的先后顺序
 const {
   run, combinations, logs, duty, events, connected, activity, refresh, clearLogs
 } = useRunSession(platformSlug)
 
-/** 分段控件的 v-model：读的是选中的平台，写的时候走 select（记忆到 URL 与 localStorage） */
-const platformPick = computed({
-  get: () => platformSlug.value,
-  set: (value: string) => {
-    select(value)
-  }
-})
+/** 分段控件的 v-model：写的时候走 select（记忆到 URL 与 localStorage） */
+const platformPick = picker((slug) => { void select(slug) })
 
 // 启动模式是动作的输入，不属于「已经发生的这一轮」，留在页面
 const mode = ref('NORMAL')
