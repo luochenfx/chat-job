@@ -65,10 +65,10 @@
           v-for="c in item.criteria"
           :key="c.criterion"
           class="tag"
-          :class="verdictTag(c.verdict)"
+          :class="verdictView(c.verdict).tone"
           :title="c.evidence || '没有给出依据'"
         >
-          {{ verdictMark(c.verdict) }} {{ c.criterion }}
+          {{ verdictView(c.verdict).mark }} {{ c.criterion }}
         </span>
       </div>
 
@@ -112,20 +112,6 @@ const qualityOff = computed(() =>
     .filter((p) => !p.jobQualityEnabled)
     .map((p) => p.label || p.platform)
 )
-
-/**
- * 三档结论的配色与记号。
- *
- * <p>看不出（UNKNOWN）用灰记号而不是「✗」：它说的是「信息里没有」，与「不符合」是两件事 ——
- * 用同一个记号会把一个没写福利的岗位显示成「福利差」。
- */
-function verdictMark(verdict: string) {
-  return verdict === 'YES' ? '✓' : verdict === 'NO' ? '✗' : '?'
-}
-
-function verdictTag(verdict: string) {
-  return verdict === 'YES' ? 'ok' : verdict === 'NO' ? 'danger' : ''
-}
 
 async function refresh() {
   busy.value = true

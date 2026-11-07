@@ -24,9 +24,9 @@
         </select>
         <button v-if="!active" class="btn primary" :disabled="busy" @click="start">启动</button>
         <template v-else>
-          <button v-if="run.status === 'PAUSED'" class="btn" :disabled="busy" @click="resume">继续</button>
+          <button v-if="runView.kind === 'paused'" class="btn" :disabled="busy" @click="resume">继续</button>
           <!-- 等待态没有可暂停的东西，只能取消；取消会直接落库，不等窗口打开 -->
-          <button v-else-if="run.status === 'WAITING_DUTY'" class="btn danger" :disabled="busy" @click="cancel">
+          <button v-else-if="runView.kind === 'waiting'" class="btn danger" :disabled="busy" @click="cancel">
             取消等待
           </button>
           <template v-else>
@@ -41,7 +41,7 @@
     <!-- 待命横幅：配额/评估/组合耗尽只是「今天不再找岗位」，不是「今天不再回消息」。
          没有这条横幅，界面只剩一个黄标签，人会以为任务已经半死了。
          未启用扫描的平台从来没有扫过，标题与页脚都不能沿用「扫描已结束」那套说法。 -->
-    <div v-if="run?.status === 'STANDBY'" class="notice">
+    <div v-if="runView.kind === 'standby'" class="notice">
       <div class="notice-title">
         {{ scanOn ? '正在盯着消息：搜索已停，未读消息照常回复' : '正在盯着消息：这个平台没有开启「搜索岗位」，只处理未读消息' }}
       </div>
@@ -161,7 +161,7 @@
             <tr v-for="c in combinations" :key="c.id">
               <td class="num">{{ c.seq + 1 }}</td>
               <td>{{ c.city || '不限' }} / {{ c.keyword || '不限' }}</td>
-              <td><span class="tag" :class="comboView(c).tone">{{ comboView(c).label }}</span></td>
+              <td><span class="tag" :class="comboView(c, active).tone">{{ comboView(c, active).label }}</span></td>
               <td class="num">{{ c.cardsSeen }}</td>
               <td class="num">{{ c.delivered }}</td>
             </tr>
@@ -191,7 +191,7 @@
         <div v-if="!logs.length" class="empty">暂无日志</div>
         <div v-for="l in logs" :key="l.id">
           <span class="t">{{ (l.createdAt || '').replace('T', ' ') }}</span>
-          <span :style="{ color: l.level === 'WARN' ? 'var(--warn)' : l.level === 'ERROR' ? 'var(--danger)' : 'inherit' }">
+          <span :style="{ color: runLogLevelColor(l.level) }">
             [{{ l.level }}]
           </span>
           {{ l.message }}
@@ -291,7 +291,7 @@ const comboCardTotal = computed(() => {
 // 头部那一行：等待态说「还要等多久」，窗口内说「还能跑多久」，其余不占地方。
 // 判定放这里而不是模板里，是因为它要同时看 run 状态、模式与时段三处。
 const dutyLine = computed(() => {
-  if (run.value?.status === 'WAITING_DUTY') {
+  if (runView.value.kind === 'waiting') {
     const minutes = duty.value?.opensInMinutes
     return minutes > 0
       ? `任务已排队，${waitText(minutes)}后自动开始（自动回复时段 ${duty.value.window}）`
@@ -311,30 +311,7 @@ const activity = computed(() =>
   activityView(run.value, { nowMs: nowMs.value, staleAfterSeconds: staleAfter.value })
 )
 
-/**
- * 组合状态 → 标签。
- *
- * <p>两个理由不直接显示枚举：一是 `SKIPPED`/`INTERRUPTED` 这两个词本身就说不清
- * 「为什么没跑完」；二是「进行中」只有在 Run 还活着时才成立 —— 服务被强杀后
- * 库里可能还留着 RUNNING（后端重启收尾会补成 INTERRUPTED，这里再兜一层旧数据），
- * 那一行绝不能显示成还在扫。
- */
-const COMBO_LABEL: Record<string, string> = {
-  PENDING: '未开始',
-  RUNNING: '进行中',
-  DONE: '已完成',
-  SKIPPED: '已跳过',
-  // 与 DONE 分开：超时的组合只剩一部分卡没看，下次扫描接着扫，不是「跳过」
-  TIMEOUT: '超时未跑完',
-  FAILED: '失败',
-  INTERRUPTED: '已中断'
-}
-
-function comboView(c: any) {
-  const status = c.status === 'RUNNING' && !active.value ? 'INTERRUPTED' : c.status
-  const tone = status === 'DONE' ? 'ok' : status === 'FAILED' ? 'danger' : status === 'PENDING' ? '' : 'warn'
-  return { label: COMBO_LABEL[status] || status, tone }
-}
+// 组合状态的标签与配色写在 useRunStatus.ts，这里只把「这一轮是否还活着」传进去
 
 // 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法
 function modeText(m: string) {

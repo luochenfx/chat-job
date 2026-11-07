@@ -137,7 +137,7 @@
               {{ m.incomingText }}
               <div v-if="m.reasonNote" class="hint-inline">{{ m.reasonNote }}</div>
             </td>
-            <td class="hint-inline">{{ reasonText(m) }}</td>
+            <td class="hint-inline">{{ unmatchedReasonText(m) }}</td>
             <td class="hint-inline">{{ (m.createdAt || '').replace('T', ' ').slice(0, 16) }}</td>
             <td>
               <button class="btn sm" @click="promote(m)">用它建一条规则</button>
@@ -190,44 +190,6 @@ async function loadUnmatched() {
   } finally {
     busy.value = false
   }
-}
-
-/**
- * 把落库动作翻成人话。原因码是枚举（NO_SUBSTANCE / SENSITIVE_TOPIC / ...），
- * 直接显示给运营看等于让他去翻代码。
- */
-const REASON_TEXT: Record<string, string> = {
-  NO_SUBSTANCE: '没有需要回答的内容',
-  SENSITIVE_TOPIC: '话题敏感',
-  ALREADY_HANDLED: '之前已经聊过',
-  LOW_CONFIDENCE: 'AI 不确定怎么回',
-  HUMAN_REQUIRED: '需要你自己回'
-}
-
-function reasonText(m: any) {
-  const action = m.action || ''
-  if (action === 'AI_SKIPPED') {
-    const why = REASON_TEXT[m.reasonCode] || m.reasonCode || '没有给出原因'
-    return `AI 判断不用回 · ${why}`
-  }
-  if (action === 'AI_FAILED') {
-    return 'AI 没有正常返回'
-  }
-  if (action.startsWith('BLOCKED_')) {
-    const kind = action.slice('BLOCKED_'.length)
-    const map: Record<string, string> = {
-      TONE: '听起来像 AI 写的',
-      CONTACT: '含联系方式',
-      SENSITIVE: '敏感词',
-      TOO_LONG: '字数太多',
-      FALSE_CLAIM: '说了没做过的事'
-    }
-    return `发送前被拦下 · ${map[kind] || kind}`
-  }
-  if (action === 'UNMATCHED') {
-    return '没有匹配到规则'
-  }
-  return action || '—'
 }
 
 async function addWord() {

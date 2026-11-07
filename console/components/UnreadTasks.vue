@@ -13,8 +13,8 @@
 
     <!-- 告警提示条：四档状态各自上色。判定在后端做，这里只按 state 上色，
          不自己算比例 —— 否则「样本不足」和「未超阈值」很容易被写成同一个绿色 -->
-    <div v-if="stats" class="alert" :class="alertClass">
-      <span>{{ alertText }}</span>
+    <div v-if="stats" class="alert" :class="alertView.tone">
+      <span>{{ alertView.text }}</span>
       <NuxtLink v-if="stats.state === 'ALERT'" to="/config" class="alert-link">查看原因分布</NuxtLink>
     </div>
 
@@ -73,7 +73,7 @@
               <td class="hint-inline">{{ labelOf(t.platform) }}</td>
               <td>{{ t.conversation }}</td>
               <td>
-                <span class="tag" :class="statusClass(t.status)">{{ statusText(t.status) }}</span>
+                <span class="tag" :class="unreadTaskView(t.status).tone">{{ unreadTaskView(t.status).label }}</span>
               </td>
               <td class="hint-inline">{{ t.lastAction || '—' }}</td>
               <td class="hint-inline">{{ t.attemptCount }} / {{ t.maxAttempts }}</td>
@@ -90,7 +90,7 @@
                   <div v-if="t.nextRetryAt" class="hint-inline">
                     下次重试时间：{{ fmt(t.nextRetryAt) }}
                   </div>
-                  <div v-if="t.status === 'GAVE_UP'" class="row" style="gap: 10px">
+                  <div v-if="unreadTaskView(t.status).canRetry" class="row" style="gap: 10px">
                     <button class="btn sm danger" :disabled="busy" @click="retry(t)">再试一次</button>
                     <span class="hint-inline">会重新给 3 次机会，在下一轮自动回复时执行</span>
                   </div>
@@ -137,52 +137,8 @@ const platformRows = computed(() => {
   }))
 })
 
-/**
- * 告警文案。四档都要有话说 —— 尤其 DISABLED 与 INSUFFICIENT：
- * 一个「我关了它」、一个「还没法判断」，把它们显示成正常就是这次要根治的病。
- */
-const alertText = computed(() => {
-  const s = stats.value
-  if (!s) return ''
-  const joined = `最近 7 天 AI 判断了 ${s.total} 次，其中决定不回 ${s.skipped} 次`
-  switch (s.state) {
-    case 'DISABLED':
-      return `提醒已关闭（阈值填了 0）。${joined}`
-    case 'INSUFFICIENT':
-      return `最近 7 天 AI 判断了 ${s.total} 次，样本不足（至少 ${s.minSample} 次才能比较），暂不判断`
-    case 'ALERT':
-      return `${joined}（${s.pct}%），超过了设定的 ${s.thresholdPct}%`
-    default:
-      return `${joined}（${s.pct}%），设定阈值 ${s.thresholdPct}%`
-  }
-})
-
-const alertClass = computed(() => {
-  switch (stats.value?.state) {
-    case 'ALERT':
-      return 'warn'
-    case 'OK':
-      return 'ok'
-    default:
-      // DISABLED / INSUFFICIENT 都是灰底：不是坏消息，但也绝不是「正常」
-      return 'muted'
-  }
-})
-
-function statusText(status: string) {
-  return (
-    { PENDING: '待处理', PROCESSING: '处理中', FAILED: '重试中', GAVE_UP: '已放弃', DONE: '已完成' }[
-      status
-    ] || status
-  )
-}
-
-function statusClass(status: string) {
-  if (status === 'GAVE_UP') return 'danger'
-  if (status === 'FAILED') return 'warn'
-  if (status === 'DONE') return 'ok'
-  return ''
-}
+// 告警四档的文案与底色、任务状态的标签与配色，都在 useRunStatus.ts 里一处写定
+const alertView = computed(() => alertTextView(stats.value))
 
 function fmt(value?: string) {
   return value ? value.replace('T', ' ').slice(5, 16) : '—'

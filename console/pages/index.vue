@@ -244,11 +244,11 @@ function actionOf(c: any): { kind: string; text: string; cls: string; disabled: 
   if (!view.active) {
     return { kind: 'start', text: '启动', cls: 'primary', disabled: !!disabledReason, reason: disabledReason }
   }
-  if (c.run?.status === 'WAITING_DUTY') {
+  if (view.kind === 'waiting') {
     return { kind: 'cancel', text: '取消等待', cls: 'danger', disabled: false }
   }
   // 已暂停时给「继续」：卡片上不给暂停，但把「继续」也藏起来的话，这一轮就只能去任务页救
-  if (c.run?.status === 'PAUSED') {
+  if (view.kind === 'paused') {
     return { kind: 'resume', text: '继续', cls: '', disabled: false }
   }
   return { kind: 'cancel', text: `停止 ${c.label}`, cls: 'danger', disabled: false }
@@ -267,7 +267,7 @@ async function runAction(c: any) {
       await call(`/runs/${c.run.id}/resume`, { method: 'POST' })
       show(`${c.label} 已继续`)
     } else {
-      const hint = c.run?.status === 'WAITING_DUTY' ? '取消等待' : '停止'
+      const hint = viewOf(c).kind === 'waiting' ? '取消等待' : '停止'
       if (!confirm(`${hint} ${c.label}？运行记录会保留，这一轮将结束。`)) return
       await call(`/runs/${c.run.id}/cancel`, { method: 'POST' })
       show(`已发送${hint}指令：${c.label}`)

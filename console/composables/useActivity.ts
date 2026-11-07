@@ -1,4 +1,4 @@
-import { runStatusView } from './useRunStatus'
+import { runStatusView, type ViewTone } from './useRunStatus'
 
 /**
  * 「上次动是什么时候」与「现在在干什么」的唯一实现。
@@ -63,7 +63,7 @@ export interface ActivityView {
   action: string
   /** 跟在动作后面的那个标签；已结束的普通终止态没有可补的话，留空 */
   text: string
-  tone: '' | 'ok' | 'warn' | 'danger'
+  tone: ViewTone
   stale: boolean
 }
 
@@ -88,7 +88,7 @@ export function activityView(
   if (!view.active) {
     // 失败就是「没人点停止，它自己没了」：driver 掉线、自检挂掉、异常、服务被关掉
     // （进程被关掉时是重启收尾把它标成 FAILED/SERVICE_RESTART，所以这里能看出来）
-    if (status === 'FAILED') {
+    if (view.kind === 'failed') {
       return {
         action: lastAction || `已结束：${view.label}`,
         text: '疑似异常退出',
@@ -101,10 +101,10 @@ export function activityView(
   }
 
   // 暂停与挂起本来就该安静，做陈旧判定只会误报
-  if (status === 'PAUSED') {
+  if (view.kind === 'paused') {
     return { action: lastAction, text: '已暂停：搜索和自动回复都停下', tone: 'warn', stale: false }
   }
-  if (status === 'WAITING_DUTY') {
+  if (view.kind === 'waiting') {
     return {
       action: lastAction,
       text: '已挂起：这一轮还没有结束，到时间段会自动开始',

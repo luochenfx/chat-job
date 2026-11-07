@@ -54,10 +54,10 @@
             </td>
             <td class="num">{{ job.salary || '—' }}</td>
             <td>
-              <span class="tag" :class="activeClass(job.activeLevel)">{{ job.activeLevel || '未知' }}</span>
+              <span class="tag" :class="activeLevelTone(job.activeLevel)">{{ job.activeLevel || '未知' }}</span>
             </td>
             <td>
-              <span class="tag" :class="statusTag(job.deliveryStatus)">{{ statusText(job.deliveryStatus) }}</span>
+              <span class="tag" :class="deliveryView(job.deliveryStatus).tone">{{ deliveryView(job.deliveryStatus).label }}</span>
             </td>
             <td class="when">
               <div :title="fullTime(job.lastSeenAt)">
@@ -76,7 +76,7 @@
             <td>
               <div class="row" style="gap: 6px; justify-content: flex-end">
                 <button
-                  v-if="['FAILED', 'SKIPPED', 'MANUAL'].includes(job.deliveryStatus)"
+                  v-if="deliveryView(job.deliveryStatus).canReset"
                   class="btn sm"
                   @click="reset(job)"
                 >
@@ -144,28 +144,6 @@ const filtered = computed(() => {
   if (filter.value === 'NONE') return jobs.value.filter((j) => !j.deliveryStatus)
   return jobs.value.filter((j) => j.deliveryStatus === filter.value)
 })
-
-function statusText(status?: string) {
-  if (!status) return '未处理'
-  return (
-    ({ DELIVERING: '投递中', DELIVERED: '已投递', FAILED: '失败', SKIPPED: '未联系', MANUAL: '需人工处理' } as any)[status] ||
-    status
-  )
-}
-
-function statusTag(status?: string) {
-  if (status === 'DELIVERED') return 'ok'
-  if (status === 'FAILED' || status === 'MANUAL') return 'danger'
-  if (status === 'DELIVERING') return 'warn'
-  return ''
-}
-
-function activeClass(level?: string) {
-  if (!level || level === '未知') return ''
-  if (['在线', '刚刚', '今日', '3日内'].includes(level)) return 'ok'
-  if (['2月内', '半年前'].includes(level)) return 'danger'
-  return 'warn'
-}
 
 async function refresh() {
   busy.value = true
