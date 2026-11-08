@@ -70,7 +70,7 @@
         <tbody>
           <template v-for="t in tasks" :key="t.id">
             <tr class="task-row" @click="toggleExpand(t.id)">
-              <td class="hint-inline">{{ labelOf(t.platform) }}</td>
+              <td class="hint-inline">{{ taskLabel(t.platform) }}</td>
               <td>{{ t.conversation }}</td>
               <td>
                 <span class="tag" :class="unreadTaskView(t.status).tone">{{ unreadTaskView(t.status).label }}</span>
@@ -108,7 +108,7 @@
 <script setup lang="ts">
 const { call, attempt } = useApi()
 const { show } = useToast()
-const { platforms, ensure } = usePlatform()
+const { ensure, labelOf: platformLabelOf } = usePlatform()
 
 const stats = ref<any>(null)
 const counts = reactive<any>({ pending: 0, retrying: 0, gaveUp: 0 })
@@ -117,10 +117,8 @@ const busy = ref(false)
 const showDetail = ref(false)
 const expanded = ref<number | null>(null)
 
-function labelOf(platform?: string) {
-  if (!platform) return '—'
-  return platforms.value.find((p) => p.platform === platform)?.label || platform
-}
+// 查名字走平台清单那一份实现；这里只保留本页的口径：任务没有平台标识时显示 —
+const taskLabel = (platform?: string) => (platform ? platformLabelOf(platform) : '—')
 
 /**
  * 按平台的计数明细。后端无条件覆盖清单里的每个平台（今天没有任务时也给 0），
@@ -130,7 +128,7 @@ const platformRows = computed(() => {
   const byPlatform: Record<string, any> = counts.byPlatform || {}
   return Object.entries(byPlatform).map(([platform, v]) => ({
     platform,
-    label: labelOf(platform),
+    label: taskLabel(platform),
     pending: (v as any).pending ?? 0,
     retrying: (v as any).retrying ?? 0,
     gaveUp: (v as any).gaveUp ?? 0

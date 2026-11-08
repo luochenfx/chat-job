@@ -271,7 +271,7 @@
 <script setup lang="ts">
 const { call, attempt } = useApi()
 const { show } = useToast()
-const { platforms, ensure } = usePlatform()
+const { ensure, labelOf } = usePlatform()
 
 const status = ref<any>(null)
 const overview = ref<any>(null)
@@ -409,10 +409,6 @@ async function openLogin(platform: string) {
     show(res?.hint || '已打开登录页，请在浏览器窗口扫码')
     await load()
   }, { busy })
-}
-
-function labelOf(platform: string) {
-  return platforms.value.find((p) => p.platform === platform)?.label || platform
 }
 
 async function testNotify() {

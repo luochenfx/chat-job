@@ -10,8 +10,13 @@
  * 后端是否真的在发这些事件，由 server 侧的 SseEventContractTest 双向比对。
  */
 
-// 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法
-function modeText(m?: string) {
+/**
+ * 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法。
+ *
+ * <p>导出给概览页与任务页共用。这三个地方原来各写一份逐字相同的函数，改一处说法
+ * 就要记得补另外两处，漏了不会报错，只会让同一轮 Run 在两页显示成两种模式名。
+ */
+export function modeText(m?: string) {
   return m === 'DRY_RUN' ? '演练模式' : '正常投递'
 }
 

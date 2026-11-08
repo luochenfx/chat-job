@@ -253,13 +253,9 @@ const startHint = computed(() => {
 const dutyWarning = computed(() =>
   duty.value && !duty.value.open && mode.value === 'NORMAL' && !active.value)
 
-// 分钟数说成人话：隔夜的任务是「13 小时 20 分钟」，不是「800 分钟」
+// 后端给的是分钟（可能是小数），夹到 0 以上再取整；「怎么说」交给 minutesText
 function waitText(minutes: number) {
-  const total = Math.max(0, Math.round(minutes))
-  const h = Math.floor(total / 60)
-  const m = total % 60
-  if (!h) return `${m} 分钟`
-  return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+  return minutesText(Math.max(0, Math.round(minutes)))
 }
 // 说明块跟随「当前生效的模式」：没启动时看下拉（运行中下拉被禁用），跑起来后看 Run 自己的 mode ——
 // 只读下拉的话，「上一轮就是演练、现在还在跑」这种情况会被漏掉
@@ -295,11 +291,6 @@ const dutyLine = computed(() => {
 const reversed = computed(() => [...events.value].reverse().slice(0, 60))
 
 // 组合状态的标签与配色写在 useRunStatus.ts，这里只把「这一轮是否还活着」传进去
-
-// 界面上不出现裸的 DRY_RUN：那是内部枚举，不是一个能让人看懂「这意味着什么」的说法
-function modeText(m: string) {
-  return m === 'DRY_RUN' ? '演练模式' : '正常投递'
-}
 
 // 事件文案住在 composables/runEvents.ts：那里同时是订阅清单的来源，两边不会漂开
 function describe(e: { type: string; data: any }) {

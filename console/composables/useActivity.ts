@@ -42,14 +42,24 @@ export function idleSeconds(lastActivityAt: string | null | undefined, nowMs: nu
   return Math.max(0, Math.round((nowMs - at) / 1000))
 }
 
-/** 秒级数字对人没意义：12 秒 / 3 分钟 / 1 小时 5 分钟 */
-export function idleText(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`
-  const total = Math.floor(seconds / 60)
+/**
+ * 总分钟数说成人话：隔夜的 800 分钟是「13 小时 20 分钟」。
+ *
+ * <p>只负责「分钟 → 说法」。输入是秒还是分钟、要不要四舍五入、负数怎么夹，都是调用处
+ * 自己的语义，不塞进单位参数：两处换算口径本来就不同，硬合成一个带单位的函数只会让
+ * 函数里多一层分支，调用处还得多记一个取值。
+ */
+export function minutesText(total: number): string {
   const h = Math.floor(total / 60)
   const m = total % 60
   if (!h) return `${m} 分钟`
   return m ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+}
+
+/** 秒级数字对人没意义：12 秒 / 3 分钟 / 1 小时 5 分钟 */
+export function idleText(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`
+  return minutesText(Math.floor(seconds / 60))
 }
 
 export interface ActivityView {

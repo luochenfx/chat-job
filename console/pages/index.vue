@@ -191,10 +191,6 @@ function activityOf(c: any) {
   return activityView(c.run, { nowMs: nowMs.value, withLabel: false })
 }
 
-function modeText(m?: string) {
-  return m === 'DRY_RUN' ? '演练模式' : '正常投递'
-}
-
 /** 组合进度：只有跑过才谈得上「第几个」 */
 function comboText(c: any) {
   if (!c.run) return '—'
