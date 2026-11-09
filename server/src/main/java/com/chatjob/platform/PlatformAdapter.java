@@ -101,6 +101,18 @@ public interface PlatformAdapter {
      */
     Models.ResumeResult sendResume(UnreadThread thread);
 
+    /**
+     * 接受工作地点：在当前会话的<b>整个消息区</b>里找工作地点确认卡片，检查「可以接受」
+     * 能不能点，点一下，再读回按钮状态确认。
+     *
+     * <p>它不产生文字消息，也不占投递配额。返回 {@link Models.WorkLocationResult.Status#NO_CARD}
+     * 表示这次没有这类卡片，调用方照常走原来的回复流程。
+     *
+     * <p>与 {@link #sendResume} 分开而不是加个标记：两者的成功凭据不同。发简历看「简历卡片
+     * 出现」，这里看「『可以接受』按钮不再可点」，拿对方的判据来等会一直超时。
+     */
+    Models.WorkLocationResult acceptWorkLocation(UnreadThread thread);
+
     /** 关闭值守期间打开的会话页，回到列表页 */
     void closeThread();
 }

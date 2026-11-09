@@ -399,6 +399,9 @@ public class ConfigController {
         // 还没落库，而那时它的真实行为就是「不判断」，回发 false 才对得上
         out.put("jobQualityEnabled",
                 entity.getJobQualityEnabled() != null && entity.getJobQualityEnabled() == 1);
+        // 与上一行同口径：V21 这一列也是默认关，不能沿用「null 即开」
+        out.put("workLocationAcceptEnabled",
+                entity.getWorkLocationAcceptEnabled() != null && entity.getWorkLocationAcceptEnabled() == 1);
         out.put("cities", configStore.readList(entity.getCities()));
         out.put("keywords", configStore.readList(entity.getKeywords()));
         out.put("jobType", entity.getJobType());

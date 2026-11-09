@@ -98,6 +98,25 @@ public final class BossSelectors {
     public static final String RESUME_CARD =
             "li.message-item.item-system .message-card-wrap.boss-green";
 
+    // ---------------------------------------------------------------- 工作地点确认卡片（V21）
+    /**
+     * 卡片容器。实测（2026-11-09，chat-new/v5578）：{@code li.message-item.item-friend
+     * > .item-dialog > .msg-dialog-position}，里面有标题、地图、地址和两个按钮。
+     * 这类卡片没有 {@code .text} 节点，读消息时走 {@code BossAdapter#cardText}。
+     */
+    public static final String WORK_LOCATION_CARD = ".msg-dialog-position";
+    /** 卡片标题。用它确认这张卡确实是「是否接受工作地点」，不是别的对话框消息。 */
+    public static final String WORK_LOCATION_TITLE = ".msg-dialog-title";
+    public static final String WORK_LOCATION_TITLE_TEXT = "您是否接受此工作地点";
+    /**
+     * 按钮区里「可以接受」的文案。按精确文本定位，不认 {@code btn-light-v2} 这种通用样式类 ——
+     * 样式类在别处也出现，改版时换的是文案的概率更低。
+     */
+    public static final String WORK_LOCATION_ACCEPT_TEXT = "可以接受";
+    /** 按钮不可点时可能出现的类名；{@code unable} 复用 {@link #TOOLBAR_UNABLE_CLASS}。 */
+    public static final String WORK_LOCATION_DISABLED_CLASS = "disabled";
+    public static final String WORK_LOCATION_IS_DISABLED_CLASS = "is-disabled";
+
     // ---------------------------------------------------------------- 沟通确认框（BossChatNavigator 用）
     public static final String GREET_CONFIRM = ".greet-boss-dialog:visible .greet-boss-footer a.sure-btn";
     public static final String STAY_THIS_PAGE = ":text-is('留在此页'):visible";

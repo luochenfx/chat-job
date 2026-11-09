@@ -33,6 +33,12 @@ public class PlatformConfigEntity {
      * <b>缺省按关</b>，与上面两列相反：这两列读到 null 按开，这一列读到 null 按关。
      */
     private Integer jobQualityEnabled;
+    /**
+     * 自动接受工作地点开关（V21，ADR-0020）：该平台要不要在值守里点工作地点确认卡片上的
+     * 「可以接受」。它挂在 {@link #watchEnabled} 底下 —— 值守关着时根本没有入口。
+     * <b>缺省按关</b>，与 {@link #jobQualityEnabled} 同口径；上面三列读到 null 按开。
+     */
+    private Integer workLocationAcceptEnabled;
     private String cities;
     private String keywords;
     private String jobType;

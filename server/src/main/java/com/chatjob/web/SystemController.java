@@ -338,6 +338,9 @@ public class SystemController {
         // 「重点关注」页靠它说「哪个平台没开」
         out.put("jobQualityEnabled",
                 cfg.getJobQualityEnabled() != null && cfg.getJobQualityEnabled() != 0);
+        // 自动接受工作地点缺省按关（ADR-0020），同样不走 on()
+        out.put("workLocationAcceptEnabled",
+                cfg.getWorkLocationAcceptEnabled() != null && cfg.getWorkLocationAcceptEnabled() != 0);
         return out;
     }
 

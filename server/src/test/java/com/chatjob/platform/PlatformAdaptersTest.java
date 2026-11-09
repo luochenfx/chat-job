@@ -10,6 +10,7 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -144,6 +145,11 @@ class PlatformAdaptersTest {
 
             @Override
             public ResumeResult sendResume(UnreadThread thread) {
+                throw new UnsupportedOperationException("不参与本测试");
+            }
+
+            @Override
+            public WorkLocationResult acceptWorkLocation(UnreadThread thread) {
                 throw new UnsupportedOperationException("不参与本测试");
             }
 

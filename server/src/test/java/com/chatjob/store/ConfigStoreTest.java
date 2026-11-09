@@ -39,9 +39,16 @@ class ConfigStoreTest {
 
     @Test
     void 新平台的岗位质量判断默认关() {
-        // 唯一一个「默认关」的开关。写反了的后果是「从没配过的平台开始花模型调用」，
-        // 而不是报错 —— 默认值与 V20 的列默认值、前端 defaultPlatformConfig() 必须一致（ADR-0017）
+        // 写反了的后果是「从没配过的平台开始花模型调用」，而不是报错 ——
+        // 默认值与 V20 的列默认值、前端 defaultPlatformConfig() 必须一致（ADR-0017）
         assertThat(store().defaults("boss").getJobQualityEnabled()).isZero();
+    }
+
+    @Test
+    void 新平台的自动接受工作地点默认关() {
+        // 与 V21 的列默认值一致。这是第二个「默认关」的开关，写反了会变成
+        // 没配过的平台自己开始对 HR 发出回应（ADR-0020）
+        assertThat(store().defaults("boss").getWorkLocationAcceptEnabled()).isZero();
     }
 
     @Test

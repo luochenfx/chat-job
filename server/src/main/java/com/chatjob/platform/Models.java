@@ -96,6 +96,61 @@ public final class Models {
         }
     }
 
+    /**
+     * 「接受工作地点」的结果。
+     *
+     * <p>五种状态分开，因为调用方的处置不同：
+     * <ul>
+     *   <li>{@link Status#ACCEPTED} —— 点下了「可以接受」，并且按钮不再可点，可以记一条值守日志。</li>
+     *   <li>{@link Status#NO_CARD} —— 整个消息区没有这类卡片，照常走原来的回复流程。</li>
+     *   <li>{@link Status#NOT_CLICKABLE} —— 有卡片但按钮不可点。是业务状态不是故障，不重试。</li>
+     *   <li>{@link Status#FAILED} —— 点了但按钮仍可点，记一条提醒；不主动排重试。</li>
+     *   <li>{@link Status#UNSUPPORTED} —— 这个平台还没有这类卡片（智联暂未实现）。</li>
+     * </ul>
+     *
+     * @param cardMessageId 卡片那条消息的平台 id，用来写值守日志；没有卡片时为 {@code null}
+     * @param cardIsLast     卡片是不是消息区里最后一条，决定点击后还要不要按原来的流程回复
+     */
+    public record WorkLocationResult(Status status, String cardMessageId, boolean cardIsLast, String detail) {
+
+        public enum Status {
+            ACCEPTED, NO_CARD, NOT_CLICKABLE, FAILED, UNSUPPORTED
+        }
+
+        public static WorkLocationResult noCard() {
+            return new WorkLocationResult(Status.NO_CARD, null, false, "消息区里没有工作地点确认卡片");
+        }
+
+        public static WorkLocationResult unsupported() {
+            return new WorkLocationResult(Status.UNSUPPORTED, null, false, "这个平台还没有这类卡片");
+        }
+
+        public static WorkLocationResult notClickable(String detail) {
+            return new WorkLocationResult(Status.NOT_CLICKABLE, null, true, detail);
+        }
+
+        public static WorkLocationResult accepted(String cardMessageId, boolean cardIsLast, String detail) {
+            return new WorkLocationResult(Status.ACCEPTED, cardMessageId, cardIsLast, detail);
+        }
+
+        public static WorkLocationResult failed(String cardMessageId, boolean cardIsLast, String detail) {
+            return new WorkLocationResult(Status.FAILED, cardMessageId, cardIsLast, detail);
+        }
+
+        public boolean accepted() {
+            return status == Status.ACCEPTED;
+        }
+
+        /**
+         * 卡片是最后一条时不该再交给回复流程：那段文本是卡片标题、地址与按钮字，
+         * 不是对方说的话，拿去判定只会回一句不相干的话。没点成也一样跳过。
+         */
+        public boolean blocksReply() {
+            return cardIsLast && (status == Status.ACCEPTED
+                    || status == Status.NOT_CLICKABLE || status == Status.FAILED);
+        }
+    }
+
     public record LoginState(boolean loggedIn, String reason) {
         public static LoginState ok() {
             return new LoginState(true, "已找到登录信息");
@@ -144,12 +199,20 @@ public final class Models {
      * @param image 含图片（图片消息的文字通常读不到，只能靠这个标记说明「不是没内容」）
      * @param system 平台系统消息。判据见 docs/tech/0002 F15：Boss 的 DOM 类名
      *               {@code item-system} 已经把「本人 / 对方 / 系统」三分开了
+     * @param workLocationCard 这条消息是不是工作地点确认卡片。演练路径不能点按钮，
+     *                         靠这个标记才知道「本来会接受工作地点」；真实路径以页面读回为准
      */
-    public record ChatMessage(String id, String text, boolean fromSelf, boolean image, boolean system) {
+    public record ChatMessage(String id, String text, boolean fromSelf, boolean image, boolean system,
+                              boolean workLocationCard) {
 
-        /** 兼容非系统消息的构造点（两个适配器之外，大量单测直接用这个形状） */
+        /** 兼容非系统消息、非卡片的构造点（两个适配器之外，大量单测直接用这个形状） */
         public ChatMessage(String id, String text, boolean fromSelf, boolean image) {
-            this(id, text, fromSelf, image, false);
+            this(id, text, fromSelf, image, false, false);
+        }
+
+        /** 兼容带系统标记、没有卡片标记的构造点 */
+        public ChatMessage(String id, String text, boolean fromSelf, boolean image, boolean system) {
+            this(id, text, fromSelf, image, system, false);
         }
     }
 

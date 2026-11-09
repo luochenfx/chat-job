@@ -3,6 +3,7 @@ package com.chatjob.watcher;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.runlog.RunLog;
 import com.chatjob.runlog.RunLogLevel;
@@ -731,6 +732,97 @@ class UnreadWatcherTest {
                 List.of());
     }
 
+    // ------------------------------------------------------------------ 自动接受工作地点（ADR-0020）
+
+    /** 卡片没有 .text 节点，读消息时拿到的是整块正文：标题、地址与两个按钮字 */
+    private static ChatMessage cardMessage(String id) {
+        return new ChatMessage(id, "您是否接受此工作地点? 暂不考虑 可以接受", false, false, false, true);
+    }
+
+    @Test
+    void 开关没开时连卡片都不去读() {
+        Fixture f = new Fixture(false);
+        f.adapter.messages = List.of(cardMessage("mid-1"));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "您是否接受此工作地点?", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.workLocationCalls).isEmpty();
+        assertThat(f.replyStore.logs).extracting(ReplyLogEntity::getAction)
+                .doesNotContain(ReplyLogEntity.ACTION_ACCEPT_WORK_LOCATION);
+    }
+
+    @Test
+    void 卡片是最后一条时点下接受且不再回文字() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        f.adapter.workLocationResult =
+                WorkLocationResult.accepted("mid-1", true, "「可以接受」已不再可点");
+        f.adapter.messages = List.of(cardMessage("mid-1"));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "您是否接受此工作地点?", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.workLocationCalls).containsExactly("location:王五");
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.replyStore.logs).hasSize(1);
+        assertThat(f.replyStore.logs.get(0).getAction())
+                .isEqualTo(ReplyLogEntity.ACTION_ACCEPT_WORK_LOCATION);
+        assertThat(f.replyStore.logs.get(0).getReplySource())
+                .isEqualTo(ReplyLogEntity.SOURCE_LOCATION);
+        assertThat(r.replied()).isEqualTo(1);
+    }
+
+    @Test
+    void 卡片后面还有对方消息时照常按那条消息回复() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        f.adapter.workLocationResult =
+                WorkLocationResult.accepted("mid-1", false, "「可以接受」已不再可点");
+        f.replyStore.engine = engineWith("方便吗", "方便的，随时可以");
+        f.adapter.messages = List.of(cardMessage("mid-1"),
+                new ChatMessage("mid-2", "方便吗", false, false));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "方便吗", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.workLocationCalls).containsExactly("location:王五");
+        assertThat(f.adapter.sendCalls).containsExactly("send:王五:方便的，随时可以");
+    }
+
+    @Test
+    void 按钮不可点时不点也不把卡片文本交给规则() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        f.adapter.workLocationResult =
+                WorkLocationResult.notClickable("「可以接受」当前不可点，本轮不点");
+        f.adapter.messages = List.of(cardMessage("mid-1"));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "您是否接受此工作地点?", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.replyStore.logs).isEmpty();
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("接受工作地点未成功"));
+    }
+
+    @Test
+    void 演练模式只说本会接受不真的点() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        f.adapter.messages = List.of(cardMessage("mid-1"));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "您是否接受此工作地点?", 1));
+
+        UnreadWatcher.SweepResult r = f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
+
+        assertThat(f.adapter.workLocationCalls).isEmpty();
+        assertThat(f.adapter.sendCalls).isEmpty();
+        assertThat(f.replyStore.logs).isEmpty();
+        assertThat(r.replied()).isZero();
+        assertThat(r.wouldReply()).isEqualTo(1);
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("本会接受工作地点"));
+    }
+
     /**
      * 把 UnreadWatcher 的四个依赖装起来。
      *
@@ -766,6 +858,8 @@ class UnreadWatcherTest {
         String style = "";
         List<String> toneTerms = List.of();
         boolean toneCheck = true;
+        /** 默认关，与 V21 的列默认值一致；只有专门测这个动作的用例才打开 */
+        boolean acceptWorkLocation = false;
 
         FakeConfig(boolean enabled) {
             super(null, null, null, null, null, new ObjectMapper(), TIME);
@@ -800,6 +894,11 @@ class UnreadWatcherTest {
         @Override
         public boolean toneCheckEnabled() {
             return toneCheck;
+        }
+
+        @Override
+        public boolean platformWorkLocationAcceptEnabled(String platform) {
+            return acceptWorkLocation;
         }
     }
 

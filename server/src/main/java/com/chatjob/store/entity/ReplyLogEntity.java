@@ -19,9 +19,13 @@ public class ReplyLogEntity {
      * 拿一个空字符串去填充反而会让人以为「发了条空消息」。
      */
     public static final String SOURCE_RESUME = "RESUME";
+    /** 接受工作地点动作。它同样不产生文字，与「值守发简历数」分开，不能复用 SOURCE_RESUME */
+    public static final String SOURCE_LOCATION = "LOCATION";
 
     /** 动作名：发出了一份简历 */
     public static final String ACTION_REPLY_RESUME = "REPLY_RESUME";
+    /** 动作名：点下了工作地点确认卡片上的「可以接受」 */
+    public static final String ACTION_ACCEPT_WORK_LOCATION = "ACCEPT_WORK_LOCATION";
 
     @TableId(type = IdType.AUTO)
     private Long id;

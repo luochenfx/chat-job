@@ -50,6 +50,10 @@ final class PlatformConfigMerge {
         if (change.jobQualityEnabled() != null) {
             current.setJobQualityEnabled(change.jobQualityEnabled() ? 1 : 0);
         }
+        // 自动接受工作地点（ADR-0020）。这一列同样默认关，合并规则照旧：只有显式给了布尔值才动
+        if (change.workLocationAcceptEnabled() != null) {
+            current.setWorkLocationAcceptEnabled(change.workLocationAcceptEnabled() ? 1 : 0);
+        }
 
         // 筛选参数：传 [] 是清空，不传是保持。两者必须能分开，否则「只改配额」会顺手清掉城市
         if (change.cities() != null) {

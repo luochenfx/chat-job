@@ -347,6 +347,19 @@ public class ConfigStore {
     }
 
     /**
+     * 自动接受工作地点开关（V21、ADR-0020）：该平台要不要在值守里点「可以接受」。
+     *
+     * <p>只读、不写库，理由同 {@link #platformScanEnabled}。
+     *
+     * <p><b>缺省按关</b>：这是新动作的刻意取舍，抄上面那种「null 即开」会让一个从没配过的
+     * 平台在没人允许的情况下开始对 HR 发出回应。
+     */
+    public boolean platformWorkLocationAcceptEnabled(String platform) {
+        Integer v = peekPlatformConfig(platform).getWorkLocationAcceptEnabled();
+        return v != null && v != 0;
+    }
+
+    /**
      * 新平台的默认配置。唯一一处默认值定义，insert 与 peek 都从它来。
      *
      * <p>包内可见是为了让 {@code ConfigStoreTest} 直接断言这份默认值，不必为了读它连库。
@@ -362,6 +375,9 @@ public class ConfigStore {
         // 与 V20 的列默认值 0 一致。这一列是「默认关」，漏设会让没配过的平台读到 null，
         // 而读法把 null 当关 —— 恰好不出错，但那只是运气，不是同源
         created.setJobQualityEnabled(0);
+        // 与 V21 的列默认值 0 一致：这一列也是「默认关」，漏设时读法把 null 当关，
+        // 恰好不出错但那只是运气，不是同源
+        created.setWorkLocationAcceptEnabled(0);
         created.setCities("[]");
         created.setKeywords("[]");
         created.setJobType("");

@@ -9,6 +9,7 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import org.springframework.lang.Nullable;
@@ -47,6 +48,9 @@ public class FakePlatformAdapter implements PlatformAdapter {
     public boolean emptyMessages = false;
     public boolean sendOk = true;
     public ResumeResult resumeResult = ResumeResult.sent("简历卡片已出现");
+    /** 默认「没有卡片」，现有值守用例的走向不会因为这个新方法而改变 */
+    public WorkLocationResult workLocationResult = WorkLocationResult.noCard();
+    public final List<String> workLocationCalls = new ArrayList<>();
     @Nullable
     public ThreadTargetUnsafeException throwOnRead;
 
@@ -127,6 +131,13 @@ public class FakePlatformAdapter implements PlatformAdapter {
         resumeCalls.add("resume:" + thread.title());
         events.add("resume:" + thread.title());
         return resumeResult;
+    }
+
+    @Override
+    public WorkLocationResult acceptWorkLocation(UnreadThread thread) {
+        workLocationCalls.add("location:" + thread.title());
+        events.add("location:" + thread.title());
+        return workLocationResult;
     }
 
     @Override

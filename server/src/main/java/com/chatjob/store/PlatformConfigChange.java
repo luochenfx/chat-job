@@ -22,6 +22,7 @@ import java.util.List;
  */
 public record PlatformConfigChange(
         Boolean enabled, Boolean scanEnabled, Boolean watchEnabled, Boolean jobQualityEnabled,
+        Boolean workLocationAcceptEnabled,
         List<String> cities, List<String> keywords, String jobType,
         List<String> salary, List<String> experience, List<String> degree, List<String> scale,
         List<String> industry, List<String> stage, String activeLevelFloor,

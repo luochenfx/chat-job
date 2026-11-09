@@ -4,6 +4,7 @@ import com.chatjob.platform.Digest;
 import com.chatjob.platform.Models.ChatMessage;
 import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.ThreadTargetUnsafeException;
 import com.chatjob.quality.QualityAssessor;
@@ -130,16 +131,19 @@ public class UnreadWatcher {
      */
     public SweepResult sweep(PlatformAdapter adapter, String platform, boolean collectMetrics,
                              boolean dryRun, RunLog runLog) {
+        // 「自动接受工作地点」的读侧判据只有这一处：三条路径拿同一个答案，不各自再问一遍配置。
+        // 默认关，所以没配过的平台连页面都不会多翻一遍。
+        boolean acceptWorkLocation = configStore.platformWorkLocationAcceptEnabled(platform);
         // 演练支路必须排在开关判断之前：它与 ai_reply_enabled 无关 —— 开着 AI 回复时
         // 演练照样不能发。把它放进下面两个分支里，等于要求两处都记得判断。
         if (dryRun) {
-            return sweepDryRun(adapter, platform, runLog);
+            return sweepDryRun(adapter, platform, acceptWorkLocation, runLog);
         }
         // 关闭态必须与改造前逐行一致（spec 2.1 第 1 条）。这里不「顺手」做任何优化。
         if (!configStore.aiReplyEnabled()) {
-            return sweepLegacy(adapter, platform, collectMetrics, runLog);
+            return sweepLegacy(adapter, platform, collectMetrics, acceptWorkLocation, runLog);
         }
-        return sweepWithTasks(adapter, platform, collectMetrics, runLog);
+        return sweepWithTasks(adapter, platform, collectMetrics, acceptWorkLocation, runLog);
     }
 
     // ================================================================ 演练态：只走流程
@@ -174,7 +178,8 @@ public class UnreadWatcher {
      * 这条未读不会再出现在列表里。接受这个代价，是因为不验证 {@code openThread} 与消息区
      * 选择器就上线，代价更大 —— 这两个地方才是历史故障高发区。
      */
-    private SweepResult sweepDryRun(PlatformAdapter adapter, String platform, RunLog runLog) {
+    private SweepResult sweepDryRun(PlatformAdapter adapter, String platform,
+                                    boolean acceptWorkLocation, RunLog runLog) {
         UnreadSweep round = new UnreadSweep(adapter, runLog);
         try {
             ReplyRuleEngine engine = replyStore.engine();
@@ -202,6 +207,15 @@ public class UnreadWatcher {
                         continue;
                     }
                     ChatMessage last = messages.get(messages.size() - 1);
+                    // 演练不能点按钮，靠读消息时标出的卡片类型把「本来会做什么」说清楚。
+                    // 真实路径以页面读回为准，这里只是预演，不新增任何外发调用。
+                    if (acceptWorkLocation && messages.stream().anyMatch(ChatMessage::workLocationCard)) {
+                        round.addWouldReply();
+                        runLog.info("演练模式：本会接受工作地点（不发文字）| 会话=" + thread.title());
+                        if (last.workLocationCard()) {
+                            continue;
+                        }
+                    }
                     // duplicate / throttled 一律传 false：见方法注释，它们读的是真实痕迹
                     ReplyRuleEngine.Decision decision =
                             engine.decide(last.text(), last.fromSelf(), last.system(), false, false);
@@ -289,7 +303,7 @@ public class UnreadWatcher {
     // ================================================================ 关闭态：改造前路径
 
     private SweepResult sweepLegacy(PlatformAdapter adapter, String platform, boolean collectMetrics,
-                                   RunLog runLog) {
+                                   boolean acceptWorkLocation, RunLog runLog) {
         UnreadSweep round = new UnreadSweep(adapter, runLog);
         try {
             ReplyRuleEngine engine = replyStore.engine();
@@ -327,6 +341,19 @@ public class UnreadWatcher {
 
                     if (decision.action() == ReplyRuleEngine.Action.SKIP_DUPLICATE) {
                         continue;
+                    }
+                    // 重复处理已经排除，这里才会去点卡片；一轮最多一次外发动作。
+                    // 卡片是最后一条时整条跳过回复流程 —— 那段文本是标题与地址，不是对方说的话。
+                    if (acceptWorkLocation) {
+                        WorkLocationResult location = performWorkLocationAccept(
+                                adapter, thread, last, conversation.getId(), runLog);
+                        if (location.accepted()) {
+                            replyStore.markOwnReply(conversation);
+                            round.addReplied();
+                        }
+                        if (location.blocksReply()) {
+                            continue;
+                        }
                     }
                     // 系统消息不记效果采集：它不是 HR 说的话，记进去会把首响时间与条数算虚
                     if (!last.fromSelf() && !last.system() && collectMetrics) {
@@ -449,7 +476,7 @@ public class UnreadWatcher {
      * 而下一轮可能因为配额/超时根本不会到来。
      */
     private SweepResult sweepWithTasks(PlatformAdapter adapter, String platform, boolean collectMetrics,
-                                       RunLog runLog) {
+                                       boolean acceptWorkLocation, RunLog runLog) {
         UnreadSweep round = new UnreadSweep(adapter, runLog);
         try {
             ReplyRuleEngine engine = replyStore.engine();
@@ -473,8 +500,8 @@ public class UnreadWatcher {
                 }
                 UnreadThread thread = UnreadThread.retry(
                         task.getPlatformConversationId(), task.getLastMessageDigest());
-                tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget,
-                        qualityBudget, round, runLog));
+                tally(round, process(adapter, engine, thread, task, collectMetrics, acceptWorkLocation,
+                        guard, budget, qualityBudget, round, runLog));
             }
 
             for (UnreadThread thread : round.list()) {
@@ -505,8 +532,8 @@ public class UnreadWatcher {
                                 + thread.title());
                         continue;
                     }
-                    tally(round, process(adapter, engine, thread, task, collectMetrics, guard, budget,
-                            qualityBudget, round, runLog));
+                    tally(round, process(adapter, engine, thread, task, collectMetrics, acceptWorkLocation,
+                            guard, budget, qualityBudget, round, runLog));
                 } catch (Exception e) {
                     runLog.warn("处理会话 " + thread.title() + " 失败: " + e.getMessage());
                 }
@@ -556,7 +583,7 @@ public class UnreadWatcher {
      * 模板只在 AI 技术性失败时使用：它是人工审核过的，比「不回」安全。
      */
     private Outcome process(PlatformAdapter adapter, ReplyRuleEngine engine, UnreadThread thread,
-                            UnreadTaskEntity task, boolean collectMetrics,
+                            UnreadTaskEntity task, boolean collectMetrics, boolean acceptWorkLocation,
                             ReplyGuard.GuardOptions guard, AiBudget budget,
                             QualityAssessor.Budget qualityBudget, UnreadSweep round, RunLog runLog) {
         Long conversationId = task.getConversationId();
@@ -609,6 +636,23 @@ public class UnreadWatcher {
                     "消息 " + last.id() + " 上一轮已处理过");
             runLog.info("跳过（这条消息已处理过）| 会话=" + thread.title() + " | mid=" + last.id());
             return Outcome.SKIPPED;
+        }
+        // 放在冷却判断之前：点卡片是应答 HR 发来的那张卡，不是「再回一句话」，
+        // 不该被上一句文字的 3 分钟冷却挡住。重复处理已在上面排除。
+        if (acceptWorkLocation) {
+            WorkLocationResult location = performWorkLocationAccept(
+                    adapter, thread, last, conversationId, runLog);
+            if (location.accepted()) {
+                round.addReplied();
+                if (conversation != null) {
+                    replyStore.markOwnReply(conversation);
+                }
+            }
+            if (location.blocksReply()) {
+                taskStore.markDone(task, last.id(), ReplyLogEntity.ACTION_ACCEPT_WORK_LOCATION, null,
+                        location.detail());
+                return Outcome.SKIPPED;
+            }
         }
         if (conversation != null && replyStore.inCooldown(conversation)) {
             logAction(conversationId, last, ReplyRuleEngine.Action.SKIP_THROTTLED.name(), null, null, null,
@@ -936,6 +980,30 @@ public class UnreadWatcher {
         runLog.warn("未读处理失败（" + action + "），已排下次重试 | 会话=" + thread.title() + " | " + error);
         taskStore.markFailed(task, action, reasonCode, error);
         return Outcome.FAILED;
+    }
+
+    /**
+     * 执行「接受工作地点」并写日志。两条真实路径共用这一段：动作、成功凭据与留痕口径
+     * 只有一处，差别只在收尾（关闭态跳过本轮，打开态还要收任务）。
+     *
+     * <p>演练不调它：演练方法体里没有外发动作是结构上的保证，不能靠一个布尔参数绕过去。
+     */
+    private WorkLocationResult performWorkLocationAccept(PlatformAdapter adapter, UnreadThread thread,
+                                                         ChatMessage last, Long conversationId,
+                                                         RunLog runLog) {
+        WorkLocationResult result = adapter.acceptWorkLocation(thread);
+        if (result.status() == WorkLocationResult.Status.ACCEPTED) {
+            logAction(conversationId, last, ReplyLogEntity.ACTION_ACCEPT_WORK_LOCATION,
+                    null, null, null, ReplyLogEntity.SOURCE_LOCATION, null,
+                    "卡片=" + nvl(result.cardMessageId()) + "；" + result.detail());
+            runLog.info("已接受工作地点（未补文字）| 会话=" + thread.title()
+                    + " | 凭据=" + result.detail());
+        } else if (result.status() == WorkLocationResult.Status.NOT_CLICKABLE
+                || result.status() == WorkLocationResult.Status.FAILED) {
+            runLog.warn("接受工作地点未成功 | 会话=" + thread.title()
+                    + " | " + result.status() + " | " + result.detail());
+        }
+        return result;
     }
 
     private void logAction(Long conversationId, ChatMessage message, String action,

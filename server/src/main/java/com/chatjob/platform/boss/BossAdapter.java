@@ -17,6 +17,7 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.UnreadScanLimit;
 import com.chatjob.platform.page.PageKit;
@@ -795,7 +796,13 @@ public class BossAdapter implements PlatformAdapter {
                     boolean system = cls != null && cls.contains(BossSelectors.MESSAGE_SYSTEM_CLASS)
                             && textFromNode;
                     boolean image = item.locator(BossSelectors.MESSAGE_IMAGE).count() > 0;
-                    out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image, system));
+                    // 卡片标记只回答「是不是这类卡片」，不回答「按钮能不能点」：
+                    // 后者要读回页面状态，由 acceptWorkLocation 做
+                    boolean workLocationCard = item.locator(BossSelectors.WORK_LOCATION_CARD).count() > 0
+                            && kit.firstText(item, BossSelectors.WORK_LOCATION_TITLE)
+                                    .contains(BossSelectors.WORK_LOCATION_TITLE_TEXT);
+                    out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image, system,
+                            workLocationCard));
                 } catch (Exception e) {
                     log.debug("读取第 {} 条消息失败: {}", i, e.getMessage());
                 }
@@ -992,6 +999,94 @@ public class BossAdapter implements PlatformAdapter {
 
 
 
+
+    /**
+     * 接受工作地点。
+     *
+     * <p>只处理消息区里<b>最后一张</b>工作地点确认卡片：一轮最多一次外发动作；按钮不再可点
+     * 就是「已经处理过」的凭据，不去翻更早的卡片，免得对同一件事连点两次。
+     *
+     * <p>「卡片是不是最后一条」按 {@link BossSelectors#MESSAGE_ITEM} 的页面先后顺序算，
+     * 与 {@link #readMessages} 用的是同一个选择器，两边口径不会分叉。
+     */
+    @Override
+    public WorkLocationResult acceptWorkLocation(UnreadThread thread) {
+        return executor.call(() -> {
+            Page page = ensureThreadPage();
+            if (!kit.openThread(page, thread)) {
+                return WorkLocationResult.failed(null, false, "会话打不开，没法接受工作地点");
+            }
+            Locator items = page.locator(BossSelectors.MESSAGE_ITEM);
+            int count = items.count();
+            for (int i = count - 1; i >= 0; i--) {
+                Locator item = items.nth(i);
+                String cls = item.getAttribute("class");
+                if (cls != null && cls.contains(BossSelectors.MESSAGE_SELF_CLASS)) {
+                    continue;
+                }
+                Locator card = item.locator(BossSelectors.WORK_LOCATION_CARD).first();
+                if (card.count() == 0) {
+                    continue;
+                }
+                String title = kit.firstText(card, BossSelectors.WORK_LOCATION_TITLE);
+                if (!title.contains(BossSelectors.WORK_LOCATION_TITLE_TEXT)) {
+                    continue;
+                }
+                String cardId = item.getAttribute(BossSelectors.MESSAGE_ID_ATTR);
+                boolean cardIsLast = i == count - 1;
+                Locator accept = card.getByText(BossSelectors.WORK_LOCATION_ACCEPT_TEXT,
+                        new Locator.GetByTextOptions().setExact(true)).first();
+                if (!workLocationAcceptClickable(accept)) {
+                    return WorkLocationResult.notClickable("「可以接受」当前不可点，本轮不点");
+                }
+                try {
+                    human.click(accept, new Locator.ClickOptions().setTimeout(8_000));
+                } catch (Exception e) {
+                    return WorkLocationResult.failed(cardId, cardIsLast,
+                            "点击「可以接受」失败: " + e.getMessage());
+                }
+                kit.pause(600, 1_200);
+                // 成功凭据与入口判据互为反证：按钮消失、变灰或换了文案，都算「不再可点」。
+                // 点击后的实际状态一并带回日志，第一次真实触发后可据此校正判据。
+                String after = describeWorkLocationButton(accept);
+                if (workLocationAcceptClickable(accept)) {
+                    return WorkLocationResult.failed(cardId, cardIsLast,
+                            "已点「可以接受」但按钮仍可点（点击后：" + after + "）");
+                }
+                return WorkLocationResult.accepted(cardId, cardIsLast,
+                        "「可以接受」已不再可点（点击后：" + after + "）");
+            }
+            return WorkLocationResult.noCard();
+        });
+    }
+
+    /**
+     * 「可以接受」能不能点：存在、可见、没有不可用的类名或属性。
+     * 点击前与点击后用的是同一个判据，所以「不再可点」不需要猜平台把按钮改成了什么。
+     */
+    private boolean workLocationAcceptClickable(Locator button) {
+        if (button.count() == 0 || !visibleWithin(button, 2_000)) {
+            return false;
+        }
+        if (hasClass(button, BossSelectors.TOOLBAR_UNABLE_CLASS)
+                || hasClass(button, BossSelectors.WORK_LOCATION_DISABLED_CLASS)
+                || hasClass(button, BossSelectors.WORK_LOCATION_IS_DISABLED_CLASS)) {
+            return false;
+        }
+        return !"true".equalsIgnoreCase(kit.attr(button, "aria-disabled"));
+    }
+
+    /** 点击后按钮的类名与文案，只为带回运行日志；读不到不影响判定。 */
+    private String describeWorkLocationButton(Locator button) {
+        try {
+            if (button.count() == 0) {
+                return "按钮已不在页面上";
+            }
+            return "class=" + kit.attr(button, "class") + ", text=" + button.innerText();
+        } catch (Exception e) {
+            return "读取失败: " + e.getMessage();
+        }
+    }
 
     @Override
     public void closeThread() {

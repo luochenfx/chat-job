@@ -39,6 +39,7 @@
 | 值守时段 | 默认 09:00–22:00；窗口外点启动会落一条 `WAITING_DUTY` 挂起，调度每 30 秒轮询唤醒（跨重启可续，跨自然日复位组合队列），演练模式不受限制 | `orchestrator/DutyWindow.java`、`orchestrator/RunService.java` |
 | 值守回复 | 关键词规则 + 文案池、敏感词优先拦截；可选「AI 回复」开关（默认关）；出站四重校验；未读任务落库 → 退避重试 3 次 → `GAVE_UP`，控制台可手动重试 | `watcher/`（`UnreadWatcher`、`ReplyRuleEngine`、`AiReplier`、`ReplyGuard`、`UnreadTaskStore`） |
 | 自动发简历 | 仅当规则动作显式设为 `SEND_RESUME` 时点一次「发简历」，发完不补话；不交给 AI 决定。确认气泡是可选步骤（对方已索要过简历时不弹），成败一律看「简历卡片 +1（20 秒内）」 | `watcher/UnreadWatcher.java`、`BossAdapter.sendResume`、`web/ReplyRuleController.java` |
+| 自动接受工作地点 | 每平台一份、默认关的开关（V21，ADR-0020）。值守对有红点的会话扫整个消息区，认出「您是否接受此工作地点?」卡片后检查「可以接受」可点再点一下，成败一律看按钮是否不再可点；点完不补话，卡片是最后一条时跳过整个回复流程。智联暂未实现，只留空实现 | `watcher/UnreadWatcher.java`、`platform/boss/BossAdapter.java`、`platform/boss/BossSelectors.java`、`store/ConfigStore.java` |
 | 可见的活动状态 | `current_action` / `last_activity_at` / `scan_day` 三列 + `staleAfterSeconds`：等待期间也写「在等什么」，前端据此区分「在等」与「无响应」 | `orchestrator/RunService.java`（`park()` / `act()`，均为私有）、`web/RunController.java`、`console/composables/useRunStatus.ts`、`console/composables/useActivity.ts` |
 | 自检与登录 | driver 指纹自检、登录态探测与扫码入口、数据清理 | `driver/SelfCheck.java`、`web/SystemController.java` |
 | 告警通知 | 企业微信群机器人，地址在「系统」页配置（控制台保存即生效；留空则回落 `chat-job.notify-config.wecom-webhook`）。三个类别开关：异常 / 进入待命 / 时段结束，默认全开，测试消息不受约束。同类消息默认 5 分钟合并一条，节流键含平台；页面上能看到「最近一次发送」的结果 | `notify/`（`NotifySettings`、`AlertCategory`、`WecomRobotNotifier`）、`web/ConfigController.java`、`web/SystemController.java` |
@@ -342,6 +343,7 @@ cd console && npm run build
 | [`adr/0017-job-quality-switch-per-platform.md`](adr/0017-job-quality-switch-per-platform.md) | 岗位质量判断按平台开关，默认关（已实现，V20） |
 | [`adr/0018-visualization-scope.md`](adr/0018-visualization-scope.md) | 可视化只做概览页里的 7 日走势：只读已有表、不引图表库、不算转化率（已实现，0.5.0） |
 | [`adr/0019-system-message-and-resume-once.md`](adr/0019-system-message-and-resume-once.md) | 系统消息不作为回复依据；卡片消息读出正文；简历同一会话只发一次（已实现，2026-11-06） |
+| [`adr/0020-work-location-accept-switch.md`](adr/0020-work-location-accept-switch.md) | 自动接受工作地点用平台开关而不是新增规则动作；Boss 已实现、智联留空实现（2026-11-09） |
 | [`ui/0001-reply-rules.html`](ui/0001-reply-rules.html) | 回复规则界面草案（静态草案，不随代码更新） |
 | [`ui/0002-parallel-console.md`](ui/0002-parallel-console.md) | 多平台控制台界面规格（方案 B）：概览并排、其余页面切换、接口契约与实施顺序 |
 

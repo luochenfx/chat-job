@@ -17,6 +17,7 @@ import com.chatjob.platform.Models.ResumeResult;
 import com.chatjob.platform.Models.ScrollOutcome;
 import com.chatjob.platform.Models.SearchQuery;
 import com.chatjob.platform.Models.UnreadThread;
+import com.chatjob.platform.Models.WorkLocationResult;
 import com.chatjob.platform.PlatformAdapter;
 import com.chatjob.platform.UnreadScanLimit;
 import com.chatjob.platform.page.PageKit;
@@ -1032,6 +1033,15 @@ public class ZhaopinAdapter implements PlatformAdapter {
 
 
 
+
+    /**
+     * 智联暂不实现（ADR-0020）：还没在这边遇到过工作地点确认卡片，没有可依据的页面结构。
+     * 留一个不碰页面的返回，编排层不必按平台分支；等真遇到了只改这个实现。
+     */
+    @Override
+    public WorkLocationResult acceptWorkLocation(UnreadThread thread) {
+        return WorkLocationResult.unsupported();
+    }
 
     @Override
     public void closeThread() {

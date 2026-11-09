@@ -53,6 +53,7 @@ class PlatformConfigMergeTest {
         cfg.setScanEnabled(1);
         cfg.setWatchEnabled(1);
         cfg.setJobQualityEnabled(1);
+        cfg.setWorkLocationAcceptEnabled(1);
         cfg.setCities("[\"杭州\"]");
         cfg.setKeywords("[\"Java\"]");
         cfg.setJobType("全职");
@@ -158,6 +159,21 @@ class PlatformConfigMergeTest {
         PlatformConfigMerge.merge(store(), cfg, change("{\"jobQualityEnabled\":false}"));
 
         assertThat(cfg.getJobQualityEnabled()).isZero();
+    }
+
+    @Test
+    void 自动接受工作地点开关没传时保持原值() throws Exception {
+        // 这一列默认关，但「没传」仍然不等于「关」：否则旧版本控制台或 curl 只改一个配额，
+        // 就会把用户打开的开关悄悄关掉（ADR-0020）
+        PlatformConfigEntity cfg = current();
+
+        PlatformConfigMerge.merge(store(), cfg, change("{\"dailyDeliveryQuota\":5}"));
+
+        assertThat(cfg.getWorkLocationAcceptEnabled()).isEqualTo(1);
+
+        PlatformConfigMerge.merge(store(), cfg, change("{\"workLocationAcceptEnabled\":false}"));
+
+        assertThat(cfg.getWorkLocationAcceptEnabled()).isZero();
     }
 
     @Test

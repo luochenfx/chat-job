@@ -631,6 +631,38 @@
         </div>
       </div>
 
+      <!--
+        自动接受工作地点（ADR-0020）：按平台一份、默认关。与岗位质量判断同属
+        「值守开关底下的一件事」，值守关着时整段值守都不会被调用。
+      -->
+      <div class="card">
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div>
+            <h2>自动接受工作地点</h2>
+            <p class="hint">
+              HR 发来「您是否接受此工作地点?」的卡片时，点下「可以接受」。只对带红点的会话生效，
+              一个会话一次最多点一张卡片
+            </p>
+          </div>
+          <span class="tag" :class="platform.workLocationAcceptEnabled ? 'ok' : ''">
+            {{ platform.workLocationAcceptEnabled ? '已开启' : '已关闭' }}
+          </span>
+        </div>
+
+        <label class="switch">
+          <input v-model="platform.workLocationAcceptEnabled" type="checkbox" :disabled="watchOff" />
+          <span>为本平台自动接受工作地点</span>
+        </label>
+
+        <p v-if="watchOff" class="card-note">
+          「自动回复」关着时不会读消息，所以这枚开关先不起作用；打开它之后才会开始
+        </p>
+        <div v-else class="desc">
+          关闭时不读卡片、不点按钮。点完不会另发一句文字；如果卡片后面还有对方消息，
+          照常用那条消息决定要不要回复
+        </div>
+      </div>
+
       <div class="card">
         <h2>已经聊过的人</h2>
         <p class="hint">打开对话后先看消息记录：最后一条是我们发的，就当作已经聊过，默认跳过</p>
@@ -836,6 +868,8 @@ function defaultPlatformConfig() {
     repeatChatMessages: [],
     // 与 V20 的列默认值一致：这一列是「默认关」，其余开关都是默认开
     jobQualityEnabled: false,
+    // 与 V21 的列默认值一致：同样是「默认关」
+    workLocationAcceptEnabled: false,
     dutyStartTime: '09:00',
     dutyEndTime: '22:00'
   }
