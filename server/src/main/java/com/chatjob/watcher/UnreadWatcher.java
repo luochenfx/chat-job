@@ -998,8 +998,12 @@ public class UnreadWatcher {
                     "卡片=" + nvl(result.cardMessageId()) + "；" + result.detail());
             runLog.info("已接受工作地点（未补文字）| 会话=" + thread.title()
                     + " | 凭据=" + result.detail());
-        } else if (result.status() == WorkLocationResult.Status.NOT_CLICKABLE
-                || result.status() == WorkLocationResult.Status.FAILED) {
+        } else if (result.status() == WorkLocationResult.Status.NOT_CLICKABLE) {
+            // 按钮已不可点是「这张卡片此前已接受过」的终态，不是失败：平台会代发一条我方
+            // 消息，卡片因此不再是最后一条。记一条说明就够，不能记成未成功，也不能在这里
+            // 跳过回复 —— 对方后续说的话还要照常判定。
+            runLog.info("工作地点卡片此前已接受过（按钮已不可点）| 会话=" + thread.title());
+        } else if (result.status() == WorkLocationResult.Status.FAILED) {
             runLog.warn("接受工作地点未成功 | 会话=" + thread.title()
                     + " | " + result.status() + " | " + result.detail());
         }

@@ -103,7 +103,9 @@ public final class Models {
      * <ul>
      *   <li>{@link Status#ACCEPTED} —— 点下了「可以接受」，并且按钮不再可点，可以记一条值守日志。</li>
      *   <li>{@link Status#NO_CARD} —— 整个消息区没有这类卡片，照常走原来的回复流程。</li>
-     *   <li>{@link Status#NOT_CLICKABLE} —— 有卡片但按钮不可点。是业务状态不是故障，不重试。</li>
+     *   <li>{@link Status#NOT_CLICKABLE} —— 有卡片但按钮不可点。2026-11-09 实测：点过之后
+ *       平台给两个按钮都加上 {@code disabled} 类，并自动代发一条我方文字消息，所以这个状态
+ *       通常就是「这张卡片已经处理过」，是业务终态不是故障，不重试、不记失败提醒。</li>
      *   <li>{@link Status#FAILED} —— 点了但按钮仍可点，记一条提醒；不主动排重试。</li>
      *   <li>{@link Status#UNSUPPORTED} —— 这个平台还没有这类卡片（智联暂未实现）。</li>
      * </ul>
@@ -125,8 +127,12 @@ public final class Models {
             return new WorkLocationResult(Status.UNSUPPORTED, null, false, "这个平台还没有这类卡片");
         }
 
-        public static WorkLocationResult notClickable(String detail) {
-            return new WorkLocationResult(Status.NOT_CLICKABLE, null, true, detail);
+        /**
+         * 按钮已经不可点。{@code cardIsLast} 必须按页面真实顺序传：平台会代发一条我方消息，
+         * 点过的卡片通常不再是最后一条；写死 true 会让这个会话之后的消息全被跳过回复。
+         */
+        public static WorkLocationResult notClickable(String detail, boolean cardIsLast) {
+            return new WorkLocationResult(Status.NOT_CLICKABLE, null, cardIsLast, detail);
         }
 
         public static WorkLocationResult accepted(String cardMessageId, boolean cardIsLast, String detail) {

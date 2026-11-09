@@ -739,6 +739,11 @@ class UnreadWatcherTest {
         return new ChatMessage(id, "您是否接受此工作地点? 暂不考虑 可以接受", false, false, false, true);
     }
 
+    /** 点过的卡片仍留在消息区，但按钮带 disabled 类，读消息时不再标成「待接受」 */
+    private static ChatMessage grayedCardMessage(String id) {
+        return new ChatMessage(id, "您是否接受此工作地点? 暂不考虑 可以接受", false, false, false, false);
+    }
+
     @Test
     void 开关没开时连卡片都不去读() {
         Fixture f = new Fixture(false);
@@ -791,19 +796,84 @@ class UnreadWatcherTest {
     }
 
     @Test
-    void 按钮不可点时不点也不把卡片文本交给规则() {
+    void 已接受过的卡片是最后一条时不把卡片文本交给规则() {
         Fixture f = new Fixture(false);
         f.config.acceptWorkLocation = true;
         f.adapter.workLocationResult =
-                WorkLocationResult.notClickable("「可以接受」当前不可点，本轮不点");
-        f.adapter.messages = List.of(cardMessage("mid-1"));
+                WorkLocationResult.notClickable("「可以接受」已不可点（此前已接受过），本轮不点", true);
+        f.adapter.messages = List.of(grayedCardMessage("mid-1"));
         f.adapter.unread.add(UnreadThread.of("王五", "王五", "您是否接受此工作地点?", 1));
 
         f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
 
         assertThat(f.adapter.sendCalls).isEmpty();
         assertThat(f.replyStore.logs).isEmpty();
-        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("接受工作地点未成功"));
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("此前已接受过"));
+        assertThat(f.runLog.messages()).noneMatch(m -> m.contains("接受工作地点未成功"));
+    }
+
+    @Test
+    void 已接受过的卡片不再挡住对方后续消息_关闭态() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        // 平台代发「工作地点我可以接受。」后，卡片不再是最后一条，按钮也带上了 disabled 类。
+        // 写死 cardIsLast=true 会让对方这句「方便吗」被整条跳过 —— 2026-11-09 真实点击取证。
+        f.adapter.workLocationResult =
+                WorkLocationResult.notClickable("「可以接受」已不可点（此前已接受过），本轮不点", false);
+        f.replyStore.engine = engineWith("方便吗", "方便的，随时可以");
+        f.adapter.messages = List.of(grayedCardMessage("mid-1"),
+                new ChatMessage("mid-2", "工作地点我可以接受。", true, false),
+                new ChatMessage("mid-3", "方便吗", false, false));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "方便吗", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.workLocationCalls).containsExactly("location:王五");
+        assertThat(f.adapter.sendCalls).containsExactly("send:王五:方便的，随时可以");
+        assertThat(f.runLog.messages()).anyMatch(m -> m.contains("此前已接受过"));
+    }
+
+    @Test
+    void 已接受过的卡片不再挡住对方后续消息_打开态() {
+        Fixture f = new Fixture(true);
+        f.config.acceptWorkLocation = true;
+        f.adapter.workLocationResult =
+                WorkLocationResult.notClickable("「可以接受」已不可点（此前已接受过），本轮不点", false);
+        f.replier.reply = AiReplier.Reply.ok("方便的，随时可以", "");
+        f.adapter.messages = List.of(grayedCardMessage("mid-1"),
+                new ChatMessage("mid-2", "工作地点我可以接受。", true, false),
+                new ChatMessage("mid-3", "方便吗", false, false));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "方便吗", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, false, f.runLog);
+
+        assertThat(f.adapter.sendCalls).containsExactly("send:王五:方便的，随时可以");
+        assertThat(f.mapper.rows.get(0).getLastAction())
+                .isEqualTo(UnreadTaskStore.Action.REPLIED);
+    }
+
+    @Test
+    void 按钮已不可点时不该挡住回复_模型判据() {
+        // 同一个状态，卡片位置不同，结论必须相反：这是「点过之后对方还能继续聊」的关键
+        assertThat(WorkLocationResult.notClickable("已不可点", false).blocksReply()).isFalse();
+        assertThat(WorkLocationResult.notClickable("已不可点", true).blocksReply()).isTrue();
+        assertThat(WorkLocationResult.accepted("mid-1", true, "已接受").blocksReply()).isTrue();
+        assertThat(WorkLocationResult.noCard().blocksReply()).isFalse();
+    }
+
+    @Test
+    void 演练不会把已接受过的卡片说成还会再点() {
+        Fixture f = new Fixture(false);
+        f.config.acceptWorkLocation = true;
+        // readMessages 现在只把「按钮仍可点」的卡片标出来，点过的卡片标记是 false
+        f.adapter.messages = List.of(grayedCardMessage("mid-1"),
+                new ChatMessage("mid-2", "工作地点我可以接受。", true, false));
+        f.adapter.unread.add(UnreadThread.of("王五", "王五", "工作地点我可以接受。", 1));
+
+        f.watcher.sweep(f.adapter, PLATFORM, false, true, f.runLog);
+
+        assertThat(f.runLog.messages()).noneMatch(m -> m.contains("本会接受工作地点"));
+        assertThat(f.adapter.workLocationCalls).isEmpty();
     }
 
     @Test

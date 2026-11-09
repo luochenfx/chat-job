@@ -796,11 +796,19 @@ public class BossAdapter implements PlatformAdapter {
                     boolean system = cls != null && cls.contains(BossSelectors.MESSAGE_SYSTEM_CLASS)
                             && textFromNode;
                     boolean image = item.locator(BossSelectors.MESSAGE_IMAGE).count() > 0;
-                    // 卡片标记只回答「是不是这类卡片」，不回答「按钮能不能点」：
-                    // 后者要读回页面状态，由 acceptWorkLocation 做
-                    boolean workLocationCard = item.locator(BossSelectors.WORK_LOCATION_CARD).count() > 0
-                            && kit.firstText(item, BossSelectors.WORK_LOCATION_TITLE)
-                                    .contains(BossSelectors.WORK_LOCATION_TITLE_TEXT);
+                    // 只把「还有得点」的卡片标出来。点过的卡片按钮会带 disabled 类，仍然留在
+                    // 消息区里；不检查按钮状态，演练就会对着一张已经接受过的卡片报「本会接受」，
+                    // 真实路径也会在卡片是最后一条时把那段标题与地址误当成对方说的话。
+                    // 这里只读页面，不点按钮 —— 演练路径同样要走这里。
+                    boolean workLocationCard = false;
+                    Locator card = item.locator(BossSelectors.WORK_LOCATION_CARD).first();
+                    if (card.count() > 0
+                            && kit.firstText(card, BossSelectors.WORK_LOCATION_TITLE)
+                                    .contains(BossSelectors.WORK_LOCATION_TITLE_TEXT)) {
+                        Locator accept = card.getByText(BossSelectors.WORK_LOCATION_ACCEPT_TEXT,
+                                new Locator.GetByTextOptions().setExact(true)).first();
+                        workLocationCard = workLocationAcceptClickable(accept);
+                    }
                     out.add(new ChatMessage(messageId(item, i, text), text, fromSelf, image, system,
                             workLocationCard));
                 } catch (Exception e) {
@@ -1007,7 +1015,9 @@ public class BossAdapter implements PlatformAdapter {
      * 就是「已经处理过」的凭据，不去翻更早的卡片，免得对同一件事连点两次。
      *
      * <p>「卡片是不是最后一条」按 {@link BossSelectors#MESSAGE_ITEM} 的页面先后顺序算，
-     * 与 {@link #readMessages} 用的是同一个选择器，两边口径不会分叉。
+     * 与 {@link #readMessages} 用的是同一个选择器，两边口径不会分叉。点过之后平台会自己
+     * 补一条我方文字消息，卡片因此不再是最后一条 —— 这个值要一直传回编排层，否则对方
+     * 接下来发的消息会被当成「卡片还在末尾」全部跳过回复。
      */
     @Override
     public WorkLocationResult acceptWorkLocation(UnreadThread thread) {
@@ -1037,7 +1047,10 @@ public class BossAdapter implements PlatformAdapter {
                 Locator accept = card.getByText(BossSelectors.WORK_LOCATION_ACCEPT_TEXT,
                         new Locator.GetByTextOptions().setExact(true)).first();
                 if (!workLocationAcceptClickable(accept)) {
-                    return WorkLocationResult.notClickable("「可以接受」当前不可点，本轮不点");
+                    // 实测（2026-11-09）：点过之后两个按钮都带 disabled 类，卡片仍留在消息区。
+                    // cardIsLast 必须是页面真实顺序 —— 平台会代发一条我方消息，卡片通常已不是最后一条。
+                    return WorkLocationResult.notClickable(
+                            "「可以接受」已不可点（此前已接受过），本轮不点", cardIsLast);
                 }
                 try {
                     human.click(accept, new Locator.ClickOptions().setTimeout(8_000));
